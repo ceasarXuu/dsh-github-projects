@@ -1,0 +1,450 @@
+# CONTRACT — dsh-github-projects v1
+
+Owner: Team Lead. This file is the frozen interface between the host half, the client half,
+the e2e harness, and the docs. Do not change it without asking the Lead; propose changes via
+`send_message` to `lead`.
+
+Goal (user request, verbatim intent): 给工作区绑定 GitHub Projects，在 session 界面看到 `projects`
+页签；并支持给每个对话 session 绑定 issue，在 `issue` 页签直接看到该 issue。
+
+Reference screenshot: the session header has the shipped `对话` / `轨迹` tabs; the plugin adds two
+more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
+
+## 1. Product shape
+
+- Two `conversation.view` slot entries, `scope: 'session'`, appended after the shipped views:
+  - `id: 'github-projects'`, order `20`, label `projects`
+  - `id: 'github-issue'`, order `21`, label `issue`
+- `projects` tab: shows the GitHub Project bound to the **workspace** of the current session, as a
+  status-grouped item list (Issues / PRs / drafts). Clicking an Issue binds it to the current
+  **session** and switches to the `issue` tab. Binding/replacing/unbinding the workspace Project is
+  done from this tab.
+- `issue` tab: shows the Issue bound to the current **session** (header, body, labels, comments).
+  If unbound: empty state that offers `从项目选择` (switches to projects tab) or pasting an Issue
+  URL / `owner/repo#123`.
+- Everything is read-only against GitHub. No writes to GitHub in v1.
+- Binding state is durable plugin data, shared by all sessions of a profile (workspace → Project is
+  per workspace; session → Issue is per session).
+
+## 2. Repository and files
+
+Repo root: `/Volumes/inwolf-4T/projects/dsh-github-projects`
+
+| File | Owner (write scope) | Purpose |
+|---|---|---|
+| `index.js` | host-github | Cordis host plugin entry (`export const name`, `export function apply(ctx, config)`) |
+| `github.js` | host-github | `gh` CLI adapter, GraphQL/REST queries, normalizers, ref parser |
+| `state.js` | host-github | Durable binding store (atomic JSON write) |
+| `client.js` | client-ui | Browser plugin: slots, views, UI, fetch client, CSS, locale dicts |
+| `package.json`, `cordis.patch.yml`, `icon.svg`, `docs/CONTRACT.md` | Lead | package manifest / bundle patch / identity |
+| `dev/mock-host.js` | Lead | contract-shaped mock host for UI/e2e development (fixtures, no `gh`) |
+| `test/fixtures/*` | Lead | real `gh` outputs captured 2026-10-28 (provenance in `test/fixtures/README.md`) |
+| `test/host/**` | host-github | `node --test` unit tests |
+| `scripts/e2e/**`, `artifacts/**` | verifier | isolated `dsh web` + headless Chrome harness, screenshots |
+| `README*.md`, `docs/DESIGN.zh.md` | doc-writer | installation + design doc (Chinese) |
+
+Plain ESM JavaScript only. No npm dependencies, no build step. Host half must run on Node ≥ 22 and
+may import only `node:*` builtins and its own local files. Client half may `require` **only**
+`react` / `react-dom` (platform module table); it must not import `@deepseek-ai/*` packages.
+
+Validated environment facts (installed app, DSH 0.2.1-rc.3):
+- Installed runtime JS extraction for API discovery: `/tmp/dsh-runtime2/dsh/node_modules/@deepseek-ai/`
+  (`lib/client.js` is the shipped browser code, `lib/index.js` the host code).
+- Typed API packages for 0.2.1-rc.3: `/tmp/dsh-types/node_modules/@deepseek-ai/` (`.d.ts`).
+- Working reference plugin (host + client halves, verified on this app):
+  `/Volumes/inwolf-4T/projects/dsh-session-cost/{index.js,client.js,cordis.patch.yml,package.json}`.
+- Source checkout (older 0.1.7 docs; use only for concepts): `/Volumes/inwolf-4T/projects/deepseek-harness-desktop`.
+
+## 3. Host plugin
+
+`index.js` exports `name = 'github-projects'`, `inject = ['webServer']`, and `apply(ctx, config)`.
+The `inject` export is mandatory: rows inserted by a bundle patch or a `--patch` overlay can activate
+before the `webServer` fiber (which waits for `webStartup`), and an un-awaited service would silently
+mount no routes. (Loader-delayed activation also means `apply` may run long after boot; do not assume
+`ctx.get('webServer')` is undefined-safe — it must be present by activation contract.)
+
+- Read `ctx.get('webServer')` after activation (`ctx.get` may be undefined for optional services).
+  Register **one prefix route** `/plugin/github-projects` with
+  `webServer.register({ kind: 'prefix', path, handler })`, owned by `ctx.effect(...)` so it is
+  removed on unload. The handler owns the full `node:http` request/response.
+- `config` may be absent/partial when loaded through a bare `--patch` overlay: apply defaults in
+  code (`resolveConfig`), do not rely on Schemastery.
+- Logs: keep quiet by default (one info line at load is fine); errors go to `console.warn` only for
+  unexpected programming faults. Never log tokens or full issue bodies.
+- Everything else lives in `github.js` (gh adapter + normalizers) and `state.js` (bindings).
+
+### 3.0 Config keys
+
+`cordis.patch.yml` ships these defaults; a profile patch for row id `github-projects` replaces the
+whole `config` object, so restate every key you need there.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ghCommand` | `gh` | `gh` executable (absolute path recommended). |
+| `requestTimeoutMs` | `20000` | One `gh` invocation deadline (1 s – 10 min). |
+| `cacheTtlMs` | `60000` | In-memory GitHub read cache TTL (`refresh=1` bypasses). |
+| `maxProjectItems` | `200` | Upper bound of items returned by one `/items` read. |
+| `maxComments` | `30` | Upper bound of comments returned by one `/issue` read. |
+| `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health probe used by `/config` and `/health` (0 – 60 s). |
+| `healthFirstReadTimeoutMs` | `3000` | Bound on the first `/config` health probe; on timeout it answers `{available:false,version:null,account:null,error:'pending'}` and refreshes in the background (0 – 60 s). |
+| `statePath` | `$DSH_HOME/plugin-data/github-projects/state.json` | Durable binding file (`null` resolves the default). |
+
+### 3.1 HTTP API (prefix `/plugin/github-projects`)
+
+All responses are `application/json; charset=utf-8`, `cache-control: no-store`, UTF-8.
+Errors are a non-2xx status plus `{"error":{"code":"...","message":"human message"}}`.
+
+| Method + path | Purpose | 2xx body |
+|---|---|---|
+| `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
+| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding}` |
+| `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"errors":[OwnerError]}` |
+| `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool}` |
+| `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO}` |
+| `POST /bind-workspace` | bind Project to a workspace | `{"ok":true,"workspace":WorkspaceBinding}` |
+| `POST /unbind-workspace` | clear workspace binding | `{"ok":true}` |
+| `POST /bind-issue` | bind Issue to a session | `{"ok":true,"session":SessionBinding}` |
+| `POST /unbind-issue` | clear session binding | `{"ok":true}` |
+
+Types (exact field names; extra fields are allowed but should be avoided):
+
+```ts
+type GhHealth = {
+  available: boolean
+  version: string | null       // e.g. "gh version 2.96.0 (2026-07-02)"
+  account: string | null       // "gh api user --jq .login"
+  error: string | null         // short message when unavailable/unauthenticated
+}
+
+type Owner = { login: string, type: 'user' | 'organization' }
+
+type Project = {
+  owner: string
+  ownerType: 'user' | 'organization'
+  number: number
+  title: string
+  url: string | null           // github.com/users/<owner>/projects/<number> for user owners
+  itemCount: number | null
+  closed: boolean
+  description: string | null   // gh `shortDescription` (truncated to 500 chars)
+}
+
+type ProjectItem = {
+  id: string
+  type: 'issue' | 'pr' | 'draft'
+  number: number | null
+  repo: string | null          // "owner/name"
+  title: string
+  url: string | null
+  state: 'OPEN' | 'CLOSED' | 'MERGED' | null
+  status: string | null        // Projects v2 Status field value, e.g. "In Progress"
+  labels: string[]
+  milestone: string | null
+}
+
+type IssueSummary = {
+  repo: string                 // "owner/name"
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | string   // GitHub REST spelling; UI upper-cases
+}
+
+type IssueComment = {
+  id: string
+  author: string | null        // login, null for ghost
+  createdAt: string            // ISO-8601
+  body: string
+  url: string | null
+}
+
+type IssueDetail = IssueSummary & {
+  author: string | null
+  createdAt: string
+  updatedAt: string
+  labels: string[]             // label names only
+  assignees: string[]          // logins
+  body: string
+  bodyTruncated: boolean
+  commentCount: number
+  comments: IssueComment[]     // oldest first; at most config.maxComments
+  commentsTruncated: boolean   // commentCount > comments.length
+}
+
+type WorkspaceBinding = {
+  workspaceId: string
+  project: Project | null
+}
+
+type SessionBinding = {
+  sessionId: string
+  issue: IssueSummary | null
+  workspaceId: string | null
+}
+```
+
+Request bodies (POST, `content-type: application/json`, ≤ 64 KiB):
+
+```jsonc
+// POST /bind-workspace
+{ "sessionId": "session-…", "workspaceId": "uuid", "workspacePath": "/abs/path",
+  "project": { "owner": "ceasarXuu", "ownerType": "user", "number": 9,
+               "title": "Astropath-issues", "url": "...", "itemCount": 195, "closed": false,
+               "description": null } }
+// -> { "ok": true, "workspace": { "workspaceId": "uuid", "project": Project } }
+
+// POST /bind-issue — two accepted forms
+{ "sessionId": "session-…", "workspaceId": "uuid",
+  "issue": { "repo": "ceasarXuu/Astropath", "number": 240, "title": "…", "url": "…", "state": "open" } }
+{ "sessionId": "session-…", "workspaceId": "uuid",
+  "ref": "https://github.com/ceasarXuu/Astropath/issues/240" }   // or "ceasarXuu/Astropath#240"
+// -> { "ok": true, "session": { "sessionId": "...", "issue": IssueSummary, "workspaceId": "uuid" } }
+```
+
+Behaviour rules:
+- `bind-workspace` requires `workspaceId`; `sessionId` is accepted for client convenience and may be
+  omitted. It stores the Project summary as given (client normally gets it from `/projects`).
+- `bind-issue` requires `sessionId`. With `issue` it stores it; missing `title`/`url` may be filled
+  from a `gh` read. With `ref` it must resolve and fetch the issue via `gh` (404 → `issue-not-found`,
+  bad ref → `bad-request`).
+- `/config` reads local bindings: `workspaceId`/`sessionId` come from the query; missing/unknown ids
+  yield `project: null` / `issue: null` (not errors). Its `gh` field is a cached health snapshot
+  (`healthCacheTtlMs`): the first read may probe `gh --version` + `gh api user` (bounded by
+  `healthFirstReadTimeoutMs`, falling back to `error: 'pending'`), later reads return the last
+  snapshot and refresh it in the background, and a failed probe never fails the endpoint.
+- `/items` and `/issue` never write GitHub. Without `gh`, all GitHub reads fail with `gh-missing`
+  (503) or `gh-auth` (503) while `/config` still works.
+- Caching: in-memory TTL cache per key (`projects`, `items:<owner>/<number>`,
+  `issue:<repo>#<number>`) with `config.cacheTtlMs`; `refresh=1` bypasses the read cache. Concurrent
+  identical reads share one in-flight `gh` call (single-flight).
+- Error codes: `bad-request` 400, `not-found` 404, `issue-not-found` 404,
+  `project-not-found` 404, `gh-missing` 503, `gh-auth` 503, `gh-failed` 502, `timeout` 504,
+  `state-write-failed` 500, `internal` 500. Gate-level answers use their own codes:
+  `forbidden` 403 (Origin), `unsupported-media-type` 415 (POST content type), `payload-too-large`
+  413 (body cap).
+- Request gating: reject a POST when an `Origin` header is present and is not `dsh-app://app` or a
+  loopback authority (`http(s)://127.0.0.1[:port]` / `http(s)://localhost[:port]` / `[::1]`) (403);
+  a missing `Origin` is allowed (the Desktop shell forwards same-origin requests without one).
+  Reject non-JSON POST content types (415). Cap body size (413). GET routes are read-only and
+  unauthenticated (loopback server only). Never echo environment variables or tokens.
+
+### 3.2 `gh` adapter (`github.js`)
+
+Use `child_process.execFile` (promisified) with `{ env: process.env, timeout: config.requestTimeoutMs,
+maxBuffer: 32 * 1024 * 1024 }`. Spawn the configured `ghCommand`; capture stdout; on nonzero exit
+classify stderr: contains `auth login` / `authenticate` / `401` → `gh-auth`; `ENOENT` → `gh-missing`;
+timeout → `timeout`; else `gh-failed`. Keep the last 500 chars of stderr in the thrown error message
+but never include stdout bodies in errors.
+
+Queries (verified 2026-10-28, `gh` 2.96.0 — fixtures in `test/fixtures/`):
+
+1. Identity: `gh api user --jq {login}` and `gh api user/orgs --jq [...]` (orgs for owners list).
+2. Projects per owner: `gh project list --owner <owner> --format json --limit 100`
+   → `{ "projects": [ { closed, id, number, owner:{login,type}, public, readme,
+   shortDescription, title, url, items:{totalCount} } ] }`.
+   `ownerType` = `lowercase(owner.type)` (`User` → `user`, `Organization` → `organization`).
+   Aggregate current user (`gh api user`) first, then every org from `gh api user/orgs`; owners whose
+   `gh project list` fails contribute an entry in `errors` and do not fail the whole response.
+3. Project items: `gh project item-list <number> --owner <owner> --format json --limit <max>`
+   plus one concurrent `gh project view <number> --owner <owner> --format json` to fill the
+   response's `project` field (a 404 from either read maps to `project-not-found`).
+   → `{ "items": [ { id, title, status, labels: string[], milestone: {title}|null,
+   repository: "<html url>", content: { type: "Issue"|"PullRequest"|"DraftIssue", number,
+   repository: "owner/name", title, url, body } } ], "totalCount" }`.
+   Map `type`: Issue → issue, PullRequest → pr, DraftIssue → draft. `state` is not in this payload;
+   leave `state: null` for items (or `CLOSED` only when a future payload carries it).
+   `truncated` = `totalCount > items.length`.
+4. Issue detail: REST is the contract:
+   `gh api repos/<owner>/<repo>/issues/<number>` → issue JSON; then
+   `gh api "repos/<owner>/<repo>/issues/<number>/comments?per_page=<maxComments>"`.
+   `body` is truncated client-side by the host to 100_000 chars (`bodyTruncated`).
+   Reject when the REST payload has `pull_request` (PRs are not Issues for binding): use
+   `issue-not-found` with message "这是 Pull Request".
+5. `parseIssueRef(text)` accepts `https://github.com/<owner>/<repo>/issues/<n>` (also `http`, trailing
+   slash/query), `github.com/...`, `owner/repo#123`, `owner/repo 123`. Returns `{repo, number}` or
+   `null`.
+
+### 3.3 Binding store (`state.js`)
+
+Path: `config.statePath ?? path.join(process.env.DSH_HOME ?? path.join(homedir(), '.dsh'),
+'plugin-data', 'github-projects', 'state.json')`. Create parent dirs recursively.
+File format (JSON, version 1), written atomically (`state.json.tmp` + `renameSync` within the same
+directory):
+
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-10-28T04:00:00.000Z",
+  "workspaces": {
+    "<workspaceId>": {
+      "project": { "owner": "...", "ownerType": "user", "number": 9, "title": "...",
+                   "url": "...", "itemCount": 195, "closed": false, "description": null },
+      "boundAt": "2026-10-28T04:00:00.000Z"
+    }
+  },
+  "sessions": {
+    "<sessionId>": {
+      "issue": { "repo": "ceasarXuu/Astropath", "number": 240, "title": "...",
+                 "url": "...", "state": "open" },
+      "workspaceId": "uuid",
+      "boundAt": "2026-10-28T04:00:00.000Z"
+    }
+  }
+}
+```
+
+Reads tolerate a missing/corrupt file (return empty store); writes serialize through one queue and
+keep the previous file if the write fails (throw `state-write-failed`). Methods (pure-ish, no ctx):
+`createStateStore(path)` → `{ read(), getWorkspace(workspaceId), getSession(sessionId),
+bindWorkspace(workspaceId, project), unbindWorkspace(workspaceId), bindIssue(sessionId, issue,
+workspaceId), unbindIssue(sessionId), snapshot() }`.
+
+## 4. Client plugin (`client.js`)
+
+Pattern proven on this exact app (see `/tmp/dsh-hello-plugin/client.js` and session-cost):
+
+```js
+window.__ModuleLoader__.load({
+  id: '@local/dsh-github-projects',
+  factory(require) {
+    const React = require('react')
+    // ... module body, components, dictionaries, css string ...
+    function apply(ctx) {
+      ctx.effect(() => ctx.locale.register('githubProjects', { zh, en }), '…')
+      ctx.slots.inject('conversation.view', () => ctx.slots.register({
+        name: 'conversation.view',
+        id: 'github-projects',
+        order: 20,
+        locale: 'githubProjects',
+        label: () => 'projects',
+      }, ProjectsView))
+      ctx.slots.inject('conversation.view', () => ctx.slots.register({
+        name: 'conversation.view',
+        id: 'github-issue',
+        order: 21,
+        locale: 'githubProjects',
+        label: () => 'issue',
+      }, IssueView))
+    }
+    return { inject: ['slots', 'locale'], apply }
+  },
+})
+```
+
+Component props (verified in DSH 0.2.1-rc.3; slot catalog in
+`/tmp/dsh-runtime2/.../dsh-cordis-client-runner/lib/client.js` around `key: "conversation.view"`):
+- owner share: `inspectCall`, `viewRequest`, `openView(view, focus)`, `completeViewRequest()`
+- session standard kit: `sessionId`, `useSession`, `useProjection`, `useConversation`, ...
+- global standard kit: `useSessions`, `useWorkspaces`, `useSessionStatus`, ...; plus `t` because the
+  registration declares `locale`.
+- Resolve the session's workspace:
+  `const workspace = useWorkspaces(snapshot => snapshot.items.find(w => w.sessionIds.includes(sessionId)))`
+  (`WorkspaceView` = `{ workspaceId, path, title, sessionIds, ... }`).
+- Switch tabs after a bind: `openView('github-issue', 'bound')`.
+
+### 4.1 API client
+
+One small `fetch` wrapper: base `/plugin/github-projects`; JSON in/out; on `!response.ok` read
+`{error:{code,message}}` and throw a `GhpError` carrying `code`/`message`; support
+`AbortController` and a request timeout (~20 s). Never throw unhandled rejections; render error
+states with a retry button and a hint mapped from `code`:
+`gh-missing` → "未找到 gh CLI，请先安装 GitHub CLI"；`gh-auth` → "请先运行 gh auth login"；
+`timeout`/`gh-failed` → "GitHub 读取失败，请重试"。
+
+### 4.2 `projects` view requirements
+
+States: loading skeleton → error (retry) → unbound empty state → bound list.
+
+- Unbound: centred empty state: icon, title `绑定 GitHub Project`, one-line explanation, primary
+  button `选择 Project` opening the picker, and a muted hint that the binding is per workspace
+  (show workspace title/path). 
+- Picker: in-view overlay (absolutely positioned panel over the list, close on Esc/backdrop), list
+  from `GET /projects` grouped by owner, text filter, 30-row cap with internal scroll, each row shows
+  title, owner/number, item count; selecting calls `POST /bind-workspace` then reloads config.
+  Also a manual row: owner input + number input + `绑定` (for Projects the gh listing cannot see).
+  Loading/error states inside the picker.
+- Bound toolbar: project title (link to GitHub), owner/number, total item count, `刷新`, `更换`,
+  `解绑` (确认后 unbound). On `解绑`: `POST /unbind-workspace` and show empty state.
+- Body: text filter over title/repo/number/labels; status chips (`全部` + distinct statuses, with
+  counts); then sections grouped by `status` in first-seen order, empty status → `未分类`. Each
+  section has a header with count. Rows: type glyph (issue/pr/draft), `repo#number`, title,
+  labels, milestone; an Issue row has a `绑定` action that binds it to the current session and calls
+  `openView('github-issue', 'bound')`; the currently bound issue (from `/config`) shows a `已绑定`
+  badge. PR/draft rows open their GitHub URL in a new tab instead of binding. Long lists scroll in
+  the view body; `truncated` shows a footer notice.
+- Refresh button sets `refresh=1`; the list keeps previous data while refreshing with a subtle
+  indicator.
+
+### 4.3 `issue` view requirements
+
+States: loading → error → unbound empty state → bound detail.
+
+- Unbound: empty state title `为当前会话绑定 Issue`; primary `从项目选择` (calls
+  `openView('github-projects', 'pick')`), secondary inline input with placeholder
+  `粘贴 Issue 链接或 owner/repo#123` + `绑定` button (POST `/bind-issue` with `ref`); show error inline.
+- Bound: sticky header card inside the view: repo chip, `#number`, state badge (`Open`/`Closed`),
+  title (large), meta line (author · opened date · N comments), labels, action row
+  (`刷新`, `解绑`, `在 GitHub 打开`). Body renders a **safe subset of Markdown** as React elements:
+  fenced code blocks, inline `code`, headings, bullet/ordered lists, blockquotes, blank-line
+  paragraphs, autolinks and `[text](url)`; never `dangerouslySetInnerHTML`. Comments below with
+  author, relative time, same markdown renderer, and a `还有 N 条评论` footer when truncated.
+- On mount, read `props.viewRequest`: if it targets `github-issue`, acknowledge with
+  `completeViewRequest()` after applying (the `focus` is opaque; re-read config from the server).
+- `解绑` → POST `/unbind-issue` → unbound empty state.
+- Long issue body/comments scroll inside the view (the page/composer must stay untouched).
+
+### 4.4 Style, layout, i18n, a11y
+
+- All class names prefixed `ghp-`; one CSS string injected once from `apply` via a
+  `<style data-plugin="github-projects">` effect (same pattern as session-cost).
+- Use shipped theme tokens with fallbacks, e.g.
+  `var(--dsw-alias-label-primary, #e6e6e6)`,
+  `var(--dsw-alias-label-secondary, #999)`,
+  `var(--dsw-alias-bg-layer-1, #1a1a1a)`,
+  `var(--dsw-alias-bg-layer-2, #222)`,
+  `var(--dsw-alias-border-1, #333)`,
+  `var(--dsw-alias-brand-primary, #4f7cff)`,
+  `var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06))`.
+  Inspect more token names with
+  `grep -o "\-\-dsw-[a-z0-9-]*" /tmp/dsh-runtime2/dsh/node_modules/@deepseek-ai/dsh-client-ui-*/lib/client.js | sort -u`.
+- View root: `height: 100%; min-height: 0; overflow: auto;` with comfortable padding
+  (`24px 32px`, responsive down to `16px`). No fixed widths; no horizontal page scroll.
+- Locale: dictionary namespace `githubProjects` with `zh` + `en`; the plugin registers both; tab
+  labels stay literal `projects` / `issue`. Content strings Chinese first, English complete.
+- A11y: buttons are `<button type="button">` with visible labels or `aria-label`; dialog role for the
+  picker; Esc closes; focus outline retained; images avoided (no external avatar fetches).
+- Relative time: `刚刚` / `N 分钟前` / `N 小时前` / `N 天前` / `YYYY-MM-DD`.
+
+## 5. e2e harness (verifier)
+
+Isolated environment, never the user's `~/.dsh` profile or port:
+1. temp root under `/tmp/dsh-github-projects-e2e/<run>/` with `home/` and `workspace/` dirs;
+2. `DSH_HOME=<temp>/home` + installed CLI
+   `/Applications/DeepSeek Harness 2.app/Contents/Resources/runtime/cli/bin/dsh web --no-open --port 0`
+   (run with `cwd=<temp>/workspace`), parse the printed
+   `dsh web: http://127.0.0.1:<port>/?token=<token>` URL;
+3. plugin entry: a `--patch <overlay.yml>` file with an `insert` row named by **absolute path** to
+   `<repo>/index.js` (real host) or `<repo>/dev/mock-host.js` (fixtures-only mode), pointing at the
+   same package so the client bundle is still served;
+4. headless Chrome (`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`, v156) with
+   `--headless=new --remote-debugging-port=0` + a temp `--user-data-dir`; drive CDP over a raw
+   WebSocket (Node 24 global `WebSocket`); navigate to the tokenized URL;
+5. create/select a workspace + session through the real UI (dump DOM to find selectors), then assert
+   the `projects` / `issue` tabs exist, click them, assert empty/bound/detail states, and capture
+   `artifacts/screenshots/*.png` (1280×800 viewport) for: tabs in header, projects empty state,
+   project picker, bound project list, issue empty state, bound issue detail.
+6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit
+   nonzero on assertion failure. Must be re-runnable (`node scripts/e2e/run.mjs`).
+
+Keep the harness deterministic: run against the real `gh` CLI (already authenticated as `ceasarXuu`)
+but only read. Fixture mode (`dev/mock-host.js`) is the fallback when `gh` is unavailable.
+
+## 6. Definition of done
+
+- `node --test test/host/*.test.mjs` passes (host logic, fixtures).
+- e2e harness exits 0 with the six screenshots above, in fixture mode and (once) real-host mode.
+- Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
+- Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
+  design doc in Chinese, known limitations, verification evidence.
+- Installed into the user's Desktop profile (`~/.dsh/profiles/desktop`) by the Lead, verified with a
+  live screenshot of the session header showing the two tabs, with the profile restorable.

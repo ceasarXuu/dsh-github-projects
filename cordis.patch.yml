@@ -1,0 +1,31 @@
+# dsh-github-projects — bundle layer.
+#
+# One host row: the HTTP API (under /plugin/github-projects), the durable
+# workspace→Project / session→Issue bindings, and the `gh` CLI adapter.
+# The browser half is discovered from `dsh.client` in package.json; it registers
+# the `projects` and `issue` conversation views.
+#
+# A profile patch for row id `github-projects` replaces this whole `config`
+# object, so restate every key you need there.
+- insert:
+    - id: github-projects
+      name: '@local/dsh-github-projects'
+      config:
+        # `gh` executable. Absolute path is recommended when PATH differs
+        # between a terminal and the Desktop host.
+        ghCommand: gh
+        # One `gh` invocation deadline.
+        requestTimeoutMs: 20000
+        # In-memory GitHub response cache; `refresh=1` bypasses it.
+        cacheTtlMs: 60000
+        # Upper bound of project items returned by one items read.
+        maxProjectItems: 200
+        # Upper bound of issue comments returned by one issue read.
+        maxComments: 30
+        # TTL of the cached `gh` health probe used by /config and /health.
+        healthCacheTtlMs: 5000
+        # Bound on the first /config health probe; may answer error='pending' on timeout.
+        healthFirstReadTimeoutMs: 3000
+        # Durable binding file; null resolves to
+        # $DSH_HOME/plugin-data/github-projects/state.json
+        statePath: null

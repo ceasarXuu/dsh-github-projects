@@ -1,0 +1,4 @@
+node_modules/
+artifacts/runs/
+*.log
+.DS_Store

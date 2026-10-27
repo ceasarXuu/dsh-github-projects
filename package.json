@@ -1,0 +1,49 @@
+{
+  "name": "@local/dsh-github-projects",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bind a GitHub Project to a DSH workspace and an Issue to each session, shown as the `projects` and `issue` conversation tabs.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "github.js",
+    "state.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "docs/*.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "github",
+    "github-projects",
+    "issue"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/host/*.test.mjs",
+    "e2e": "node scripts/e2e/run.mjs"
+  }
+}
