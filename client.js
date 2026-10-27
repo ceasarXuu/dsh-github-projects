@@ -131,6 +131,188 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* 1b. Client data layer: SWR caches, remembered project, fan-out.     */
+    /* ------------------------------------------------------------------ */
+
+    /** Endpoint payload cache shared by every view mount (module lifetime). */
+    const responseCache = new Map()
+    /** Single-flight dedupe for revalidations of one cache key. */
+    const inflightFetches = new Map()
+    /** Cross-view event: this plugin's own bind/unbind writes happened. */
+    const BINDING_CHANGED_EVENT = 'dsh-github-projects:binding-changed'
+    const LAST_PROJECT_STORAGE_KEY = 'dsh-github-projects:last-project'
+    const SESSION_POLL_MS = 4000
+    const STALE_RETRY_MS = 1200
+
+    function cachedResponseOf(key) {
+      const value = responseCache.get(key)
+      return value === undefined ? null : value
+    }
+
+    function configCacheKey(sessionId, workspaceId) { return `config:${sessionId ?? ''}:${workspaceId ?? ''}` }
+    function projectsCacheKey() { return 'projects' }
+    function itemsCacheKey(owner, number) { return `items:${owner}/${number}` }
+    function issueCacheKey(repo, number) { return `issue:${repo}#${number}` }
+
+    function configRequestPath(sessionId, workspaceId) {
+      return `/config${queryString({ sessionId, workspaceId })}`
+    }
+
+    function itemsRequestPath(owner, number, refresh) {
+      return `/items${queryString({ owner, number, refresh: refresh === true ? 1 : undefined })}`
+    }
+
+    function issueRequestPath(repo, number, refresh) {
+      return `/issue${queryString({ repo, number, refresh: refresh === true ? 1 : undefined })}`
+    }
+
+    /**
+     * One cached read (client half of CONTRACT §3.5). Concurrent reads of one
+     * key share a single request; a `stale: true` payload schedules exactly one
+     * retry after ~1.2 s (never with `refresh=1`) to pick up the host's
+     * background revalidation. Callers decide whether to paint the cached value
+     * first — this helper only owns cache fill + retry policy.
+     */
+    function requestWithCache(path, key, options = {}) {
+      const existing = inflightFetches.get(key)
+      if (existing !== undefined) return existing
+      const promise = apiGet(path)
+        .then((data) => {
+          responseCache.set(key, data)
+          const isStale = data !== null && typeof data === 'object' && data.stale === true
+          if (isStale && options.allowStaleRetry !== false) {
+            window.setTimeout(() => {
+              requestWithCache(
+                typeof options.retryPath === 'string' ? options.retryPath : path,
+                key,
+                { allowStaleRetry: false },
+              ).catch(() => { /* a failed follow-up read keeps the stale cache */ })
+            }, STALE_RETRY_MS)
+          }
+          return data
+        })
+        .finally(() => {
+          if (inflightFetches.get(key) === promise) inflightFetches.delete(key)
+        })
+      inflightFetches.set(key, promise)
+      return promise
+    }
+
+    /** Force a network config read (after bind/unbind) and refresh the cache. */
+    function readConfigNow(sessionId, workspaceId) {
+      return apiGet(configRequestPath(sessionId, workspaceId)).then((data) => {
+        responseCache.set(configCacheKey(sessionId, workspaceId), data)
+        return data
+      })
+    }
+
+    /** Remember the workspace→Project mapping so items can start before config. */
+    const rememberedProjects = new Map()
+
+    function readRememberedProject(workspaceId) {
+      if (typeof workspaceId !== 'string' || workspaceId === '') return null
+      const inMemory = rememberedProjects.get(workspaceId)
+      if (inMemory !== undefined) return inMemory
+      try {
+        const raw = window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
+        if (raw !== null) {
+          const parsed = JSON.parse(raw)
+          if (isPlainObject(parsed) && parsed.workspaceId === workspaceId && isPlainObject(parsed.project)) {
+            rememberedProjects.set(workspaceId, parsed.project)
+            return parsed.project
+          }
+        }
+      } catch (_unavailableStorage) { /* memory-only */ }
+      return null
+    }
+
+    function rememberProject(workspaceId, project) {
+      if (typeof workspaceId !== 'string' || workspaceId === '' || !isPlainObject(project)) return
+      rememberedProjects.set(workspaceId, project)
+      try {
+        window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, JSON.stringify({ workspaceId, project }))
+      } catch (_unavailableStorage) { /* memory-only */ }
+    }
+
+    function dispatchBindingChanged() {
+      try { window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT)) } catch (_unavailableEvent) { /* noop */ }
+    }
+
+    function onBindingChanged(listener) {
+      window.addEventListener(BINDING_CHANGED_EVENT, listener)
+      return () => window.removeEventListener(BINDING_CHANGED_EVENT, listener)
+    }
+
+    /* Built-in right-sidebar browser (v0.4.0): the face is a client service;
+       capture it when it appears and degrade to window.open when unavailable. */
+    let sidebarRightFace = null
+    let sidebarRightTabsFace = null
+
+    function adoptSidebarRightServices(scope) {
+      try {
+        if (scope.sidebarRight !== undefined && scope.sidebarRight !== null) sidebarRightFace = scope.sidebarRight
+      } catch (_unavailableRight) { /* keep the previous face */ }
+      try {
+        if (scope.sidebarRightTabs !== undefined && scope.sidebarRightTabs !== null) sidebarRightTabsFace = scope.sidebarRightTabs
+      } catch (_unavailableTabs) { /* keep the previous registry */ }
+    }
+
+    function bindSidebarRightServices(ctx) {
+      adoptSidebarRightServices(ctx)
+      try {
+        ctx.inject(['sidebarRight'], (scope) => {
+          adoptSidebarRightServices(scope)
+          scope.effect(() => () => { sidebarRightFace = null }, 'github-projects: sidebarRight face')
+        })
+      } catch (_injectRightUnavailable) { /* optional service */ }
+      try {
+        ctx.inject(['sidebarRightTabs'], (scope) => {
+          adoptSidebarRightServices(scope)
+          scope.effect(() => () => { sidebarRightTabsFace = null }, 'github-projects: sidebarRightTabs registry')
+        })
+      } catch (_injectTabsUnavailable) { /* optional service */ }
+    }
+
+    function browserTabAvailable() {
+      const tabs = sidebarRightTabsFace
+      if (tabs === null || tabs === undefined) return true
+      if (typeof tabs.get !== 'function') return true
+      try {
+        const definition = tabs.get('browser')
+        return definition !== undefined && definition !== null
+      } catch (_registryUnavailable) {
+        return false
+      }
+    }
+
+    /** Open a GitHub URL in DSH's built-in right-sidebar browser. */
+    function openGithubUrl(url) {
+      const href = safeHref(url)
+      if (href === null) return
+      try {
+        const face = sidebarRightFace
+        if (face !== null && face !== undefined
+          && typeof face.openTab === 'function'
+          && browserTabAvailable()) {
+          face.openTab('browser', { params: { url: href } })
+          return
+        }
+      } catch (_openFailed) { /* no mounted session surface etc. — fall back */ }
+      try { window.open(href, '_blank', 'noopener,noreferrer') } catch (_blocked) { /* give up quietly */ }
+    }
+
+    /** Warm `/issue` for a session's bound Issue so the tab opens instantly. */
+    function prefetchIssueDetail(issue) {
+      if (!isPlainObject(issue)) return
+      const repo = textOf(issue.repo)
+      const number = issue.number
+      if (repo === '' || !isPositiveInteger(number)) return
+      const key = issueCacheKey(repo, number)
+      if (cachedResponseOf(key) !== null) return
+      requestWithCache(issueRequestPath(repo, number, false), key).catch(() => { /* prefetch is best effort */ })
+    }
+
+    /* ------------------------------------------------------------------ */
     /* 2. Dictionaries — every content string, zh first and en complete.   */
     /* ------------------------------------------------------------------ */
 
@@ -146,6 +328,7 @@ window.__ModuleLoader__.load({
       'common.openGithub': '在 GitHub 打开',
       'common.items': '{count} 个条目',
       'common.itemsUnknown': '条目数未知',
+      'common.updating': '更新中…',
       'common.closed': '已关闭',
       'common.all': '全部',
       'common.clearFilter': '清除筛选',
@@ -208,6 +391,8 @@ window.__ModuleLoader__.load({
       'issue.invalidRef': '请输入有效的 Issue 链接或 owner/repo#123',
       'issue.bindFailed': '绑定 Issue 失败',
       'issue.unboundHint': '也可以切到 projects 页签，在列表里点击 Issue 的「绑定」。',
+      'subtitle.openAria': '在浏览器中打开 {ref}',
+      'card.openAria': '在浏览器中打开：{title}',
       'issue.commentCount': '{count} 条评论',
       'issue.noBody': '（没有正文）',
       'issue.bodyTruncated': '正文过长，已截断显示。',
@@ -258,6 +443,7 @@ window.__ModuleLoader__.load({
       'common.openGithub': 'Open on GitHub',
       'common.items': '{count} items',
       'common.itemsUnknown': 'item count unknown',
+      'common.updating': 'Updating…',
       'common.closed': 'Closed',
       'common.all': 'All',
       'common.clearFilter': 'Clear filter',
@@ -320,6 +506,8 @@ window.__ModuleLoader__.load({
       'issue.invalidRef': 'Enter a valid Issue URL or owner/repo#123',
       'issue.bindFailed': 'Failed to bind the Issue',
       'issue.unboundHint': 'You can also switch to the projects tab and click “Bind” on an Issue.',
+      'subtitle.openAria': 'Open {ref} in the browser',
+      'card.openAria': 'Open in browser: {title}',
       'issue.commentCount': '{count} comments',
       'issue.noBody': '(No body)',
       'issue.bodyTruncated': 'The body is too long and was truncated.',
@@ -1234,19 +1422,25 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         let cancelled = false
-        setState((previous) => ({
-          status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
-          data: previous.data ?? null,
-          error: null,
-        }))
-        apiGet('/projects')
+        const key = projectsCacheKey()
+        const cached = reload === 0 ? cachedResponseOf(key) : null
+        if (cached !== null) {
+          setState({ status: 'ready', data: cached, error: null })
+        } else {
+          setState((previous) => ({
+            status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
+            data: previous.data ?? null,
+            error: null,
+          }))
+        }
+        requestWithCache('/projects', key)
           .then((data) => {
             if (cancelled) return
             setState({ status: 'ready', data, error: null })
           })
           .catch((error) => {
             if (cancelled) return
-            setState((previous) => ({ status: 'error', data: previous.data ?? null, error }))
+            setState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
           })
         return () => { cancelled = true }
       }, [reload])
@@ -1497,6 +1691,148 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* 8. Session issue subtitle (§4.5).                                   */
+    /* ------------------------------------------------------------------ */
+
+    function sameBoundIssue(left, right) {
+      if (left === null || left === undefined) return right === null || right === undefined
+      if (right === null || right === undefined) return false
+      return left.repo === right.repo
+        && left.number === right.number
+        && left.title === right.title
+        && left.url === right.url
+        && left.state === right.state
+    }
+
+    function subtitleFullTextOf(issue) {
+      return `${textOf(issue.repo)}#${issue.number} ${textOf(issue.title)}`.trim()
+    }
+
+    /**
+     * Hidden helper in `conversation.session.header.actions`: gets sessionId,
+     * renders null in the actions row, and owns a portal row inserted under the
+     * session title. The shipped header has no subtitle slot (§4.5), so the row
+     * is re-ensured after host re-renders and degrades to nothing when the
+     * anchor is missing.
+     */
+    function SessionIssueSubtitle({ sessionId, t }) {
+      const [issue, setIssue] = useState(null)
+      const [host, setHost] = useState(null)
+      const sessionRef = useRef(sessionId)
+      sessionRef.current = sessionId
+      const hasIssue = issue !== null
+
+      // Cheap local binding poll (no gh calls) + immediate refresh after our
+      // own bind/unbind writes.
+      useEffect(() => {
+        let cancelled = false
+        const refresh = () => {
+          const id = sessionRef.current
+          if (cancelled || typeof id !== 'string' || id === '') return
+          apiGet(`/config${queryString({ sessionId: id })}`)
+            .then((data) => {
+              if (cancelled) return
+              const next = isPlainObject(data.session) && isPlainObject(data.session.issue) ? data.session.issue : null
+              setIssue((previous) => (sameBoundIssue(previous, next) ? previous : next))
+            })
+            .catch(() => { /* subtitle degrades silently */ })
+        }
+        refresh()
+        const timer = window.setInterval(refresh, SESSION_POLL_MS)
+        const off = onBindingChanged(refresh)
+        return () => {
+          cancelled = true
+          window.clearInterval(timer)
+          off()
+        }
+      }, [sessionId])
+
+      // Own a header row: insert after the title row / before the tabs container
+      // (both live in the display:contents outlet inside the header) and keep it
+      // there across host re-renders.
+      useLayoutEffect(() => {
+        if (!hasIssue) {
+          setHost((previous) => {
+            if (previous !== null) previous.remove()
+            return null
+          })
+          return undefined
+        }
+        const hostElement = document.createElement('div')
+        hostElement.className = 'ghp-session-subtitle'
+        hostElement.setAttribute('data-ghp-session-subtitle', '')
+        let frame = 0
+        const place = () => {
+          frame = 0
+          const header = hostElement.isConnected
+            ? hostElement.closest('header[data-window-drag]')
+            : document.querySelector('header[data-window-drag]')
+          if (header === null) { hostElement.remove(); return }
+          const viewTabs = header.querySelector('[data-conversation-tabs]')
+          // No tabs ⇒ blank / chrome-less session: hide the subtitle.
+          if (viewTabs === null) { hostElement.remove(); return }
+          // The shipped tab row is `.tabs > .viewTabs[data-conversation-tabs]`.
+          // The subtitle must be its own header grid row between the title row
+          // and that whole tab row, so insert into their display:contents outlet.
+          const tabsRow = viewTabs.parentElement !== null && viewTabs.parentElement !== header
+            ? viewTabs.parentElement
+            : viewTabs
+          const parent = tabsRow.parentElement
+          if (parent === null) { hostElement.remove(); return }
+          if (tabsRow.previousElementSibling !== hostElement) parent.insertBefore(hostElement, tabsRow)
+          // Align with the title text start and occupy grid column 2.
+          hostElement.style.gridColumn = '2'
+          if (hostElement.style.paddingInlineStart === '') {
+            const titleRow = header.children.length > 1 ? header.children[1] : null
+            const innerTitle = header.querySelector('[class*="titleRow"]')
+            const source = innerTitle ?? titleRow
+            if (source !== null && source !== undefined && typeof getComputedStyle === 'function') {
+              const computed = getComputedStyle(source)
+              if (computed.paddingInlineStart !== '') hostElement.style.paddingInlineStart = computed.paddingInlineStart
+            }
+          }
+        }
+        const schedule = () => {
+          if (frame !== 0) return
+          frame = window.requestAnimationFrame(place)
+        }
+        place()
+        setHost(hostElement)
+        const observer = new MutationObserver(schedule)
+        observer.observe(document.body, { childList: true, subtree: true })
+        const timer = window.setInterval(schedule, 1500)
+        window.addEventListener('resize', schedule)
+        return () => {
+          if (frame !== 0) window.cancelAnimationFrame(frame)
+          observer.disconnect()
+          window.clearInterval(timer)
+          window.removeEventListener('resize', schedule)
+          hostElement.remove()
+        }
+      }, [hasIssue, sessionId])
+
+      if (host === null || issue === null) return null
+      const fullText = subtitleFullTextOf(issue)
+      const issueRef = `${textOf(issue.repo)}#${issue.number}`
+      return ReactDOM.createPortal(
+        h('button', {
+          type: 'button',
+          className: 'ghp-session-subtitle-row',
+          title: fullText,
+          'aria-label': t('subtitle.openAria', { ref: issueRef }),
+          onClick: () => openGithubUrl(issue.url),
+        },
+        h('span', { className: 'ghp-session-subtitle-chip', 'data-ghp-subtitle-chip': '' }, `#${issue.number}`),
+        h('span', {
+          className: 'ghp-session-subtitle-title',
+          'data-ghp-subtitle-title': '',
+          title: fullText,
+        }, textOf(issue.title))),
+        host,
+      )
+    }
+
+    /* ------------------------------------------------------------------ */
     /* 8. `projects` view.                                                 */
     /* ------------------------------------------------------------------ */
 
@@ -1613,8 +1949,7 @@ window.__ModuleLoader__.load({
         : h('span', { key: 'repo', className: 'ghp-board-card-repo', title: fullRef === '' ? undefined : fullRef },
           repo === '' ? null : h('span', { key: 'repo-name', className: 'ghp-board-card-repo-name' }, repo),
           hasNumber ? h('span', { key: 'repo-number', className: 'ghp-board-card-repo-number' }, `#${item.number}`) : null)
-      const className = `ghp-board-card${isBound ? ' ghp-board-card-bound' : ''}${binding ? ' ghp-board-card-busy' : ''}`
-      const children = [
+      const content = [
         h('span', { key: 'title', className: 'ghp-board-card-title' }, textOf(item.title)),
         h('span', { key: 'meta', className: 'ghp-board-card-meta' },
           h('span', {
@@ -1639,35 +1974,43 @@ window.__ModuleLoader__.load({
           h(IconMilestone, { size: 11 }),
           h('span', { className: 'ghp-board-card-milestone-text' }, milestone)))
       }
-      if (foot.length > 0) children.push(h('span', { key: 'foot', className: 'ghp-board-card-foot' }, ...foot))
-      const sharedProps = {
-        className,
+      if (foot.length > 0) content.push(h('span', { key: 'foot', className: 'ghp-board-card-foot' }, ...foot))
+
+      // v0.4.0: the card body opens the GitHub page in the built-in browser;
+      // binding is the explicit action below (never on body click).
+      const body = url === null
+        ? h('div', { className: 'ghp-board-card-body ghp-board-card-body-static' }, ...content)
+        : h('button', {
+          type: 'button',
+          className: 'ghp-board-card-body',
+          'data-ghp-card-action': 'open',
+          'aria-label': t('card.openAria', { title: textOf(item.title) }),
+          title: t('card.openAria', { title: textOf(item.title) }),
+          onClick: () => openGithubUrl(item.url),
+        }, ...content)
+      const bindAction = isIssue
+        ? h('div', { className: 'ghp-board-card-actions' },
+          h('button', {
+            type: 'button',
+            className: `ghp-board-card-bind${isBound ? ' ghp-board-card-bind-active' : ''}`,
+            'data-ghp-card-action': 'bind',
+            'aria-pressed': isBound ? 'true' : 'false',
+            disabled: binding,
+            'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
+            onClick: (event) => {
+              if (event !== undefined && typeof event.stopPropagation === 'function') event.stopPropagation()
+              onBind(item)
+            },
+          },
+          binding ? h(Spinner, { size: 11 }) : null,
+          isBound ? t('common.bound') : t('common.bind')))
+        : null
+      return h('div', {
+        className: `ghp-board-card${isBound ? ' ghp-board-card-bound' : ''}${binding ? ' ghp-board-card-busy' : ''}`,
         'data-ghp-card': '',
         'aria-busy': binding ? 'true' : undefined,
-      }
-      if (isIssue) {
-        return h('button', {
-          ...sharedProps,
-          type: 'button',
-          'data-issue': `${repo}#${item.number}`,
-          'data-ghp-card-action': '',
-          disabled: binding,
-          'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
-          onClick: () => onBind(item),
-        }, ...children)
-      }
-      if (url !== null) {
-        return h('a', {
-          ...sharedProps,
-          href: url,
-          target: '_blank',
-          rel: 'noreferrer noopener',
-          'data-ghp-card-action': '',
-          'aria-label': t('common.openGithub'),
-          title: t('common.openGithub'),
-        }, ...children)
-      }
-      return h('div', sharedProps, ...children)
+        ...(isIssue ? { 'data-issue': `${repo}#${item.number}` } : {}),
+      }, body, bindAction)
     }
 
     function BoardView({ t, columns, hiddenLanes, sessionIssue, bindingId, onBind }) {
@@ -1701,7 +2044,7 @@ window.__ModuleLoader__.load({
             }))))))
     }
 
-    function ProjectToolbar({ t, project, itemCount, refreshing, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding }) {
+    function ProjectToolbar({ t, project, itemCount, refreshing, updating, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding }) {
       const title = textOf(project.title) || `${textOf(project.owner)} #${project.number}`
       const meta = []
       meta.push(h('span', { key: 'owner', className: 'ghp-repochip' }, `${textOf(project.owner)} / #${project.number}`))
@@ -1730,7 +2073,11 @@ window.__ModuleLoader__.load({
             milestoneOptions,
             onChange: onMilestoneChange,
           }),
-          refreshing ? h('span', { className: 'ghp-toolbar-sync', role: 'status' }, h(Spinner, { size: 12 }), t('projects.refreshing')) : null,
+          refreshing || updating
+            ? h('span', { className: 'ghp-toolbar-sync', role: 'status' },
+              h(Spinner, { size: 12 }),
+              updating ? t('common.updating') : t('projects.refreshing'))
+            : null,
           h(Button, {
             variant: 'ghost',
             size: 'sm',
@@ -1820,21 +2167,13 @@ window.__ModuleLoader__.load({
       const binding = bindingId !== null && bindingId === itemIdentity(item)
       const url = safeHref(item.url)
       const canBind = type === 'issue' && repo !== '' && hasNumber
-      const titleNode = url === null
-        ? h('span', { className: 'ghp-item-title' }, textOf(item.title))
-        : h('a', {
-          className: 'ghp-item-title',
-          href: url,
-          target: '_blank',
-          rel: 'noreferrer noopener',
-        }, textOf(item.title))
-      return h('div', { className: `ghp-item${isBound ? ' ghp-item-bound' : ''}` },
-        h('span', { className: `ghp-item-glyph ghp-glyph-${type}`, 'aria-hidden': true }, itemTypeIcon(type)),
-        h('div', { className: 'ghp-item-main' },
-          h('div', { className: 'ghp-item-titleline' },
-            titleNode,
+      const rowContent = [
+        h('span', { key: 'glyph', className: `ghp-item-glyph ghp-glyph-${type}`, 'aria-hidden': true }, itemTypeIcon(type)),
+        h('span', { key: 'main', className: 'ghp-item-main' },
+          h('span', { className: 'ghp-item-titleline' },
+            h('span', { className: 'ghp-item-title' }, textOf(item.title)),
             isBound ? h('span', { className: 'ghp-badge ghp-badge-bound' }, t('common.bound')) : null),
-          h('div', { className: 'ghp-item-meta' },
+          h('span', { className: 'ghp-item-meta' },
             repoLabel === '' ? null : h('span', { key: 'repo', className: 'ghp-item-repo' }, repoLabel),
             labels.slice(0, 3).map((label, index) => h(LabelPill, { key: `label-${index}`, name: label })),
             labels.length > 3 ? h('span', { key: 'labels-more', className: 'ghp-muted' }, `+${labels.length - 3}`) : null,
@@ -1842,7 +2181,21 @@ window.__ModuleLoader__.load({
               ? null
               : h('span', { key: 'milestone', className: 'ghp-milestone' },
                 h(IconMilestone, { size: 12 }), milestone))),
-        h('div', { className: 'ghp-item-actions' },
+      ]
+      // v0.4.0: clicking the row opens the GitHub page in the built-in browser;
+      // the 绑定 action stays an explicit sibling button.
+      const openBody = url === null
+        ? h('div', { className: 'ghp-item-open ghp-item-open-static' }, ...rowContent)
+        : h('button', {
+          type: 'button',
+          className: 'ghp-item-open',
+          'aria-label': t('card.openAria', { title: textOf(item.title) }),
+          title: t('card.openAria', { title: textOf(item.title) }),
+          onClick: () => openGithubUrl(item.url),
+        }, ...rowContent)
+      return h('div', { className: `ghp-item${isBound ? ' ghp-item-bound' : ''}` },
+        openBody,
+        h('span', { className: 'ghp-item-actions' },
           canBind
             ? (isBound
               ? h('span', { className: 'ghp-item-boundlabel' }, h(IconCheck, { size: 13 }), t('common.bound'))
@@ -1850,19 +2203,13 @@ window.__ModuleLoader__.load({
                 variant: 'accent',
                 size: 'sm',
                 disabled: binding,
-                onClick: () => onBind(item),
+                onClick: (event) => {
+                  if (event !== undefined && typeof event.stopPropagation === 'function') event.stopPropagation()
+                  onBind(item)
+                },
                 'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
               }, binding ? h(Spinner, { size: 12 }) : null, t('common.bind')))
-            : (url === null
-              ? null
-              : h('a', {
-                className: 'ghp-iconbtn',
-                href: url,
-                target: '_blank',
-                rel: 'noreferrer noopener',
-                'aria-label': t('common.openGithub'),
-                title: t('common.openGithub'),
-              }, h(IconExternal, { size: 14 })))))
+            : null))
     }
 
     function ProjectsEmpty({ t, workspace, onChoose }) {
@@ -1906,14 +2253,35 @@ window.__ModuleLoader__.load({
       const workspaceId = workspace === null || workspace === undefined ? null : textOf(workspace.workspaceId)
       const workspacePath = workspace === null || workspace === undefined ? null : textOf(workspace.path)
 
-      const [configState, setConfigState] = useState({ status: 'loading', error: null })
-      const [project, setProject] = useState(null)
-      const [sessionIssue, setSessionIssue] = useState(null)
-      const [gh, setGh] = useState(null)
+      // Warm mount: paint the SWR caches immediately (no skeleton); the effects
+      // below only revalidate in the background.
+      const bootstrapConfig = workspaceId === null || workspaceId === '' ? null : cachedResponseOf(configCacheKey(sessionId, workspaceId))
+      const bootstrapConfigProject = isPlainObject(bootstrapConfig)
+        && isPlainObject(bootstrapConfig.workspace) && isPlainObject(bootstrapConfig.workspace.project)
+        ? bootstrapConfig.workspace.project
+        : null
+      const bootstrapProject = bootstrapConfigProject ?? readRememberedProject(workspaceId)
+      const bootstrapItems = isPlainObject(bootstrapProject)
+        && textOf(bootstrapProject.owner) !== '' && isPositiveInteger(bootstrapProject.number)
+        ? cachedResponseOf(itemsCacheKey(bootstrapProject.owner, bootstrapProject.number))
+        : null
+
+      const [configState, setConfigState] = useState(() => (bootstrapConfig !== null
+        ? { status: 'ready', error: null }
+        : { status: 'loading', error: null }))
+      const [project, setProject] = useState(() => bootstrapConfigProject)
+      const [sessionIssue, setSessionIssue] = useState(() => (isPlainObject(bootstrapConfig)
+        && isPlainObject(bootstrapConfig.session) && isPlainObject(bootstrapConfig.session.issue)
+        ? bootstrapConfig.session.issue
+        : null))
+      const [gh, setGh] = useState(() => (isPlainObject(bootstrapConfig) && isPlainObject(bootstrapConfig.gh) ? bootstrapConfig.gh : null))
       const [configTick, setConfigTick] = useState(0)
+      const [updating, setUpdating] = useState(() => bootstrapConfig !== null)
 
       const [itemsQuery, setItemsQuery] = useState({ n: 0, refresh: false })
-      const [itemsState, setItemsState] = useState({ status: 'idle', data: null, error: null })
+      const [itemsState, setItemsState] = useState(() => (bootstrapItems !== null
+        ? { status: 'ready', data: bootstrapItems, error: null }
+        : { status: 'idle', data: null, error: null }))
 
       const [pickerOpen, setPickerOpen] = useState(false)
       const [pickerBounds, setPickerBounds] = useState(null)
@@ -1936,8 +2304,8 @@ window.__ModuleLoader__.load({
         setMilestoneNotice(null)
       }, [projectKey])
 
-      // Bindings for this session's workspace: one read, then re-read after
-      // bind/unbind and after a cross-view focus request.
+      // Bindings: cache-first paint, then background revalidation. After our own
+      // bind/unbind (`configTick` > 0) the read must bypass the cache.
       useEffect(() => {
         if (workspaceId === null || workspaceId === '') {
           setConfigState({ status: 'no-workspace', error: null })
@@ -1946,48 +2314,79 @@ window.__ModuleLoader__.load({
           return undefined
         }
         let cancelled = false
-        setConfigState({ status: 'loading', error: null })
-        apiGet(`/config${queryString({ sessionId, workspaceId })}`)
-          .then((data) => {
-            if (cancelled) return
-            setGh(isPlainObject(data.gh) ? data.gh : null)
-            setProject(isPlainObject(data.workspace) && isPlainObject(data.workspace.project) ? data.workspace.project : null)
-            setSessionIssue(isPlainObject(data.session) && isPlainObject(data.session.issue) ? data.session.issue : null)
-            setConfigState({ status: 'ready', error: null })
-          })
-          .catch((error) => {
-            if (cancelled) return
-            setConfigState({ status: 'error', error: describeError(error) })
-          })
+        const key = configCacheKey(sessionId, workspaceId)
+        const cached = configTick === 0 ? cachedResponseOf(key) : null
+        const applyConfig = (data) => {
+          if (cancelled || !isPlainObject(data)) return
+          setGh(isPlainObject(data.gh) ? data.gh : null)
+          const boundProject = isPlainObject(data.workspace) && isPlainObject(data.workspace.project) ? data.workspace.project : null
+          const boundIssue = isPlainObject(data.session) && isPlainObject(data.session.issue) ? data.session.issue : null
+          setProject(boundProject)
+          setSessionIssue(boundIssue)
+          setConfigState({ status: 'ready', error: null })
+          if (boundProject !== null) rememberProject(workspaceId, boundProject)
+          if (boundIssue !== null) prefetchIssueDetail(boundIssue)
+        }
+        if (cached !== null) {
+          applyConfig(cached)
+          setUpdating(true)
+          requestWithCache(configRequestPath(sessionId, workspaceId), key, { allowStaleRetry: false })
+            .then((data) => { if (!cancelled) applyConfig(data) })
+            .catch(() => { /* keep the cached binding */ })
+            .finally(() => { if (!cancelled) setUpdating(false) })
+        } else {
+          setConfigState((previous) => (previous.status === 'ready' ? previous : { status: 'loading', error: null }))
+          const read = configTick === 0
+            ? requestWithCache(configRequestPath(sessionId, workspaceId), key, { allowStaleRetry: false })
+            : readConfigNow(sessionId, workspaceId)
+          read
+            .then((data) => { if (!cancelled) applyConfig(data) })
+            .catch((error) => { if (!cancelled) setConfigState({ status: 'error', error: describeError(error) }) })
+        }
         return () => { cancelled = true }
       }, [workspaceId, sessionId, configTick])
 
-      // Project items: previous data is kept while `refresh=1` re-reads.
+      // Project items: cache-first; a remembered workspace→Project mapping lets
+      // this read start in parallel with `/config`. Previous data is kept while
+      // `refresh=1` re-reads (only the user's Refresh sends refresh=1).
       useEffect(() => {
-        if (configState.status !== 'ready' || !isPlainObject(project)) {
+        const configResolved = configState.status === 'ready' || configState.status === 'no-workspace' || configState.status === 'error'
+        const candidateProject = isPlainObject(project)
+          ? project
+          : (configResolved ? null : readRememberedProject(workspaceId))
+        if (!isPlainObject(candidateProject)) {
           setItemsState({ status: 'idle', data: null, error: null })
           return undefined
         }
-        const owner = textOf(project.owner)
-        const number = project.number
+        const owner = textOf(candidateProject.owner)
+        const number = candidateProject.number
         if (owner === '' || !isPositiveInteger(number)) return undefined
         let cancelled = false
-        setItemsState((previous) => ({
-          status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
-          data: previous.data ?? null,
-          error: null,
-        }))
-        apiGet(`/items${queryString({ owner, number, refresh: itemsQuery.refresh ? 1 : undefined })}`)
-          .then((data) => {
-            if (cancelled) return
-            setItemsState({ status: 'ready', data, error: null })
-          })
-          .catch((error) => {
-            if (cancelled) return
-            setItemsState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
-          })
+        const key = itemsCacheKey(owner, number)
+        const basePath = itemsRequestPath(owner, number, false)
+        const cached = itemsQuery.refresh ? null : cachedResponseOf(key)
+        if (cached !== null) {
+          setItemsState({ status: 'ready', data: cached, error: null })
+          setUpdating(true)
+          requestWithCache(basePath, key)
+            .then((data) => { if (!cancelled) setItemsState({ status: 'ready', data, error: null }) })
+            .catch(() => { /* keep the cached board */ })
+            .finally(() => { if (!cancelled) setUpdating(false) })
+        } else {
+          setItemsState((previous) => ({
+            status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
+            data: previous.data ?? null,
+            error: null,
+          }))
+          const path = itemsQuery.refresh ? itemsRequestPath(owner, number, true) : basePath
+          requestWithCache(path, key, { retryPath: basePath })
+            .then((data) => { if (!cancelled) setItemsState({ status: 'ready', data, error: null }) })
+            .catch((error) => {
+              if (!cancelled) setItemsState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
+            })
+        }
         return () => { cancelled = true }
-      }, [configState.status, project, itemsQuery.n])
+      }, [configState.status, project, itemsQuery.n, workspaceId])
 
       const allItems = useMemo(
         () => asArray(itemsState.data === null || itemsState.data === undefined ? null : itemsState.data.items),
@@ -2089,9 +2488,11 @@ window.__ModuleLoader__.load({
             // surfaces any read problem on its own.
           }
         }
+        rememberProject(workspaceId, nextProject)
         setPickerOpen(false)
-        setItemsQuery((current) => ({ n: current.n + 1, refresh: true }))
+        setItemsQuery((current) => ({ n: current.n + 1, refresh: false }))
         if (mountedRef.current) reloadConfig()
+        dispatchBindingChanged()
       }, [sessionId, workspaceId, workspacePath, reloadConfig])
 
       const unbindProject = useCallback(async () => {
@@ -2105,6 +2506,7 @@ window.__ModuleLoader__.load({
           setSessionIssue(null)
           setItemsState({ status: 'idle', data: null, error: null })
           reloadConfig()
+          dispatchBindingChanged()
         } catch (error) {
           if (mountedRef.current) setActionError(describeError(error))
         } finally {
@@ -2126,8 +2528,11 @@ window.__ModuleLoader__.load({
             state: 'open',
           }
           await apiPost('/bind-issue', { sessionId, workspaceId, issue })
+          await readConfigNow(sessionId, workspaceId).catch(() => { /* config stays cached */ })
+          prefetchIssueDetail(issue)
           if (!mountedRef.current) return
           setSessionIssue(issue)
+          dispatchBindingChanged()
           if (typeof openView === 'function') openView('github-issue', 'bound')
         } catch (error) {
           if (mountedRef.current) setActionError(describeError(error))
@@ -2301,6 +2706,7 @@ window.__ModuleLoader__.load({
             project: shownProject,
             itemCount,
             refreshing,
+            updating,
             viewMode,
             onViewModeChange: setViewMode,
             milestoneValue: milestoneFilter,
@@ -2443,13 +2849,32 @@ window.__ModuleLoader__.load({
       })
       const workspaceId = workspace === null || workspace === undefined ? null : textOf(workspace.workspaceId)
 
-      const [configState, setConfigState] = useState({ status: 'loading', error: null })
-      const [summary, setSummary] = useState(null)
-      const [gh, setGh] = useState(null)
+      // Warm mount: paint cached bindings + issue detail immediately.
+      const bootstrapConfig = cachedResponseOf(configCacheKey(sessionId, workspaceId))
+      const bootstrapSummary = isPlainObject(bootstrapConfig)
+        && isPlainObject(bootstrapConfig.session) && isPlainObject(bootstrapConfig.session.issue)
+        ? bootstrapConfig.session.issue
+        : null
+      const bootstrapDetail = isPlainObject(bootstrapSummary)
+        && textOf(bootstrapSummary.repo) !== '' && isPositiveInteger(bootstrapSummary.number)
+        ? cachedResponseOf(issueCacheKey(textOf(bootstrapSummary.repo), bootstrapSummary.number))
+        : null
+      const bootstrapIssue = isPlainObject(bootstrapDetail) && isPlainObject(bootstrapDetail.issue)
+        ? bootstrapDetail.issue
+        : null
+
+      const [configState, setConfigState] = useState(() => (bootstrapConfig !== null
+        ? { status: 'ready', error: null }
+        : { status: 'loading', error: null }))
+      const [summary, setSummary] = useState(() => bootstrapSummary)
+      const [gh, setGh] = useState(() => (isPlainObject(bootstrapConfig) && isPlainObject(bootstrapConfig.gh) ? bootstrapConfig.gh : null))
       const [configTick, setConfigTick] = useState(0)
+      const [updating, setUpdating] = useState(() => bootstrapConfig !== null)
 
       const [detailQuery, setDetailQuery] = useState({ n: 0, refresh: false })
-      const [detailState, setDetailState] = useState({ status: 'idle', data: null, error: null })
+      const [detailState, setDetailState] = useState(() => (bootstrapIssue !== null
+        ? { status: 'ready', data: bootstrapIssue, error: null }
+        : { status: 'idle', data: null, error: null }))
 
       const [refInput, setRefInput] = useState('')
       const [bindState, setBindState] = useState({ busy: false, error: null })
@@ -2457,23 +2882,62 @@ window.__ModuleLoader__.load({
       const [actionError, setActionError] = useState(null)
       const [refreshingFlag, setRefreshingFlag] = useState(false)
 
+      // Bindings: cache-first paint then background revalidation. The poll and
+      // the binding-changed event pick up agent-tool / cross-view changes within
+      // ~4 s without a manual refresh (§3.4/§4.5).
       useEffect(() => {
         let cancelled = false
-        setConfigState({ status: 'loading', error: null })
-        apiGet(`/config${queryString({ sessionId, workspaceId })}`)
-          .then((data) => {
-            if (cancelled) return
-            setGh(isPlainObject(data.gh) ? data.gh : null)
-            const session = isPlainObject(data.session) ? data.session : null
-            setSummary(session !== null && isPlainObject(session.issue) ? session.issue : null)
-            setConfigState({ status: 'ready', error: null })
-          })
-          .catch((error) => {
-            if (cancelled) return
-            setConfigState({ status: 'error', error: describeError(error) })
-          })
+        const key = configCacheKey(sessionId, workspaceId)
+        const cached = configTick === 0 ? cachedResponseOf(key) : null
+        const applyConfig = (data) => {
+          if (cancelled || !isPlainObject(data)) return
+          setGh(isPlainObject(data.gh) ? data.gh : null)
+          const session = isPlainObject(data.session) ? data.session : null
+          const bound = session !== null && isPlainObject(session.issue) ? session.issue : null
+          setSummary(bound)
+          setConfigState({ status: 'ready', error: null })
+          if (bound !== null) prefetchIssueDetail(bound)
+        }
+        if (cached !== null) {
+          applyConfig(cached)
+          setUpdating(true)
+          requestWithCache(configRequestPath(sessionId, workspaceId), key, { allowStaleRetry: false })
+            .then((data) => { if (!cancelled) applyConfig(data) })
+            .catch(() => { /* keep cached binding */ })
+            .finally(() => { if (!cancelled) setUpdating(false) })
+        } else {
+          setConfigState((previous) => (previous.status === 'ready' ? previous : { status: 'loading', error: null }))
+          const read = configTick === 0
+            ? requestWithCache(configRequestPath(sessionId, workspaceId), key, { allowStaleRetry: false })
+            : readConfigNow(sessionId, workspaceId)
+          read
+            .then((data) => { if (!cancelled) applyConfig(data) })
+            .catch((error) => { if (!cancelled) setConfigState({ status: 'error', error: describeError(error) }) })
+        }
         return () => { cancelled = true }
       }, [sessionId, workspaceId, configTick])
+
+      useEffect(() => {
+        if (typeof sessionId !== 'string' || sessionId === '') return undefined
+        let cancelled = false
+        const refresh = () => {
+          readConfigNow(sessionId, workspaceId)
+            .then((data) => {
+              if (cancelled || !mountedRef.current || !isPlainObject(data)) return
+              setGh(isPlainObject(data.gh) ? data.gh : null)
+              const session = isPlainObject(data.session) ? data.session : null
+              setSummary(session !== null && isPlainObject(session.issue) ? session.issue : null)
+            })
+            .catch(() => { /* polling is best effort */ })
+        }
+        const timer = window.setInterval(refresh, SESSION_POLL_MS)
+        const off = onBindingChanged(refresh)
+        return () => {
+          cancelled = true
+          window.clearInterval(timer)
+          off()
+        }
+      }, [sessionId, workspaceId])
 
       const summaryRepo = summary === null || summary === undefined ? '' : textOf(summary.repo)
       const summaryNumber = summary === null || summary === undefined ? null : summary.number
@@ -2484,24 +2948,35 @@ window.__ModuleLoader__.load({
           return undefined
         }
         let cancelled = false
-        setDetailState((previous) => ({
-          status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
-          data: previous.data ?? null,
-          error: null,
-        }))
-        apiGet(`/issue${queryString({
-          repo: summaryRepo,
-          number: summaryNumber,
-          refresh: detailQuery.refresh ? 1 : undefined,
-        })}`)
-          .then((data) => {
-            if (cancelled) return
-            setDetailState({ status: 'ready', data: isPlainObject(data.issue) ? data.issue : null, error: null })
-          })
-          .catch((error) => {
-            if (cancelled) return
-            setDetailState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
-          })
+        const key = issueCacheKey(summaryRepo, summaryNumber)
+        const basePath = issueRequestPath(summaryRepo, summaryNumber, false)
+        const cached = detailQuery.refresh ? null : cachedResponseOf(key)
+        const cachedIssue = isPlainObject(cached) && isPlainObject(cached.issue) ? cached.issue : null
+        const pullIssue = (data) => (isPlainObject(data) && isPlainObject(data.issue) ? data.issue : null)
+        if (cachedIssue !== null) {
+          setDetailState({ status: 'ready', data: cachedIssue, error: null })
+          setUpdating(true)
+          requestWithCache(basePath, key)
+            .then((data) => { if (!cancelled) setDetailState({ status: 'ready', data: pullIssue(data), error: null }) })
+            .catch(() => { /* keep the cached detail */ })
+            .finally(() => { if (!cancelled) setUpdating(false) })
+        } else {
+          setDetailState((previous) => ({
+            status: previous.data === null || previous.data === undefined ? 'loading' : 'refreshing',
+            data: previous.data ?? null,
+            error: null,
+          }))
+          const path = detailQuery.refresh ? issueRequestPath(summaryRepo, summaryNumber, true) : basePath
+          requestWithCache(path, key, { retryPath: basePath })
+            .then((data) => {
+              if (cancelled) return
+              setDetailState({ status: 'ready', data: pullIssue(data), error: null })
+            })
+            .catch((error) => {
+              if (cancelled) return
+              setDetailState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
+            })
+        }
         return () => { cancelled = true }
       }, [summaryRepo, summaryNumber, detailQuery.n])
 
@@ -2513,7 +2988,7 @@ window.__ModuleLoader__.load({
         // The focus is opaque: re-read the binding from the server, then
         // refresh the detail so a just-bound Issue renders immediately.
         setConfigTick((value) => value + 1)
-        setDetailQuery((current) => ({ n: current.n + 1, refresh: true }))
+        setDetailQuery((current) => ({ n: current.n + 1, refresh: false }))
         if (typeof completeViewRequest === 'function') completeViewRequest()
       }, [viewRequest, completeViewRequest])
 
@@ -2540,6 +3015,7 @@ window.__ModuleLoader__.load({
           setSummary(null)
           setDetailState({ status: 'idle', data: null, error: null })
           reloadConfig()
+          dispatchBindingChanged()
         } catch (error) {
           if (mountedRef.current) setActionError(describeError(error))
         } finally {
@@ -2566,8 +3042,9 @@ window.__ModuleLoader__.load({
           setSummary(bound)
           setRefInput('')
           setBindState({ busy: false, error: null })
-          setDetailQuery((current) => ({ n: current.n + 1, refresh: true }))
+          setDetailQuery((current) => ({ n: current.n + 1, refresh: false }))
           setConfigTick((value2) => value2 + 1)
+          dispatchBindingChanged()
         } catch (error) {
           if (mountedRef.current) setBindState({ busy: false, error: describeError(error) })
         }
@@ -2733,7 +3210,7 @@ window.__ModuleLoader__.load({
    theme-independent; every tint is derived with color-mix from the active
    DSH theme tokens, so light and dark both resolve correctly.
    ========================================================================== */
-.ghp-root, .ghp-overlay {
+.ghp-root, .ghp-overlay, .ghp-session-subtitle {
   --ghp-accent-no-status: var(--dsw-alias-label-tertiary, #8a8a8a);
   --ghp-accent-todo: var(--dsw-static-blue-500, #3b82f6);
   --ghp-accent-in-progress: var(--dsw-static-amber-500, #f59e0b);
@@ -3090,6 +3567,7 @@ window.__ModuleLoader__.load({
 /* Toolbar ------------------------------------------------------------------- */
 .ghp-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 16px;
   padding: 16px 18px;
@@ -3098,7 +3576,7 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-2, #222);
   box-shadow: var(--dsw-elevation-soft, none);
 }
-.ghp-toolbar-main { display: flex; flex: 1; gap: 12px; min-width: 0; }
+.ghp-toolbar-main { display: flex; flex: 1 1 320px; gap: 12px; min-width: 0; }
 .ghp-toolbar-icon {
   display: flex;
   align-items: center;
@@ -3127,7 +3605,7 @@ window.__ModuleLoader__.load({
   line-height: 18px;
   overflow-wrap: anywhere;
 }
-.ghp-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; flex: none; }
+.ghp-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; flex: 0 1 auto; }
 .ghp-count-pill {
   display: inline-flex;
   align-items: center;
@@ -3741,6 +4219,148 @@ a.ghp-board-card { text-decoration: none; }
 .ghp-manual .ghp-manual-number { flex: 0 1 88px; }
 .ghp-manual .ghp-btn { flex: none; }
 
+/* v0.4.0 card/list open actions: card body opens the built-in browser, the
+   bind action is an explicit sibling button (never a body click). */
+.ghp-board-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ghp-border);
+  border-radius: var(--ghp-radius-md);
+  background: var(--ghp-surface-raised);
+  color: var(--ghp-text-primary);
+  transition: background-color var(--ghp-motion), border-color var(--ghp-motion);
+}
+.ghp-board-card:hover { border-color: var(--ghp-border-hover); background: var(--ghp-surface-hover); }
+.ghp-board-card.ghp-board-card-bound {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ghp-accent-brand) 30%, transparent);
+}
+.ghp-board-card.ghp-board-card-bound:hover { border-color: color-mix(in srgb, var(--ghp-accent-brand) 72%, transparent); }
+.ghp-board-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px 6px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ghp-board-card-body-static { cursor: default; }
+.ghp-board-card-body:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: -2px;
+}
+.ghp-board-card-actions { display: flex; flex: none; justify-content: flex-end; padding: 0 10px 9px; }
+.ghp-board-card-bind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 42%, transparent);
+  border-radius: var(--dsw-radius-xs, 6px);
+  background: transparent;
+  color: var(--ghp-accent-brand);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background-color var(--ghp-motion), border-color var(--ghp-motion);
+}
+.ghp-board-card-bind:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 62%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 12%, transparent);
+}
+.ghp-board-card-bind:disabled { opacity: .6; cursor: default; }
+.ghp-board-card-bind-active {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 55%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 14%, transparent);
+}
+.ghp-board-card-bind:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: 1px;
+}
+.ghp-item-open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ghp-item-open-static { cursor: default; }
+.ghp-item-open:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: 2px;
+}
+
+/* Session issue subtitle (§4.5): a second, quieter line under the session title. */
+.ghp-session-subtitle {
+  box-sizing: border-box;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-bottom: 3px;
+}
+.ghp-session-subtitle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--dsw-radius-xs, 4px);
+}
+.ghp-session-subtitle-row:hover .ghp-session-subtitle-title { color: var(--ghp-text-primary); }
+.ghp-session-subtitle-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 26%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ghp-accent-brand) 14%, transparent);
+  color: var(--ghp-accent-brand);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ghp-session-subtitle-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ghp-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Motion & a11y (contract §4.2.0): 120ms color/border transitions only; every
    colored dot is decorative with the text label always present; focus rings use
    the shipped focus token. Non-essential motion is disabled on request. */
@@ -3758,6 +4378,8 @@ a.ghp-board-card { text-decoration: none; }
     /* ------------------------------------------------------------------ */
 
     function apply(ctx) {
+      bindSidebarRightServices(ctx)
+
       ctx.effect(() => {
         const tag = document.createElement('style')
         tag.dataset.plugin = 'github-projects'
@@ -3776,6 +4398,15 @@ a.ghp-board-card { text-decoration: none; }
         locale: NS,
         label: () => 'projects',
       }, ProjectsView))
+
+      // Hidden helper (renders null in the actions row) that owns the session
+      // issue subtitle line under the conversation title (§4.5).
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: 'github-projects-session-issue',
+        order: 5,
+        locale: NS,
+      }, SessionIssueSubtitle))
 
       ctx.slots.inject('conversation.view', () => ctx.slots.register({
         name: 'conversation.view',

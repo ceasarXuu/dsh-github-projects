@@ -1,10 +1,11 @@
 # dsh-github-projects
 
-**v0.3.0** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
+**v0.4.0** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
 这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
-GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue。
-对 GitHub 全程只读——它是查看面板，不是写入工具。
+GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue，并在会话
+标题下显示一行 **Issue 副标题**。点卡片会用 DSH 内置右侧浏览器打开 GitHub（不再直接绑定），绑定由
+显式「绑定」按钮或 3 个 agent 工具完成。对 GitHub 全程只读——它是查看面板，不是写入工具。
 
 ```
 会话头部： [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
@@ -21,15 +22,33 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | 层级 | 绑定到 | 从哪里选 | 持久化 |
 |---|---|---|---|
 | Project | 一个**工作区**（该工作区的所有会话共享） | `projects` 页签 → Project 选择器 | DSH profile 内的 `state.json` |
-| Issue | 一个**会话** | `projects` 页签里某个 Issue 行点「绑定」，或在 `issue` 页签粘贴链接 | DSH profile 内的 `state.json` |
+| Issue | 一个**会话** | 卡片/行的「绑定」按钮、**agent 工具**，或在 `issue` 页签粘贴链接 | DSH profile 内的 `state.json` |
 
 `projects` 页签一次读取 `GET /items`，在前端完成所有派生：按 Projects v2 的 `Status` 字段分成泳道列、
-按 `milestone` 字段生成过滤选项、文本/状态筛选与计数；不额外调用 GitHub。点 Issue 卡片（或列表行的
-「绑定」）后，插件把该 Issue 绑到当前会话并自动切到 `issue` 页签，展示标题、状态、正文、标签和评论。
-两个页签都是追加的：停用插件后会话头部完全恢复原样。
+按 `milestone` 字段生成过滤选项、文本/状态筛选与计数；不额外调用 GitHub。**点卡片主体或列表行**
+会在 DSH 内置右侧浏览器打开 GitHub 页面（不改变绑定）；点**显式的「绑定」按钮**才会把 Issue 绑到
+当前会话、切到 `issue` 页签并在会话标题下显示副标题。两个页签都是追加的：停用插件后会话头部完全
+恢复原样。
 
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
 不上报遥测、也不直接访问 GitHub。
+
+## 0.4.0 新特性：会话 Issue 副标题、Agent 工具、内置浏览器打开与更快读取
+
+- **会话 Issue 副标题。** 已绑定 Issue 的会话在标题下显示 `#N`（tint chip）+ Issue 标题，单行省略，
+  `title` 属性带完整 `repo#N title`；点击在内置右侧浏览器打开 GitHub。agent 工具改绑后约 4 秒内
+  自动更新，插件自身的绑定/解绑则立即更新。
+- **点击=内置浏览器，绑定=显式按钮。** 点 Issue/PR 卡片或列表行现在在 DSH 右侧栏浏览器打开 GitHub
+  页面（与普通链接使用同一个浏览器 tab），不再直接绑定；要绑定请点卡片/行上的「绑定」按钮，绑定后
+  跳到 `issue` 页签。PR/Draft 行只有查看动作。
+- **Agent 工具。** 模型可以用 `github_issue_bind` / `github_issue_switch` / `github_issue_unbind`
+  管理**当前会话**的 Issue 绑定（参数为 Issue URL 或 `owner/repo#123`）。工具只作用于当前会话、
+  不写 GitHub，界面在 ≤4s 内反映变化。示例：「把 https://github.com/acme/web/issues/228 绑定到
+  当前会话」「当前会话换成 acme/web#240」「解除当前会话的 Issue 绑定」。
+- **读取更快。** `/projects` 改为单次 GraphQL（约 1.4s，旧 ~3.1s）；`/items` 用分页 GraphQL
+  （冷启动约 3.4s，旧 ~4.6s，且不再单独调用 project view）；宿主 SWR 立即返回旧数据并后台刷新
+  （`staleTtlMs` 10 分钟）、磁盘缓存跨重启；`/config` 不等 `gh`；warm 打开 projects **无骨架**
+  （宿主响应 <300ms，由 e2e `projects-warm` 门禁保证）。
 
 ## 0.3.0 新特性：状态配色与视觉层次 + 空 No status 泳道自动隐藏
 
@@ -81,13 +100,15 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | ![Issue 详情](artifacts/screenshots/08-issue-detail.png) | ![Issue 评论区](artifacts/screenshots/09-issue-comments.png) |
 | 已绑定 Issue：绿色 Open 徽章、吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
 | ![宽窗口全宽布局](artifacts/screenshots/11-projects-wide.png) | |
-| 宽窗口（2200×1300）：页面铺满会话区域（旧 1000px 居上限宽已修复），真实数据 4 条泳道各 454.3px 均分 | |
+| 宽窗口（2200×1300）：页面铺满会话区域（旧 1000px 居上限宽已修复） | |
+| ![内置浏览器打开](artifacts/screenshots/12-browser-open.png) | ![Issue 副标题](artifacts/screenshots/13-issue-subtitle.png) |
+| 点 Issue 卡片正文在内置右侧浏览器打开 GitHub，**不创建绑定**。Web 版用 iframe，github.com 的 `X-Frame-Options: DENY` 会拒绝内嵌（空白 pane，地址栏 URL 正确）；Desktop 版 Electron webview 正常渲染。绑定请用卡片上的「绑定」按钮 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 带全文，点击打开内置浏览器） |
 
-截图 01–09 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800；`09` 需 `--extra-comments`），并已按 v0.3.0 视觉系统刷新。`11-projects-wide.png` 是 harness
-在 **2200×1300** 下采集的全宽布局 + 状态配色证据。`10-desktop-tabs.png` 不同：它是**真实 Desktop
-应用**的手动现场截图，
-展示用户当前会话头部的两个页签：
+截图 01–09、12、13 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
+1280×800；`09` 需 `--extra-comments`）。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
+全宽布局证据。`10-desktop-tabs.png` 不同：它是 v0.4.0 重装后**真实 Desktop 应用**的 1313×790 手动
+裁剪截图（sha256 `1f375330…6e38`），包含会话标题、`#240 …` Issue 副标题行（agent 工具绑定期间拍摄）
+与四个页签：
 
 ![安装后 Desktop 会话头部](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -144,12 +165,16 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 3. 绑定后默认是**泳道看板**：从左到右扫五列状态；用工具栏的「泳道 / 列表」切换可在分组列表与看板间切换。
 4. 用工具栏的 **milestone 下拉**（`全部` / `Backlog` / 具体 milestone）和文本筛选收窄范围，
    两种视图的计数会同步更新；空列显示「无条目」但列不消失。
-5. 点 Issue 卡片（或列表行的「绑定」）：Issue 绑到当前会话并自动切到 `issue` 页签；
-   PR/Draft 卡片则打开 GitHub。
-6. 另一条路径：在未绑定的 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」。
+5. 点卡片主体或列表行：在 DSH **内置右侧浏览器**打开该 Issue/PR 的 GitHub 页面（不改变绑定）。
+   点卡片/行上的「绑定」按钮才把 Issue 绑到当前会话，界面自动切到 `issue` 页签，并在会话标题下
+   出现 Issue 副标题。
+6. 另一条路径：在未绑定的 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」；
+   也可以直接对模型说「把 https://github.com/acme/web/issues/228 绑定到当前会话」「当前会话换成
+   acme/web#240」「解除当前会话的 Issue 绑定」（agent 工具）。
+7. 之后随时点会话标题下的副标题，可在内置浏览器重新打开该 Issue。
 
-点「刷新」绕过 60 秒缓存；「更换」切换工作区绑定的 Project；「解绑」（需确认）清除绑定。
-解绑 Project 不会影响已绑定的 Issue。
+点「刷新」强制新鲜读取（缓存过期后最多 10 分钟内可能先显示旧数据再后台刷新）；「更换」切换工作区
+绑定的 Project；「解绑」（需确认）清除绑定。解绑 Project 不会影响已绑定的 Issue。
 
 ## 配置
 
@@ -160,11 +185,14 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 |---|---|---|
 | `ghCommand` | `gh` | `gh` 可执行文件。建议写绝对路径——GUI 应用继承的 `PATH` 常比终端短 |
 | `requestTimeoutMs` | `20000` | 单次 `gh` 调用超时（毫秒） |
-| `cacheTtlMs` | `60000` | GitHub 读取的内存缓存 TTL（毫秒）；`refresh=1` 可绕过 |
+| `cacheTtlMs` | `60000` | 内存缓存的 **fresh** 窗口（毫秒）；`refresh=1` 等待新鲜读取 |
+| `staleTtlMs` | `600000` | **stale-serve** 窗口（10 分钟）：过期条目立即返回旧值 + `stale:true`，同时后台刷新一次 |
+| `diskCache` | `true` | 是否把读取结果持久化到 `cacheFile`，供 DSH 重启后快速首屏 |
+| `cacheFile` | `null` | 磁盘缓存文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/cache.json` |
 | `maxProjectItems` | `200` | 单次读取 Project 条目上限 |
 | `maxComments` | `30` | 单次读取 Issue 评论上限 |
 | `healthCacheTtlMs` | `5000` | `gh` 健康快照 TTL（`/config`、`/health` 共享） |
-| `healthFirstReadTimeoutMs` | `3000` | 首次 `/config` 等待健康探测的上限；超时先返回 `error:"pending"`，探测在后台继续 |
+| `healthFirstReadTimeoutMs` | `3000` | **legacy，已不再使用**（0.4.0 起 `/config` 永不等待探测）；仅为兼容旧配置保留 |
 | `statePath` | `null` | 绑定存储文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/state.json` |
 
 ```yaml
@@ -175,6 +203,9 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
     cacheTtlMs: 120000
+    staleTtlMs: 600000
+    diskCache: true
+    cacheFile: null
     maxProjectItems: 200
     maxComments: 30
     healthCacheTtlMs: 5000
@@ -205,7 +236,7 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 | 安装后 Desktop 回到工作区首页 | HMR 重组 profile 的正常表现 | 重新点开会话即可，数据未受影响 |
 | 安装后没有页签 | profile 里 bundle 未启用，或 DSH 未重组 | 检查 `dsh.profile.bundles`，在插件管理里启用，重新加载 |
 | `projects` 页签显示「当前会话不属于任何工作区」 | Project 绑定以工作区为归属，当前会话没有工作区 | 先把会话放进一个工作区，再绑定 |
-| 刚打开时闪一下「gh CLI 不可用」警告 | 首次 `/config` 健康探测超过 `healthFirstReadTimeoutMs`，返回了 `error:"pending"` 占位 | 正常现象；探测完成后重新读取即恢复 |
+| 刚打开时闪一下「gh CLI 不可用」警告 | 冷启动时 `/config` 不等待 `gh`，先返回 `error:"pending"` 占位，后台探测 | 正常现象；探测完成后重新读取即恢复 |
 | 列表是旧数据 | 60 秒缓存 | 点「刷新」 |
 | 「绑定保存失败」 | `statePath` 不可写（权限/磁盘） | 检查路径与权限，或把 `statePath` 指到可写文件 |
 
@@ -240,13 +271,13 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | 0.3.0（状态配色 + 空 No status 泳道隐藏；0.2.x：全宽布局 / 泳道看板 / milestone 过滤） |
+| 插件版本 | 0.4.0（Issue 副标题 / Agent 工具 / 内置浏览器打开 / SWR 更快读取；0.3.0：视觉系统 + 空泳道隐藏；0.2.x：全宽 / 泳道 / milestone） |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | 2026-10-28 通过 v0.3.0 验收：宿主测试 69/69；e2e fixture/real 均 PASS（冻结 client `813dae78…`）；空 No status 泳道隐藏已验证（real #9 `data-ghp-hidden-lanes="no-status"`、4 条泳道 / 195 卡）；11 张截图全部按新视觉系统刷新；浅色主题手动检查通过——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | 2026-10-28 通过 v0.4.0 验收：宿主测试 87/87；e2e fixture/real 均 PASS（各 17/17 阶段；冻结 client `7fa1ef01…`、index `4e025542…`）；副标题 / 内置浏览器 / SWR 均验证；Agent 工具在真实 Desktop 应用现场跑通（bind/switch/unbind + 头部副标题）；warm 打开 projects 27–72ms 无骨架；13 张截图——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 目前还没有 `engines.dsh` 版本门禁：如果 DSH 升级改动了 `conversation.view` slot 或会话标准 props，
 可能需要同步更新插件。
@@ -269,10 +300,25 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 - **视图偏好是本地偏好：** 「泳道 / 列表」的选择只在当前客户端记住，不写入 profile 绑定文件。
 - **一个工作区一个 Project，一个会话一个 Issue。**
 - **只做 Issue 详情。** PR / Draft 条目只能跳转 GitHub，PR 不能绑定到会话。
-- **列表不含条目状态。** `gh project item-list` 的 JSON 不返回每个条目的开闭状态，列表不展示；
-  `issue` 页签（走 REST）是准的。
-- **有上限：** 单次最多 `maxProjectItems` 个条目、`maxComments` 条评论（评论只取最早一页）；没有分页和「加载更多」；
-  超长 Issue 正文截断到 100 000 字符。
+- **列表不含条目状态。** 条目 payload 不返回每个条目的开闭状态，看板/列表不展示；`issue` 页签
+  （走 REST）是准的。
+- **有上限：** 单次最多 `maxProjectItems` 个条目（GraphQL 分页到上限即停）、`maxComments` 条评论
+  （只取最早一页）；没有客户端的「加载更多」；超长 Issue 正文截断到 100 000 字符。
+- **Issue 副标题依赖宿主私有头部 DOM：** 出厂头部没有 subtitle slot，插件用受控 portal 在标题行后
+  插入副标题；若 DSH 升级改变该 DOM，副标题会降级为不显示（不报错、不影响其它功能），需随版本复核。
+- **Agent 工具只作用于当前会话：** 没有跨会话参数，不能给其它会话绑定/解绑；工具需要宿主提供
+  `ctx.tools` 与 owning agent，界面通过本地轮询（≤4s）反映，不是推送。
+- **内置浏览器兜底：** 卡片/行点击使用 DSH 右侧栏 browser tab；宿主没有该能力时回退 `window.open`
+  （普通新标签页，会离开当前界面）。
+- **Web 版内置浏览器受 X-Frame-Options 限制：** Web 构建用 iframe 承载浏览器，github.com 返回
+  `X-Frame-Options: DENY`，内嵌 GitHub 页面可能显示空白（地址栏 URL 正确）；Desktop 版 Electron
+  webview 正常渲染。只影响"在界面内查看"，不影响 URL 本身。
+- **SWR 新鲜度：** `staleTtlMs`（10 分钟）内可能先看到缓存数据再后台刷新；DSH 重启后还可能先用
+  磁盘缓存渲染。需要最新数据请点「刷新」。磁盘缓存保存 GitHub 读取结果（不含 token），位于 DSH
+  profile 下；可删除或设 `diskCache: false` 关闭。
+- **延迟数字是参考值：** 单次 GraphQL `/projects` ~1.4s、分页 `/items` 冷启动 ~3.4s、warm 打开
+  27–72ms（无骨架）均来自本机实测，随网络、项目规模与 `gh` 版本变化；real 数据冷启动看板实测
+  3.70s，略高于 3.5s 期望，按记录处理（不判失败）。
 - **不跨 Project 搜索**，也没有全局看板。
 - **绑定属于当前 profile**，不随仓库走；换机器/换 profile 需要重新绑定。
 - **仅 Markdown 子集：** 正文不渲染 HTML、图片、表格；任务列表勾选框只做展示、不可点击。

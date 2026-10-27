@@ -90,11 +90,14 @@ whole `config` object, so restate every key you need there.
 |---|---|---|
 | `ghCommand` | `gh` | `gh` executable (absolute path recommended). |
 | `requestTimeoutMs` | `20000` | One `gh` invocation deadline (1 s – 10 min). |
-| `cacheTtlMs` | `60000` | In-memory GitHub read cache TTL (`refresh=1` bypasses). |
-| `maxProjectItems` | `200` | Upper bound of items returned by one `/items` read. |
+| `cacheTtlMs` | `60000` | Fresh window of the SWR read cache (`refresh=1` waits for a fresh read). |
+| `staleTtlMs` | `600000` | How long expired entries may still be served immediately as `stale: true` while one background refresh revalidates them. |
+| `diskCache` | `true` | Persist successful reads to `cacheFile` and load them at plugin start (restart-friendly). |
+| `cacheFile` | `$DSH_HOME/plugin-data/github-projects/cache.json` | Bounded atomic cache snapshot (`null` resolves the default; ≤40 entries / ≤8 MiB). |
+| `maxProjectItems` | `200` | Upper bound of items returned by one `/items` read (GraphQL pages of 100). |
 | `maxComments` | `30` | Upper bound of comments returned by one `/issue` read. |
-| `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health probe used by `/config` and `/health` (0 – 60 s). |
-| `healthFirstReadTimeoutMs` | `3000` | Bound on the first `/config` health probe; on timeout it answers `{available:false,version:null,account:null,error:'pending'}` and refreshes in the background (0 – 60 s). |
+| `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health probe; `/config` never waits for it, `/health` awaits a fresh probe. |
+| `healthFirstReadTimeoutMs` | `3000` | Legacy key still accepted so old profile patches load; unused by v0.4.0 (config is non-blocking). |
 | `statePath` | `$DSH_HOME/plugin-data/github-projects/state.json` | Durable binding file (`null` resolves the default). |
 
 ### 3.1 HTTP API (prefix `/plugin/github-projects`)
@@ -604,10 +607,15 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and hidden when
      its filtered count is 0, the four non-No-status canonical lanes always present, ≥1 card;
      `04-projects-board.png`;
-   - `projects-browser` — click an Issue card body (`[data-ghp-card-action="open"]`): assert DSH's
-     built-in right sidebar browser opens (`[data-sidebar-browser-frame]` iframe whose `src` contains
-     `github.com/<repo>/issues/<N>`) and no binding was created; `12-browser-open.png`; close the
-     browser tab afterwards;
+   - `projects-browser` — the overlay enables the Web-disabled shipping row
+     (`- id: ui-sidebar-browser / disabled: false`) so the browser tab type exists. Click an Issue
+     card body (`[data-ghp-card-action="open"]`): assert DSH's built-in right sidebar browser opens
+     (`[data-sidebar-browser-frame]` iframe whose `src` contains `github.com/<repo>/issues/<N>`, and
+     the browser tab/address bar is present) and no binding was created; `12-browser-open.png`; close
+     the browser tab afterwards. In Web the iframe itself cannot render github.com
+     (`X-Frame-Options: DENY`) — that refusal is an expected, documented console error in the
+     harness allowlist and does not fail the run; Desktop uses an Electron `<webview>` and renders
+     the page natively;
    - `projects-list` — toggle to list: `[data-ghp-list]`, grouped sections; `05-projects-list.png`;
    - `projects-milestone` — open the milestone dropdown: options include `全部` + `Backlog` + real
      project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts shrink
