@@ -1,9 +1,10 @@
 # dsh-github-projects
 
-**把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。**
+**v0.2.0** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
-这个 DSH 插件向会话头部追加两个视图：`projects` 展示绑定到**工作区**的 GitHub Project，`issue`
-展示绑定到**会话**的 Issue。对 GitHub 全程只读——它是查看面板，不是写入工具。
+这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
+GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue。
+对 GitHub 全程只读——它是查看面板，不是写入工具。
 
 ```
 会话头部： [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
@@ -22,12 +23,24 @@
 | Project | 一个**工作区**（该工作区的所有会话共享） | `projects` 页签 → Project 选择器 | DSH profile 内的 `state.json` |
 | Issue | 一个**会话** | `projects` 页签里某个 Issue 行点「绑定」，或在 `issue` 页签粘贴链接 | DSH profile 内的 `state.json` |
 
-`projects` 页签按 Projects v2 的 `Status` 字段对条目分组，支持筛选。在 Issue 行点「绑定」后，插件把该
-Issue 绑到当前会话并自动切到 `issue` 页签，展示标题、状态、正文、标签和评论。两个页签都是追加的：
-停用插件后会话头部完全恢复原样。
+`projects` 页签一次读取 `GET /items`，在前端完成所有派生：按 Projects v2 的 `Status` 字段分成泳道列、
+按 `milestone` 字段生成过滤选项、文本/状态筛选与计数；不额外调用 GitHub。点 Issue 卡片（或列表行的
+「绑定」）后，插件把该 Issue 绑到当前会话并自动切到 `issue` 页签，展示标题、状态、正文、标签和评论。
+两个页签都是追加的：停用插件后会话头部完全恢复原样。
 
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
 不上报遥测、也不直接访问 GitHub。
+
+## 0.2.0（v1.1）新特性
+
+- **泳道看板（默认视图）。** 固定五列，从左到右 `No status` / `TODO` / `In Progress` / `In Review` /
+  `Done`。Project 自定义的其它 Status 不会被丢弃，会追加到最右侧成为额外列。列头显示当前过滤后的
+  卡片数；每列内部纵向滚动，列宽不够时看板整体横向滚动。只读：不支持拖拽。
+- **列表视图。** 工具栏「泳道 / 列表」随时切回原来的分组布局（按状态分段 + 状态 chips）。
+- **Milestone 过滤。** `全部` / `Backlog`（无 milestone）/ 已加载条目中出现的每个 milestone 标题，
+  自然排序并带计数；与文本筛选叠加，刷新后所选 milestone 消失时自动回退 `全部` 并提示。
+- **整卡操作。** Issue 卡片点击即绑定到当前会话（等价列表「绑定」）；PR/Draft 卡片打开 GitHub；
+  卡片支持键盘操作。
 
 ## 界面
 
@@ -35,16 +48,18 @@ Issue 绑到当前会话并自动切到 `issue` 页签，展示标题、状态�
 |---|---|
 | ![projects 未绑定空态](artifacts/screenshots/02-projects-empty.png) | ![Project 选择器](artifacts/screenshots/03-projects-picker.png) |
 | 未绑定工作区：选择一个 Project | 选择器：按 owner 分组、可过滤 |
-| ![已绑定 Project 列表](artifacts/screenshots/04-projects-list.png) | ![Issue 未绑定空态](artifacts/screenshots/05-issue-empty.png) |
-| 已绑定 Project，按 Status 分组 | 未绑定会话：从项目选择或粘贴链接 |
-| ![Issue 详情](artifacts/screenshots/06-issue-detail.png) | ![Issue 评论区](artifacts/screenshots/08-issue-comments.png) |
+| ![泳道看板](artifacts/screenshots/04-projects-board.png) | ![列表视图](artifacts/screenshots/05-projects-list.png) |
+| 默认泳道看板（五列状态） | 列表视图：分组段 + 状态 chips |
+| ![milestone 过滤](artifacts/screenshots/06-projects-milestone.png) | ![Issue 未绑定空态](artifacts/screenshots/07-issue-empty.png) |
+| milestone 过滤（全部 / Backlog / 各里程碑） | 未绑定会话：从项目选择或粘贴链接 |
+| ![Issue 详情](artifacts/screenshots/08-issue-detail.png) | ![Issue 评论区](artifacts/screenshots/09-issue-comments.png) |
 | 已绑定 Issue：吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
 
-截图 01–06 与 08 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800）。`07-desktop-tabs.png` 不同：它是安装插件后**真实 Desktop 应用**的手动现场截图，
-展示用户当前会话头部的两个页签：
+截图 01–09 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
+1280×800；`09` 需 `--extra-comments`）。`10-desktop-tabs.png` 不同：它是重装 v0.2.0 后
+**真实 Desktop 应用**的手动现场截图，展示用户当前会话头部的两个页签：
 
-![安装后 Desktop 会话头部](artifacts/screenshots/07-desktop-tabs.png)
+![安装后 Desktop 会话头部](artifacts/screenshots/10-desktop-tabs.png)
 
 ## 前置条件
 
@@ -96,10 +111,12 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 1. 打开一个会话，点 `projects` 页签。
 2. 点「选择 Project」，从个人账号和组织里选一个 Project（`gh project list` 看不到时，可手动填
    owner + number 绑定）。
-3. 在分组列表里找到要处理的 Issue（Project 很大时先用文本或状态 chips 筛选），点行尾的「绑定」。
-4. 插件把 Issue 绑到当前会话并自动切到 `issue` 页签；之后回到该会话，绑定的仍是这个 Issue。
-   其他会话可以各自绑定不同的 Issue。
-5. 另一条路径：在未绑定的 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」。
+3. 绑定后默认是**泳道看板**：从左到右扫五列状态；用工具栏的「泳道 / 列表」切换可在分组列表与看板间切换。
+4. 用工具栏的 **milestone 下拉**（`全部` / `Backlog` / 具体 milestone）和文本筛选收窄范围，
+   两种视图的计数会同步更新；空列显示「无条目」但列不消失。
+5. 点 Issue 卡片（或列表行的「绑定」）：Issue 绑到当前会话并自动切到 `issue` 页签；
+   PR/Draft 卡片则打开 GitHub。
+6. 另一条路径：在未绑定的 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」。
 
 点「刷新」绕过 60 秒缓存；「更换」切换工作区绑定的 Project；「解绑」（需确认）清除绑定。
 解绑 Project 不会影响已绑定的 Issue。
@@ -193,12 +210,13 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
+| 插件版本 | 0.2.0（v1.1：泳道看板 + milestone 过滤） |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | 2026-10-28 通过 v1 验收：宿主测试 69/69、e2e 的 fixture 与 real 模式均 PASS——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | 2026-10-28 通过 v1.1 验收：宿主测试 69/69；e2e 的 fixture 与 real 模式均 PASS（冻结 client `309f63ac…`）；10 张截图齐全（含 Desktop 手动现场图）——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 目前还没有 `engines.dsh` 版本门禁：如果 DSH 升级改动了 `conversation.view` slot 或会话标准 props，
 可能需要同步更新插件。
@@ -206,6 +224,12 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 ## 已知限制
 
 - **只读。** 不写 GitHub：不改状态、不评论、不建 Issue、不改字段。
+- **泳道只读：** 不支持拖拽换列，也不支持手动排序。
+- **看板布局：** 列最小宽度 176px，窗口窄时整个看板横向滚动；未知自定义状态只做只读扩展列；
+  空列保留列头与 0 计数，并显示「无条目」。
+- **milestone 过滤范围：** 选项与计数只来自已加载条目（受 `maxProjectItems` 上限约束），
+  超出上限的条目不会出现在下拉里。
+- **视图偏好是本地偏好：** 「泳道 / 列表」的选择只在当前客户端记住，不写入 profile 绑定文件。
 - **一个工作区一个 Project，一个会话一个 Issue。**
 - **只做 Issue 详情。** PR / Draft 条目只能跳转 GitHub，PR 不能绑定到会话。
 - **列表不含条目状态。** `gh project item-list` 的 JSON 不返回每个条目的开闭状态，列表不展示；

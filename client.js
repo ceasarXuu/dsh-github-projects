@@ -178,7 +178,7 @@ window.__ModuleLoader__.load({
       'projects.change': '更换',
       'projects.emptyItemsTitle': '这个 Project 还没有条目',
       'projects.emptyItemsText': '添加 Issue、PR 或 Draft 后，它们会按 Status 分组显示在这里。',
-      'projects.truncated': '列表已截断：仅显示前 {shown} 个条目（共 {total} 个）。',
+      'projects.truncated': '条目已截断：仅显示前 {shown} 个（共 {total} 个）。',
       'projects.filterPlaceholder': '筛选标题、repo、编号或标签',
       'projects.uncategorized': '未分类',
       'projects.filterEmpty': '没有匹配的条目',
@@ -187,6 +187,15 @@ window.__ModuleLoader__.load({
       'projects.ghWarningTitle': 'gh CLI 不可用',
       'projects.ghWarningHint': '安装 GitHub CLI 并运行 gh auth login 后即可读取项目数据。',
       'projects.issueBindFailed': '绑定 Issue 失败',
+      'projects.viewBoard': '泳道',
+      'projects.viewList': '列表',
+      'projects.viewModeAria': '视图模式',
+      'projects.milestone.filterAria': '按里程碑过滤',
+      'projects.milestone.all': '全部',
+      'projects.milestone.backlog': 'Backlog',
+      'projects.milestone.backlogHint': '无里程碑的条目',
+      'projects.milestone.missing': '所选里程碑「{title}」已不在当前条目中，已切换为全部。',
+      'projects.board.emptyColumn': '无条目',
       'projects.bindIssueAria': '绑定 Issue：{title}',
       'projects.loadFailed': '读取 Project 条目失败',
       'projects.bindFailed': '绑定 Project 失败',
@@ -229,6 +238,7 @@ window.__ModuleLoader__.load({
       'error.configHint': '无法读取绑定信息，请重试。',
 
       'item.draft': 'Draft',
+      'item.pr': 'PR',
 
       'time.justNow': '刚刚',
       'time.minutesAgo': '{count} 分钟前',
@@ -289,6 +299,15 @@ window.__ModuleLoader__.load({
       'projects.ghWarningTitle': 'gh CLI unavailable',
       'projects.ghWarningHint': 'Install the GitHub CLI and run gh auth login to read project data.',
       'projects.issueBindFailed': 'Failed to bind the Issue',
+      'projects.viewBoard': 'Swimlane',
+      'projects.viewList': 'List',
+      'projects.viewModeAria': 'View mode',
+      'projects.milestone.filterAria': 'Filter by milestone',
+      'projects.milestone.all': 'All',
+      'projects.milestone.backlog': 'Backlog',
+      'projects.milestone.backlogHint': 'Items without a milestone',
+      'projects.milestone.missing': 'The selected milestone “{title}” is no longer present; switched back to All.',
+      'projects.board.emptyColumn': 'No items',
       'projects.bindIssueAria': 'Bind Issue: {title}',
       'projects.loadFailed': 'Failed to load Project items',
       'projects.bindFailed': 'Failed to bind the Project',
@@ -331,6 +350,7 @@ window.__ModuleLoader__.load({
       'error.configHint': 'Cannot read the bindings; please retry.',
 
       'item.draft': 'Draft',
+      'item.pr': 'PR',
 
       'time.justNow': 'just now',
       'time.minutesAgo': '{count} min ago',
@@ -465,6 +485,133 @@ window.__ModuleLoader__.load({
         if (!statusOrder.includes(key)) groups.push({ key, items: bucket })
       }
       return groups
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 3b. Swimlane board + milestone filter helpers (v1.1).              */
+    /* ------------------------------------------------------------------ */
+
+    /** The five fixed status swimlanes, left→right (contract §4.2). */
+    const BOARD_COLUMNS = [
+      { key: 'no-status', label: 'No status', status: null },
+      { key: 'todo', label: 'TODO', status: 'todo' },
+      { key: 'in-progress', label: 'In Progress', status: 'in progress' },
+      { key: 'in-review', label: 'In Review', status: 'in review' },
+      { key: 'done', label: 'Done', status: 'done' },
+    ]
+    const KNOWN_BOARD_COLUMNS = new Set(BOARD_COLUMNS.map((column) => column.key))
+
+    /** Case-insensitive lane assignment; blank → no-status, unknown → other:<raw>. */
+    function boardColumnKeyOf(item) {
+      const raw = textOf(item.status).trim()
+      const normalized = raw.toLowerCase()
+      if (normalized === '') return 'no-status'
+      for (const column of BOARD_COLUMNS) {
+        if (column.status !== null && column.status === normalized) return column.key
+      }
+      return `other:${raw}`
+    }
+
+    function milestoneKeyOf(item) {
+      const title = textOf(item.milestone).trim()
+      return title === '' ? null : title
+    }
+
+    /** Natural version order: v1.1.0 < v1.2.0 < vNext, deterministic. */
+    function naturalCompare(left, right) {
+      const leftParts = textOf(left).match(/\d+|\D+/gu) ?? []
+      const rightParts = textOf(right).match(/\d+|\D+/gu) ?? []
+      const length = Math.min(leftParts.length, rightParts.length)
+      for (let index = 0; index < length; index += 1) {
+        const leftPart = leftParts[index]
+        const rightPart = rightParts[index]
+        if (/^\d+$/u.test(leftPart) && /^\d+$/u.test(rightPart)) {
+          const difference = Number(leftPart) - Number(rightPart)
+          if (difference !== 0) return difference
+        } else {
+          const difference = leftPart.toLowerCase().localeCompare(rightPart.toLowerCase())
+          if (difference !== 0) return difference
+        }
+      }
+      return leftParts.length - rightParts.length
+    }
+
+    /**
+     * Milestone dropdown model from the unfiltered loaded item set:
+     * `全部`, `Backlog` (no milestone), then every title in natural order.
+     */
+    function buildMilestoneOptions(items) {
+      const counts = new Map()
+      let backlogCount = 0
+      for (const item of items) {
+        const title = milestoneKeyOf(item)
+        if (title === null) {
+          backlogCount += 1
+        } else {
+          counts.set(title, (counts.get(title) ?? 0) + 1)
+        }
+      }
+      const titles = [...counts.keys()].sort(naturalCompare)
+      return [
+        { key: 'all', labelKey: 'projects.milestone.all', count: items.length },
+        { key: 'backlog', labelKey: 'projects.milestone.backlog', count: backlogCount },
+        ...titles.map((title) => ({ key: title, label: title, count: counts.get(title) ?? 0 })),
+      ]
+    }
+
+    function filterByMilestone(items, milestoneFilter) {
+      if (milestoneFilter === 'all') return items
+      if (milestoneFilter === 'backlog') return items.filter((item) => milestoneKeyOf(item) === null)
+      return items.filter((item) => milestoneKeyOf(item) === milestoneFilter)
+    }
+
+    /** `[{key, label, items}]` for the board: fixed lanes first, extras after. */
+    function buildBoardColumns(allItems, filteredItems) {
+      const buckets = new Map()
+      for (const column of BOARD_COLUMNS) buckets.set(column.key, [])
+      const extraKeys = []
+      for (const item of allItems) {
+        const key = boardColumnKeyOf(item)
+        if (!KNOWN_BOARD_COLUMNS.has(key) && !extraKeys.includes(key)) extraKeys.push(key)
+      }
+      for (const key of extraKeys) buckets.set(key, [])
+      for (const item of filteredItems) {
+        const key = boardColumnKeyOf(item)
+        const bucket = buckets.get(key)
+        if (bucket === undefined) {
+          buckets.set(key, [item])
+          extraKeys.push(key)
+        } else {
+          bucket.push(item)
+        }
+      }
+      const columns = BOARD_COLUMNS.map((column) => ({
+        key: column.key,
+        label: column.label,
+        items: buckets.get(column.key) ?? [],
+      }))
+      for (const key of extraKeys) {
+        columns.push({ key, label: key.replace(/^other:/u, ''), items: buckets.get(key) ?? [] })
+      }
+      return columns
+    }
+
+    const VIEW_MODE_STORAGE_KEY = 'dsh-github-projects:view-mode'
+
+    function readStoredViewMode() {
+      try {
+        return window.localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'list' ? 'list' : 'board'
+      } catch (_storageUnavailable) {
+        return 'board'
+      }
+    }
+
+    function storeViewMode(mode) {
+      try {
+        window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode)
+      } catch (_storageUnavailable) {
+        /* the in-memory mode still works without storage */
+      }
     }
 
     function safeStateClass(state) {
@@ -791,6 +938,22 @@ window.__ModuleLoader__.load({
 
     function IconArrow({ size = 16 }) {
       return h(GlyphIcon, { size }, h('path', { key: 'p', d: 'm5.8 3.2 4.8 4.8-4.8 4.8' }))
+    }
+
+    function IconChevronDown({ size = 16 }) {
+      return h(GlyphIcon, { size }, h('path', { key: 'p', d: 'm3.8 6.2 4.2 4.1 4.2-4.1' }))
+    }
+
+    function IconLayoutBoard({ size = 16 }) {
+      return h(GlyphIcon, { size },
+        h('rect', { key: 'a', x: 1.9, y: 2.6, width: 3.3, height: 10.8, rx: 1 }),
+        h('rect', { key: 'b', x: 6.35, y: 2.6, width: 3.3, height: 10.8, rx: 1 }),
+        h('rect', { key: 'c', x: 10.8, y: 2.6, width: 3.3, height: 10.8, rx: 1 }))
+    }
+
+    function IconLayoutList({ size = 16 }) {
+      return h(GlyphIcon, { size },
+        h('path', { key: 'a', d: 'M2.4 4h1.2M6.2 4h7.4M2.4 8h1.2M6.2 8h7.4M2.4 12h1.2M6.2 12h7.4' }))
     }
 
     function itemTypeIcon(type, size = 16) {
@@ -1293,7 +1456,186 @@ window.__ModuleLoader__.load({
           h(SkeletonBlock, { className: 'ghp-sk-row' })))
     }
 
-    function ProjectToolbar({ t, project, itemCount, refreshing, onRefresh, onChange, onUnbind, unbinding }) {
+    function ViewModeToggle({ t, viewMode, onChange }) {
+      const modes = [
+        { key: 'board', action: 'view-board', label: t('projects.viewBoard'), icon: h(IconLayoutBoard, { size: 13 }) },
+        { key: 'list', action: 'view-list', label: t('projects.viewList'), icon: h(IconLayoutList, { size: 13 }) },
+      ]
+      return h('div', { className: 'ghp-seg', role: 'group', 'aria-label': t('projects.viewModeAria') },
+        modes.map((mode) => h('button', {
+          key: mode.key,
+          type: 'button',
+          className: 'ghp-seg-btn',
+          'data-ghp-action': mode.action,
+          'aria-pressed': viewMode === mode.key ? 'true' : 'false',
+          onClick: () => onChange(mode.key),
+        },
+        h('span', { className: 'ghp-seg-icon', 'aria-hidden': true }, mode.icon),
+        h('span', { className: 'ghp-seg-label' }, mode.label))))
+    }
+
+    function MilestoneDropdown({ t, value, milestoneOptions, onChange }) {
+      const [open, setOpen] = useState(false)
+      const rootRef = useRef(null)
+      useEffect(() => {
+        if (!open) return undefined
+        const onPointerDown = (event) => {
+          if (event.target instanceof Node && rootRef.current?.contains(event.target) === true) return
+          setOpen(false)
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setOpen(false)
+          }
+        }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, [open])
+      const options = asArray(milestoneOptions)
+      const current = options.find((option) => option.key === value) ?? options[0]
+      const labelOf = (option) => (option.labelKey === undefined ? textOf(option.label) : t(option.labelKey))
+      const currentLabel = current === undefined ? t('projects.milestone.all') : labelOf(current)
+      return h('div', { className: 'ghp-dropdown', ref: rootRef },
+        h('button', {
+          type: 'button',
+          className: 'ghp-btn ghp-btn-ghost ghp-btn-sm ghp-dropdown-toggle',
+          'data-ghp-action': 'milestone',
+          'aria-haspopup': 'listbox',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-label': t('projects.milestone.filterAria'),
+          title: t('projects.milestone.filterAria'),
+          onClick: () => setOpen((previous) => !previous),
+        },
+        h('span', { className: 'ghp-btn-icon', 'aria-hidden': true }, h(IconMilestone, { size: 14 })),
+        h('span', { className: 'ghp-btn-label ghp-dropdown-value' }, currentLabel),
+        h('span', { className: 'ghp-dropdown-caret', 'aria-hidden': true }, h(IconChevronDown, { size: 13 }))),
+        open
+          ? h('div', { className: 'ghp-dropdown-menu', role: 'listbox', 'aria-label': t('projects.milestone.filterAria') },
+            options.map((option) => {
+              const active = option.key === value
+              return h('button', {
+                key: option.key,
+                type: 'button',
+                role: 'option',
+                className: `ghp-dropdown-item${active ? ' ghp-dropdown-item-active' : ''}`,
+                'aria-selected': active ? 'true' : 'false',
+                'data-ghp-milestone-option': option.key,
+                'data-active': active ? 'true' : undefined,
+                title: option.key === 'backlog' ? t('projects.milestone.backlogHint') : undefined,
+                onClick: () => {
+                  setOpen(false)
+                  onChange(option.key)
+                },
+              },
+              h('span', { className: 'ghp-dropdown-label' }, labelOf(option)),
+              h('span', { className: 'ghp-dropdown-count' }, String(option.count)))
+            }))
+          : null)
+    }
+
+    function BoardCard({ t, item, boundIssue, bindingId, onBind }) {
+      const type = item.type === 'pr' || item.type === 'draft' ? item.type : 'issue'
+      const repo = textOf(item.repo)
+      const hasNumber = typeof item.number === 'number' && Number.isFinite(item.number)
+      const fullRef = `${repo}${hasNumber ? `#${item.number}` : ''}`
+      const labels = asArray(item.labels).filter((label) => typeof label === 'string' && label !== '')
+      const milestone = textOf(item.milestone)
+      const isBound = type === 'issue'
+        && isPlainObject(boundIssue)
+        && boundIssue.repo === item.repo
+        && boundIssue.number === item.number
+      const binding = bindingId !== null && bindingId === itemIdentity(item)
+      const url = safeHref(item.url)
+      const isIssue = type === 'issue' && repo !== '' && hasNumber
+      const typeLabel = type === 'pr' ? t('item.pr') : (type === 'draft' ? t('item.draft') : null)
+      const repoNode = repo === '' && !hasNumber
+        ? null
+        : h('span', { key: 'repo', className: 'ghp-board-card-repo', title: fullRef === '' ? undefined : fullRef },
+          repo === '' ? null : h('span', { key: 'repo-name', className: 'ghp-board-card-repo-name' }, repo),
+          hasNumber ? h('span', { key: 'repo-number', className: 'ghp-board-card-repo-number' }, `#${item.number}`) : null)
+      const className = `ghp-board-card${isBound ? ' ghp-board-card-bound' : ''}${binding ? ' ghp-board-card-busy' : ''}`
+      const children = [
+        h('span', { key: 'title', className: 'ghp-board-card-title' }, textOf(item.title)),
+        h('span', { key: 'meta', className: 'ghp-board-card-meta' },
+          typeLabel === null ? null : h('span', { key: 'type', className: 'ghp-board-card-type' }, typeLabel),
+          repoNode,
+          isBound ? h('span', { key: 'bound', className: 'ghp-badge ghp-badge-bound' }, t('common.bound')) : null,
+          binding ? h('span', { key: 'busy', className: 'ghp-board-card-spinner', 'aria-hidden': true }, h(Spinner, { size: 11 })) : null),
+      ]
+      const foot = []
+      labels.slice(0, 2).forEach((label, index) => {
+        foot.push(h(LabelPill, { key: `label-${index}`, name: label }))
+      })
+      if (labels.length > 2) {
+        foot.push(h('span', { key: 'labels-more', className: 'ghp-board-card-more' }, `+${labels.length - 2}`))
+      }
+      if (milestone !== '') {
+        foot.push(h('span', { key: 'milestone', className: 'ghp-board-card-milestone', title: milestone },
+          h(IconMilestone, { size: 11 }),
+          h('span', { className: 'ghp-board-card-milestone-text' }, milestone)))
+      }
+      if (foot.length > 0) children.push(h('span', { key: 'foot', className: 'ghp-board-card-foot' }, ...foot))
+      const sharedProps = {
+        className,
+        'data-ghp-card': '',
+        'aria-busy': binding ? 'true' : undefined,
+      }
+      if (isIssue) {
+        return h('button', {
+          ...sharedProps,
+          type: 'button',
+          'data-issue': `${repo}#${item.number}`,
+          'data-ghp-card-action': '',
+          disabled: binding,
+          'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
+          onClick: () => onBind(item),
+        }, ...children)
+      }
+      if (url !== null) {
+        return h('a', {
+          ...sharedProps,
+          href: url,
+          target: '_blank',
+          rel: 'noreferrer noopener',
+          'data-ghp-card-action': '',
+          'aria-label': t('common.openGithub'),
+          title: t('common.openGithub'),
+        }, ...children)
+      }
+      return h('div', sharedProps, ...children)
+    }
+
+    function BoardView({ t, columns, sessionIssue, bindingId, onBind }) {
+      return h('div', { className: 'ghp-board', 'data-ghp-board': '' },
+        columns.map((column) => h('section', {
+          key: column.key,
+          className: 'ghp-board-column',
+          'data-ghp-column': column.key,
+          'data-ghp-count': String(column.items.length),
+          'aria-label': `${column.label} (${column.items.length})`,
+        },
+        h('header', { className: 'ghp-board-column-head' },
+          h('span', { className: 'ghp-board-column-title' }, column.label),
+          h('span', { className: 'ghp-section-count' }, String(column.items.length))),
+        h('div', { className: 'ghp-board-column-body' },
+          column.items.length === 0
+            ? h('div', { className: 'ghp-board-empty' }, t('projects.board.emptyColumn'))
+            : column.items.map((item) => h(BoardCard, {
+              key: itemIdentity(item),
+              t,
+              item,
+              boundIssue: sessionIssue,
+              bindingId,
+              onBind,
+            }))))))
+    }
+
+    function ProjectToolbar({ t, project, itemCount, refreshing, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding }) {
       const title = textOf(project.title) || `${textOf(project.owner)} #${project.number}`
       const meta = []
       meta.push(h('span', { key: 'owner', className: 'ghp-repochip' }, `${textOf(project.owner)} / #${project.number}`))
@@ -1315,6 +1657,13 @@ window.__ModuleLoader__.load({
               ? null
               : h('div', { className: 'ghp-toolbar-desc' }, textOf(project.description)))),
         h('div', { className: 'ghp-toolbar-actions' },
+          h(ViewModeToggle, { t, viewMode, onChange: onViewModeChange }),
+          h(MilestoneDropdown, {
+            t,
+            value: milestoneValue,
+            milestoneOptions,
+            onChange: onMilestoneChange,
+          }),
           refreshing ? h('span', { className: 'ghp-toolbar-sync', role: 'status' }, h(Spinner, { size: 12 }), t('projects.refreshing')) : null,
           h(Button, {
             variant: 'ghost',
@@ -1339,29 +1688,32 @@ window.__ModuleLoader__.load({
           })))
     }
 
-    function ProjectsFilters({ t, query, onQueryChange, statuses, counts, statusFilter, onStatusChange, total, matched, refreshing }) {
-      const chips = [h('button', {
-        key: ALL_STATUS,
-        type: 'button',
-        className: 'ghp-chip',
-        'aria-pressed': statusFilter === ALL_STATUS,
-        onClick: () => onStatusChange(ALL_STATUS),
-      },
-      h('span', null, t('common.all')),
-      h('span', { className: 'ghp-chip-count' }, String(total)))]
-      for (const key of statuses) {
-        const label = key === NO_STATUS ? t('projects.uncategorized') : key
+    function ProjectsFilters({ t, query, onQueryChange, statuses, counts, statusFilter, onStatusChange, total, matched, refreshing, showStatusChips }) {
+      const filtering = query.trim() !== '' || (showStatusChips && statusFilter !== ALL_STATUS)
+      const chips = []
+      if (showStatusChips) {
         chips.push(h('button', {
-          key,
+          key: ALL_STATUS,
           type: 'button',
           className: 'ghp-chip',
-          'aria-pressed': statusFilter === key,
-          onClick: () => onStatusChange(key),
+          'aria-pressed': statusFilter === ALL_STATUS,
+          onClick: () => onStatusChange(ALL_STATUS),
         },
-        h('span', { className: 'ghp-chip-label' }, label),
-        h('span', { className: 'ghp-chip-count' }, String(counts.get(key) ?? 0))))
+        h('span', null, t('common.all')),
+        h('span', { className: 'ghp-chip-count' }, String(total))))
+        for (const key of statuses) {
+          const label = key === NO_STATUS ? t('projects.uncategorized') : key
+          chips.push(h('button', {
+            key,
+            type: 'button',
+            className: 'ghp-chip',
+            'aria-pressed': statusFilter === key,
+            onClick: () => onStatusChange(key),
+          },
+          h('span', { className: 'ghp-chip-label' }, label),
+          h('span', { className: 'ghp-chip-count' }, String(counts.get(key) ?? 0))))
+        }
       }
-      const filtering = query.trim() !== '' || statusFilter !== ALL_STATUS
       return h('div', { className: 'ghp-filters' },
         h('div', { className: 'ghp-filters-row' },
           h(SearchInput, {
@@ -1381,7 +1733,9 @@ window.__ModuleLoader__.load({
             refreshing
               ? h('span', { className: 'ghp-toolbar-sync', role: 'status' }, h(Spinner, { size: 12 }), t('projects.refreshing'))
               : h('span', { className: 'ghp-filter-count' }, `${matched} / ${total}`))),
-        h('div', { className: 'ghp-chips', role: 'group', 'aria-label': t('projects.filterPlaceholder') }, chips))
+        showStatusChips
+          ? h('div', { className: 'ghp-chips', role: 'group', 'aria-label': t('projects.filterPlaceholder') }, chips)
+          : null)
     }
 
     function ProjectItemRow({ t, item, boundIssue, bindingId, onBind }) {
@@ -1503,6 +1857,18 @@ window.__ModuleLoader__.load({
 
       const [query, setQuery] = useState('')
       const [statusFilter, setStatusFilter] = useState(ALL_STATUS)
+      const [viewMode, setViewMode] = useState(readStoredViewMode)
+      const [milestoneFilter, setMilestoneFilter] = useState('all')
+      const [milestoneNotice, setMilestoneNotice] = useState(null)
+      const projectKey = isPlainObject(project) ? `${textOf(project.owner)}/${project.number ?? ''}` : ''
+
+      useEffect(() => { storeViewMode(viewMode) }, [viewMode])
+
+      // A different Project has a different milestone universe.
+      useEffect(() => {
+        setMilestoneFilter('all')
+        setMilestoneNotice(null)
+      }, [projectKey])
 
       // Bindings for this session's workspace: one read, then re-read after
       // bind/unbind and after a cross-view focus request.
@@ -1556,6 +1922,22 @@ window.__ModuleLoader__.load({
           })
         return () => { cancelled = true }
       }, [configState.status, project, itemsQuery.n])
+
+      const allItems = useMemo(
+        () => asArray(itemsState.data === null || itemsState.data === undefined ? null : itemsState.data.items),
+        [itemsState.data],
+      )
+      const milestoneOptions = useMemo(() => buildMilestoneOptions(allItems), [allItems])
+
+      // A selected milestone that disappears after a refresh falls back to 全部
+      // and leaves a dismissible notice instead of silently hiding everything.
+      useEffect(() => {
+        if (itemsState.status !== 'ready') return
+        if (milestoneFilter === 'all' || milestoneFilter === 'backlog') return
+        if (allItems.some((item) => milestoneKeyOf(item) === milestoneFilter)) return
+        setMilestoneFilter('all')
+        setMilestoneNotice(milestoneFilter)
+      }, [itemsState.status, allItems, milestoneFilter])
 
       // Cross-view focus: an issue-view "从项目选择" lands here with focus=pick.
       useEffect(() => {
@@ -1690,18 +2072,20 @@ window.__ModuleLoader__.load({
 
       const rootStyle = viewportHeight === null ? undefined : { height: `${viewportHeight}px` }
 
-      const renderPage = (children, center = false) => h('div', { className: `ghp-page${center ? ' ghp-page-center' : ''}` }, children)
+      const renderPage = (children, center = false, extraClass = '') => h('div', {
+        className: `ghp-page${center ? ' ghp-page-center' : ''}${extraClass === '' ? '' : ` ${extraClass}`}`,
+      }, children)
 
       if (configState.status === 'no-workspace') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle },
+        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(ProjectsNoWorkspace({ t }), true))
       }
       if (configState.status === 'loading') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle },
+        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(h(ProjectsSkeleton)))
       }
       if (configState.status === 'error') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle },
+        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(h('div', { className: 'ghp-empty' },
             h(ErrorCard, {
               t,
@@ -1712,7 +2096,7 @@ window.__ModuleLoader__.load({
       }
 
       if (!isPlainObject(project)) {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle },
+        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(ProjectsEmpty({ t, workspace, onChoose: () => setPickerOpen(true) }), true),
           pickerOpen
             ? h(ProjectPicker, {
@@ -1725,11 +2109,18 @@ window.__ModuleLoader__.load({
             : null)
       }
 
-      const allItems = asArray(itemsState.data === null || itemsState.data === undefined ? null : itemsState.data.items)
-      const statuses = collectStatuses(allItems)
-      const counts = statusCountsOf(allItems)
-      const filteredItems = filterItems(allItems, query, statusFilter)
-      const groups = groupItems(filteredItems, statuses)
+      const milestoneScopedItems = filterByMilestone(allItems, milestoneFilter)
+      const statuses = collectStatuses(milestoneScopedItems)
+      const counts = statusCountsOf(milestoneScopedItems)
+      const isBoardMode = viewMode === 'board'
+      const effectiveStatusFilter = statusFilter === ALL_STATUS || statuses.includes(statusFilter)
+        ? statusFilter
+        : ALL_STATUS
+      const listFilteredItems = filterItems(milestoneScopedItems, query, effectiveStatusFilter)
+      const groups = groupItems(listFilteredItems, statuses)
+      const boardFilteredItems = filterItems(milestoneScopedItems, query, ALL_STATUS)
+      const boardColumns = buildBoardColumns(allItems, boardFilteredItems)
+      const matchedCount = isBoardMode ? boardFilteredItems.length : listFilteredItems.length
       const refreshing = itemsState.status === 'refreshing'
       const itemsProject = isPlainObject(itemsState.data) && isPlainObject(itemsState.data.project) ? itemsState.data.project : null
       const shownProject = itemsProject !== null
@@ -1740,6 +2131,15 @@ window.__ModuleLoader__.load({
       const itemCount = isPositiveInteger(shownProject.itemCount)
         ? shownProject.itemCount
         : (itemsState.status === 'ready' ? allItems.length : null)
+
+      const truncatedNotice = itemsState.data !== null && itemsState.data !== undefined && itemsState.data.truncated === true
+        ? h('div', { key: 'truncated', className: 'ghp-notice' },
+          h('span', { className: 'ghp-notice-icon', 'aria-hidden': true }, h(IconAlert, { size: 14 })),
+          t('projects.truncated', {
+            shown: allItems.length,
+            total: isPositiveInteger(shownProject.itemCount) ? shownProject.itemCount : allItems.length,
+          }))
+        : null
 
       let body
       if (itemsState.status === 'loading') {
@@ -1759,6 +2159,14 @@ window.__ModuleLoader__.load({
           h('p', { className: 'ghp-empty-text' }, t('projects.emptyItemsText')),
           h('div', { className: 'ghp-empty-actions' },
             h(Button, { variant: 'secondary', size: 'sm', onClick: refreshItems }, t('common.refresh'))))
+      } else if (isBoardMode) {
+        body = h(BoardView, {
+          t,
+          columns: boardColumns,
+          sessionIssue,
+          bindingId: typeof bindingItemId === 'string' ? bindingItemId : null,
+          onBind: bindIssue,
+        })
       } else {
         const sections = groups.map((group) => {
           const sectionLabel = group.key === NO_STATUS ? t('projects.uncategorized') : group.key
@@ -1780,7 +2188,7 @@ window.__ModuleLoader__.load({
               onBind: bindIssue,
             }))))
         })
-        body = h('div', { className: 'ghp-sections' },
+        body = h('div', { className: 'ghp-sections', 'data-ghp-list': '' },
           sections.length > 0
             ? sections
             : h('div', { className: 'ghp-empty ghp-empty-inline' },
@@ -1790,18 +2198,23 @@ window.__ModuleLoader__.load({
                   variant: 'secondary',
                   size: 'sm',
                   onClick: () => { setStatusFilter(ALL_STATUS); setQuery('') },
-                }, t('common.clearFilter')))),
-        itemsState.data !== null && itemsState.data !== undefined && itemsState.data.truncated === true
-          ? h('div', { className: 'ghp-notice' },
-            h('span', { className: 'ghp-notice-icon', 'aria-hidden': true }, h(IconAlert, { size: 14 })),
-            t('projects.truncated', {
-              shown: allItems.length,
-              total: isPositiveInteger(shownProject.itemCount) ? shownProject.itemCount : allItems.length,
-            }))
-          : null)
+                }, t('common.clearFilter')))))
       }
 
-      return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle },
+      const milestoneNoticeNode = milestoneNotice === null
+        ? null
+        : h('div', { key: 'milestone-notice', className: 'ghp-notice ghp-notice-warn', role: 'status' },
+          h('span', { className: 'ghp-notice-icon', 'aria-hidden': true }, h(IconAlert, { size: 14 })),
+          h('span', { className: 'ghp-notice-text' }, t('projects.milestone.missing', { title: milestoneNotice })),
+          h('button', {
+            type: 'button',
+            className: 'ghp-iconbtn',
+            onClick: () => setMilestoneNotice(null),
+            'aria-label': t('common.close'),
+            title: t('common.close'),
+          }, h(IconClose, { size: 13 })))
+
+      return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
         renderPage([
           h(GHWarning, { key: 'gh', t, gh }),
           h(ActionBanner, {
@@ -1817,6 +2230,11 @@ window.__ModuleLoader__.load({
             project: shownProject,
             itemCount,
             refreshing,
+            viewMode,
+            onViewModeChange: setViewMode,
+            milestoneValue: milestoneFilter,
+            milestoneOptions,
+            onMilestoneChange: setMilestoneFilter,
             onRefresh: refreshItems,
             onChange: () => setPickerOpen(true),
             onUnbind: unbindProject,
@@ -1831,14 +2249,18 @@ window.__ModuleLoader__.load({
               onQueryChange: setQuery,
               statuses,
               counts,
-              statusFilter,
+              statusFilter: effectiveStatusFilter,
               onStatusChange: setStatusFilter,
-              total: allItems.length,
-              matched: filteredItems.length,
+              total: milestoneScopedItems.length,
+              matched: matchedCount,
               refreshing,
+              showStatusChips: !isBoardMode,
             }),
-          h('div', { key: 'body', className: 'ghp-body' }, body),
-        ]),
+          milestoneNoticeNode,
+          isBoardMode ? truncatedNotice : null,
+          h('div', { key: 'body', className: `ghp-body${isBoardMode ? ' ghp-body-board' : ''}` }, body),
+          isBoardMode ? null : truncatedNotice,
+        ], false, isBoardMode ? 'ghp-page-board' : ''),
         pickerOpen
           ? h(ProjectPicker, {
             t,
@@ -2698,6 +3120,171 @@ a.ghp-item-title:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration:
 .ghp-state-open { border-color: rgba(63, 185, 80, .3); background: rgba(63, 185, 80, .12); color: var(--dsw-alias-state-success-primary, #3fb950); }
 .ghp-state-closed { border-color: rgba(248, 81, 73, .25); background: rgba(248, 81, 73, .1); color: var(--dsw-alias-state-error-primary, #f85149); }
 .ghp-state-merged { border-color: rgba(163, 113, 247, .3); background: rgba(163, 113, 247, .12); color: var(--dsw-alias-state-business-primary, #a371f7); }
+
+/* View-mode toggle + milestone dropdown ------------------------------------ */
+.ghp-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2, #3a3a3a);
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--dsw-alias-bg-layer-1, #191919);
+}
+.ghp-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 1px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-xs, 6px);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #8a8a8a);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.ghp-seg-btn:hover { color: var(--dsw-alias-label-primary, #e6e6e6); background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); }
+.ghp-seg-btn[aria-pressed="true"] { color: var(--dsw-alias-label-primary, #e6e6e6); background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .1)); }
+.ghp-seg-icon { display: inline-flex; align-items: center; }
+.ghp-seg-icon svg { display: block; }
+.ghp-seg-label { white-space: nowrap; }
+
+.ghp-dropdown { position: relative; display: inline-flex; }
+.ghp-dropdown-toggle { gap: 5px; }
+.ghp-dropdown-value { max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-dropdown-caret { display: inline-flex; align-items: center; color: var(--dsw-alias-label-tertiary, #8a8a8a); }
+.ghp-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  box-sizing: border-box;
+  min-width: 210px;
+  max-width: 300px;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l1, #3a3a3a);
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-layer-2, #242424);
+  box-shadow: var(--dsw-elevation-prominent, 0 16px 40px rgba(0, 0, 0, .5));
+}
+.ghp-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-xs, 6px);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #a3a3a3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.ghp-dropdown-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); color: var(--dsw-alias-label-primary, #e6e6e6); }
+.ghp-dropdown-item-active { background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .08)); color: var(--dsw-alias-label-primary, #e6e6e6); }
+.ghp-dropdown-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-dropdown-count { flex: none; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Swimlane board ------------------------------------------------------------ */
+.ghp-page-board { height: 100%; min-height: 0; }
+.ghp-body-board { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.ghp-board {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 220px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  overscroll-behavior-x: contain;
+}
+.ghp-board::-webkit-scrollbar { height: 8px; }
+.ghp-board::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l1, rgba(255, 255, 255, .16)); border-radius: 4px; }
+.ghp-board::-webkit-scrollbar-track { background: transparent; }
+.ghp-board-column {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 176px;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l1, #333);
+  border-radius: var(--dsw-radius-lg, 14px);
+  background: var(--dsw-alias-bg-layer-2, #222);
+}
+.ghp-board-column-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, #333);
+}
+.ghp-board-column-title { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-secondary, #a3a3a3); font-size: 12px; font-weight: 600; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-board-column-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px; }
+.ghp-board-column-body::-webkit-scrollbar { width: 8px; }
+.ghp-board-column-body::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l1, rgba(255, 255, 255, .14)); border-radius: 4px; }
+.ghp-board-empty { padding: 10px 4px; color: var(--dsw-alias-label-quaternary, #6e6e6e); font-size: 12px; line-height: 18px; text-align: center; }
+.ghp-board-card {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid var(--dsw-alias-border-l1, #333);
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-layer-1, #1c1c1c);
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  font: inherit;
+  text-align: left;
+}
+button.ghp-board-card, a.ghp-board-card { cursor: pointer; }
+button.ghp-board-card:hover, a.ghp-board-card:hover {
+  border-color: var(--dsw-alias-border-l3, #4a4a4a);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .05));
+}
+button.ghp-board-card:disabled { cursor: default; opacity: .7; }
+.ghp-board-card:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff)); outline-offset: 1px; }
+a.ghp-board-card { text-decoration: none; }
+.ghp-board-card-bound { border-color: rgba(63, 185, 80, .4); background: rgba(63, 185, 80, .06); }
+.ghp-board-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.ghp-board-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 11px; line-height: 16px; }
+.ghp-board-card-type { padding: 0 5px; border: 1px solid var(--dsw-alias-border-l2, #3a3a3a); border-radius: 999px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10px; line-height: 14px; }
+.ghp-board-card-repo { display: inline-flex; align-items: baseline; min-width: 0; max-width: 100%; overflow: hidden; color: var(--dsw-alias-label-secondary, #a3a3a3); font-family: var(--dsw-font-markdown-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10.5px; }
+.ghp-board-card-repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-board-card-repo-number { flex: none; white-space: nowrap; }
+.ghp-board-card-spinner { display: inline-flex; align-items: center; }
+.ghp-board-card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.ghp-board-card .ghp-label { height: 17px; max-width: 100%; padding: 0 6px; overflow: hidden; font-size: 10px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-board-card-more { color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10.5px; }
+.ghp-board-card-milestone { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10.5px; line-height: 16px; }
+.ghp-board-card-milestone svg { flex: none; }
+.ghp-board-card-milestone-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-notice-warn { border-color: var(--dsw-alias-state-warn-secondary, rgba(217, 119, 6, .4)); }
+.ghp-notice-text { flex: 1; min-width: 0; }
 
 /* Issue view ---------------------------------------------------------------- */
 .ghp-issue-head {
