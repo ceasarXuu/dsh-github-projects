@@ -25,8 +25,9 @@ more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
 - `issue` tab: shows the Issue bound to the current **session** (header, body, labels, comments).
   If unbound: empty state that offers `从项目选择` (switches to projects tab) or pasting an Issue
   URL / `owner/repo#123`.
-- A session with a bound Issue shows a **subtitle under the session title** in the conversation
-  header: a `#228` label chip + issue title (one line, ellipsis), e.g. `#228 修复界面bug` (v0.4.0).
+- A session with a bound Issue shows a **subtitle under the session title**: in the conversation
+  header (v0.4.0) AND under the session row title in the left sidebar session tree (v0.4.1) — a
+  `#228` label chip + issue title (single line, ellipsis), e.g. `#228 修复界面bug`.
 - The model can bind / unbind / switch the current session's Issue through three agent tools
   (`github_issue_bind` / `github_issue_switch` / `github_issue_unbind`, v0.4.0); the UI updates
   without a manual refresh.
@@ -109,6 +110,7 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 |---|---|---|
 | `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding}` |
+| `GET /bindings` | every durable Issue binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"updatedAt":ISO}` |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
 | `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
@@ -192,6 +194,11 @@ type SessionBinding = {
   issue: IssueSummary | null
   workspaceId: string | null
 }
+
+type BindingsResponse = {
+  sessions: Record<SessionId, IssueSummary>   // only sessions that HAVE a binding
+  updatedAt: string
+}
 ```
 
 Request bodies (POST, `content-type: application/json`, ≤ 64 KiB):
@@ -218,6 +225,9 @@ Behaviour rules:
 - `bind-issue` requires `sessionId`. With `issue` it stores it; missing `title`/`url` may be filled
   from a `gh` read. With `ref` it must resolve and fetch the issue via `gh` (404 → `issue-not-found`,
   bad ref → `bad-request`).
+- `/bindings` reads the binding store only (no `gh`, no cache staleness): it returns every session
+  that currently has an Issue bound, so the client can decorate the sidebar without one request per
+  row. Cheap enough to poll every few seconds.
 - `/config` reads local bindings: `workspaceId`/`sessionId` come from the query; missing/unknown ids
   yield `project: null` / `issue: null` (not errors). It NEVER waits for GitHub: the `gh` field is the
   last cached health snapshot, or `{available:false,version:null,account:null,error:'pending'}` on a
@@ -581,6 +591,32 @@ session title:
   (React portal). If the anchor is absent the feature degrades to no subtitle and never throws; it
   must not break sessions without a binding.
 
+### 4.6 Sidebar session subtitle (v0.4.1)
+
+Every session row in the left sidebar session tree that has a bound Issue shows the same subtitle
+information under its title:
+
+- Layout: the shipped row (`[data-row-key="session:<sessionId>"]`, a 32px flex row) becomes a
+  wrapping two-line row only while it has a subtitle: override with
+  `[data-row-key^="session:"]:has([data-ghp-sidebar-subtitle]) { height:auto; min-height:32px;
+  flex-wrap:wrap; padding-block:2px }`. The subtitle element is `flex: 0 0 100%; min-width:0;
+  margin-inline-start:20px; display:flex; align-items:center; gap:4px; font-size:11px; line-height:15px`
+  and contains a small tinted `#N` chip (10px/14px, tabular) plus the Issue title, single line
+  `text-overflow: ellipsis`, `title` attribute = full `repo#N title`.
+- The first row line (status dot slot, title, time, pin, actions) must stay intact; workspace rows,
+  search-result rows and sessions without a binding are untouched.
+- Clicking the sidebar subtitle opens the Issue GitHub page in the built-in right sidebar browser
+  (fallback `window.open`) and does NOT change the selected session (`stopPropagation`).
+- Updates: the client keeps a module-level binding map from `GET /bindings` (SWR; poll ≈4 s and an
+  immediate refresh on the plugin's `binding-changed` event), so an agent-tool bind/switch/unbind is
+  reflected in the sidebar within ≤4 s without reopening the tree.
+- Implementation guard: the shipped sidebar has no subtitle slot, so the client owns a guarded DOM
+  decorator (sweep `[data-row-key^="session:"]`, inject/remove one element per row, MutationObserver
+  on the tree + poll fallback). If row anchors are absent it degrades to no sidebar subtitle and
+  never throws.
+- Hooks: `[data-ghp-sidebar-subtitle]` on the injected row, `[data-ghp-sidebar-subtitle-chip]` on the
+  chip, `[data-ghp-sidebar-subtitle-title]` on the truncated title.
+
 ## 5. e2e harness (verifier)
 
 Isolated environment, never the user's `~/.dsh` profile or port:
@@ -634,6 +670,12 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      `13-issue-subtitle.png`;
    - `issue-detail` — assert the fully loaded detail; `08-issue-detail.png`; optional
      `issue-comments` → `09-issue-comments.png`;
+   - `sidebar-subtitle` — with the session still bound to #240, assert the left sidebar session row
+     shows the injected subtitle: exactly the bound session row contains
+     `[data-ghp-sidebar-subtitle]` with chip text `#240` and non-empty title, the subtitle sits below
+     the row title (`subtitle.top >= title.bottom - 2`), the row is taller than the shipped 32px
+     (≥ 40px), and unbound session rows have no subtitle; `14-sidebar-subtitle.png` (whole window,
+     sidebar visible);
    - `projects-warm` — switch to chat and back to `projects`; assert the cached board renders without
      a skeleton within 1500 ms and log the measured duration (the cold duration was already logged in
      `projects-board`); no screenshot;
@@ -654,9 +696,10 @@ at least one milestone) for the board and filter stages.
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
 - e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`,
-  `12-browser-open.png`, `13-issue-subtitle.png`, in fixture mode and (once) real-host mode, covering
-  the board (incl. the hidden-empty-No-status rule), list, milestone-filter, wide-layout,
-  built-in-browser-open and session-subtitle stages plus the warm-open latency assert.
+  `12-browser-open.png`, `13-issue-subtitle.png`, `14-sidebar-subtitle.png`, in fixture mode and
+  (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
+  milestone-filter, wide-layout, built-in-browser-open, conversation-header subtitle, sidebar
+  subtitle and warm-open latency stages.
 - Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
   and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.

@@ -77,7 +77,7 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['internal', 500],
 ])
 
-const GET_ROUTES = new Set(['/health', '/config', '/projects', '/items', '/issue'])
+const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/projects', '/items', '/issue'])
 const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
@@ -784,6 +784,28 @@ function createApi({ gh, store, cache, health, logFault }) {
     return { gh: ghHealth, workspace, session }
   }
 
+  /**
+   * `GET /bindings` (v0.4.1): every durable session → Issue binding, for the
+   * client's sidebar decorator. Local store only — no `gh`, no SWR cache, no
+   * `stale` field — so it is cheap enough to poll every few seconds.
+   */
+  function readBindings() {
+    const snapshot = store.snapshot()
+    const sessions = {}
+    for (const [sessionId, entry] of Object.entries(snapshot.sessions)) {
+      if (!isRecord(entry) || !isRecord(entry.issue)) continue
+      const summary = toIssueSummary(entry.issue)
+      if (summary.repo === '' || !Number.isInteger(summary.number) || summary.number <= 0) continue
+      sessions[sessionId] = summary
+    }
+    return {
+      sessions,
+      updatedAt: typeof snapshot.updatedAt === 'string' && snapshot.updatedAt !== ''
+        ? snapshot.updatedAt
+        : new Date().toISOString(),
+    }
+  }
+
   async function readProjects(query) {
     const record = await cache.get('projects', isRefresh(query.get('refresh')), () => gh.listProjects())
     const value = record.value
@@ -916,6 +938,7 @@ function createApi({ gh, store, cache, health, logFault }) {
       if (!GET_ROUTES.has(path)) throw new HttpError(404, 'not-found', `未知接口: GET ${path}`)
       if (path === '/health') return sendJson(res, 200, { ok: true, gh: await health.read() })
       if (path === '/config') return sendJson(res, 200, await readConfig(query))
+      if (path === '/bindings') return sendJson(res, 200, readBindings())
       if (path === '/projects') return sendJson(res, 200, await readProjects(query))
       if (path === '/items') return sendJson(res, 200, await readItems(query))
       return sendJson(res, 200, await readIssue(query))
