@@ -1,0 +1,18 @@
+query {
+  viewer {
+    login
+    projectsV2(first:100) {
+      totalCount
+      nodes { number title url closed shortDescription readme items { totalCount } }
+    }
+    organizations(first:50) {
+      nodes {
+        login
+        projectsV2(first:100) {
+          totalCount
+          nodes { number title url closed shortDescription readme items { totalCount } }
+        }
+      }
+    }
+  }
+}

@@ -16,8 +16,17 @@
         ghCommand: gh
         # One `gh` invocation deadline.
         requestTimeoutMs: 20000
-        # In-memory GitHub response cache; `refresh=1` bypasses it.
+        # In-memory GitHub response cache: fresh window.
         cacheTtlMs: 60000
+        # Expired entries are still served (stale) for this long while a
+        # background refresh revalidates them.
+        staleTtlMs: 600000
+        # Persist successful cache values to cacheFile so a DSH restart can
+        # render the last data before GitHub answers.
+        diskCache: true
+        # Cache snapshot file; null resolves to
+        # $DSH_HOME/plugin-data/github-projects/cache.json
+        cacheFile: null
         # Upper bound of project items returned by one items read.
         maxProjectItems: 200
         # Upper bound of issue comments returned by one issue read.

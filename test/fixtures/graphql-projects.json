@@ -1,0 +1,118 @@
+{
+ "data": {
+  "viewer": {
+   "login": "acme",
+   "projectsV2": {
+    "totalCount": 8,
+    "nodes": [
+     {
+      "number": 9,
+      "title": "web-issues",
+      "url": "https://github.com/users/acme/projects/9",
+      "closed": false,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "readme": "# Web roadmap\n\nTracks the issues that belong to a release milestone, grouped by the project's Status field.\n\n- Backlog: no milestone yet.\n- Current: the milestone being worked on.\n- Next: proposed, not scheduled.\n",
+      "items": {
+       "totalCount": 195
+      }
+     },
+     {
+      "number": 8,
+      "title": "api-issues",
+      "url": "https://github.com/users/acme/projects/8",
+      "closed": false,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "readme": null,
+      "items": {
+       "totalCount": 9
+      }
+     },
+     {
+      "number": 6,
+      "title": "milesprint-issues",
+      "url": "https://github.com/users/acme/projects/6",
+      "closed": false,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "readme": "# Web roadmap\n\nTracks the issues that belong to a release milestone, grouped by the project's Status field.\n\n- Backlog: no milestone yet.\n- Current: the milestone being worked on.\n- Next: proposed, not scheduled.\n",
+      "items": {
+       "totalCount": 1
+      }
+     },
+     {
+      "number": 5,
+      "title": "docs-issues",
+      "url": "https://github.com/users/acme/projects/5",
+      "closed": false,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "readme": null,
+      "items": {
+       "totalCount": 412
+      }
+     },
+     {
+      "number": 4,
+      "title": "web-kanban",
+      "url": "https://github.com/users/acme/projects/4",
+      "closed": true,
+      "shortDescription": null,
+      "readme": null,
+      "items": {
+       "totalCount": 0
+      }
+     },
+     {
+      "number": 3,
+      "title": "docs",
+      "url": "https://github.com/users/acme/projects/3",
+      "closed": true,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "readme": null,
+      "items": {
+       "totalCount": 26
+      }
+     },
+     {
+      "number": 2,
+      "title": "web",
+      "url": "https://github.com/users/acme/projects/2",
+      "closed": true,
+      "shortDescription": null,
+      "readme": null,
+      "items": {
+       "totalCount": 0
+      }
+     },
+     {
+      "number": 1,
+      "title": "whalecode",
+      "url": "https://github.com/users/acme/projects/1",
+      "closed": true,
+      "shortDescription": null,
+      "readme": null,
+      "items": {
+       "totalCount": 0
+      }
+     }
+    ]
+   },
+   "organizations": {
+    "nodes": [
+     {
+      "login": "acme-labs",
+      "projectsV2": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "login": "northwind",
+      "projectsV2": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     }
+    ]
+   }
+  }
+ }
+}

@@ -1,0 +1,25 @@
+query($owner:String!,$number:Int!,$limit:Int!,$cursor:String){
+  repositoryOwner(login:$owner){
+    ... on ProjectV2Owner {
+      projectV2(number:$number){
+        title
+        url
+        shortDescription
+        items(first:$limit, after:$cursor){
+          totalCount
+          pageInfo { hasNextPage endCursor }
+          nodes{
+            id
+            fieldValues(first:20){nodes{ ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } } }}
+            content{
+              __typename
+              ... on Issue { number title url state repository{nameWithOwner} labels(first:10){nodes{name}} milestone{title} }
+              ... on PullRequest { number title url state repository{nameWithOwner} labels(first:10){nodes{name}} milestone{title} }
+              ... on DraftIssue { title }
+            }
+          }
+        }
+      }
+    }
+  }
+}
