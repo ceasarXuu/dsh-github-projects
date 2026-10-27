@@ -265,6 +265,8 @@ or session standard props may require a plugin update.
   horizontally; wide windows spread the five lanes across the full width. A status the board doesn't
   know gets its own read-only extra column on the right; an empty column keeps its header, a 0 count
   and a “No items” placeholder.
+- **Host layout is untouched:** DSH's own composer keeps the shell's centred width; this fix only
+  widens the plugin page, not the host frame (sidebar, tab bar, composer).
 - **Milestone filter scope:** options and counts come from the loaded items only (capped by
   `maxProjectItems`); milestones of items beyond the cap are not listed.
 - **View mode is a local preference:** switching between board and list is remembered per client and
