@@ -2680,9 +2680,12 @@ window.__ModuleLoader__.load({
 .ghp-page {
   box-sizing: border-box;
   width: 100%;
-  max-width: 1000px;
+  /* v1.1.1: the plugin page is adaptive full width — no centred fixed column.
+     Intentional reading measures only live on copy elements (empty-state text,
+     error card, inline bind form), never on the page itself. */
+  max-width: none;
   min-height: 100%;
-  margin: 0 auto;
+  margin: 0;
   padding: 24px 32px 28px;
   display: flex;
   flex-direction: column;

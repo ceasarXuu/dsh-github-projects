@@ -1,6 +1,6 @@
 # dsh-github-projects
 
-**v0.2.0** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
+**v0.2.1** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
 这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
 GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue。
@@ -31,6 +31,16 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
 不上报遥测、也不直接访问 GitHub。
 
+## 0.2.1（v1.1.1）新特性：全宽自适应
+
+- `projects` 页（泳道与列表）和 `issue` 页现在**铺满会话主体宽度**：`width: 100%`、**无 `max-width`
+  上限**、不做居中固定列。宽屏 Desktop 窗口下五列泳道均分整个可用宽度，不再被挤在约 1000px 的居中
+  一列里（修复 v1.1 的页面宽度缺陷）。
+- 176px 的列最小宽度只是**横向滚动的下限**（窗口窄于约 960px 时出现横向滚动），不是页面宽度上限。
+  空态文案本身可以保留可读宽度，但页面不再是窄列。
+- 回归门禁：新增 e2e `projects-wide` 阶段，在 2200×1300 下断言页面宽度 ≥ body 的 85%
+  → `artifacts/screenshots/11-projects-wide.png`。
+
 ## 0.2.0（v1.1）新特性
 
 - **泳道看板（默认视图）。** 固定五列，从左到右 `No status` / `TODO` / `In Progress` / `In Review` /
@@ -54,10 +64,13 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | milestone 过滤（全部 / Backlog / 各里程碑） | 未绑定会话：从项目选择或粘贴链接 |
 | ![Issue 详情](artifacts/screenshots/08-issue-detail.png) | ![Issue 评论区](artifacts/screenshots/09-issue-comments.png) |
 | 已绑定 Issue：吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
+| ![宽窗口全宽布局](artifacts/screenshots/11-projects-wide.png) | |
+| 宽窗口（2200×1300）：`projects` 页面铺满会话区域（窗口宽 86.6%；旧版 1000px 居中限宽仅 45.5%） | |
 
 截图 01–09 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800；`09` 需 `--extra-comments`）。`10-desktop-tabs.png` 不同：它是重装 v0.2.0 后
-**真实 Desktop 应用**的手动现场截图，展示用户当前会话头部的两个页签：
+1280×800；`09` 需 `--extra-comments`）。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
+全宽布局证据。`10-desktop-tabs.png` 不同：它是重装 v0.2.1 后**真实 Desktop 应用**的手动现场截图，
+展示用户当前会话头部的两个页签：
 
 ![安装后 Desktop 会话头部](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -210,13 +223,13 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | 0.2.0（v1.1：泳道看板 + milestone 过滤） |
+| 插件版本 | 0.2.1（v1.1.1：全宽自适应；v1.1：泳道看板 + milestone 过滤） |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | 2026-10-28 通过 v1.1 验收：宿主测试 69/69；e2e 的 fixture 与 real 模式均 PASS（冻结 client `309f63ac…`）；10 张截图齐全（含 Desktop 手动现场图）——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | 2026-10-28 通过 v1.1.1（0.2.1）验收：宿主测试 69/69；e2e fixture/real 均 PASS（冻结 client `4f41dc9d…`）；`projects-wide` 2200×1300 下页面占窗口 86.6%（旧版 1000px 上限仅 45.5%）；11 张截图齐全（含 Desktop 手动现场图）——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 目前还没有 `engines.dsh` 版本门禁：如果 DSH 升级改动了 `conversation.view` slot 或会话标准 props，
 可能需要同步更新插件。
@@ -225,7 +238,8 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 - **只读。** 不写 GitHub：不改状态、不评论、不建 Issue、不改字段。
 - **泳道只读：** 不支持拖拽换列，也不支持手动排序。
-- **看板布局：** 列最小宽度 176px，窗口窄时整个看板横向滚动；未知自定义状态只做只读扩展列；
+- **看板布局：** 0.2.1 起页面无宽度上限，泳道、列表与 issue 页都铺满会话主体宽度；列最小宽度
+  176px，窗口窄于约 960px 时整个看板横向滚动，宽屏下五列均分。未知自定义状态只做只读扩展列；
   空列保留列头与 0 计数，并显示「无条目」。
 - **milestone 过滤范围：** 选项与计数只来自已加载条目（受 `maxProjectItems` 上限约束），
   超出上限的条目不会出现在下拉里。
