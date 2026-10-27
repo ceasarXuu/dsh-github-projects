@@ -18,12 +18,18 @@ more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
 - `projects` tab: shows the GitHub Project bound to the **workspace** of the current session. Default
   view is a status swimlane board (`No status` / `TODO` / `In Progress` / `In Review` / `Done`,
   left→right), with a toggle to the earlier grouped list; a milestone filter offers `全部`,
-  `Backlog` (no milestone) and every milestone present in the Project. Clicking an Issue binds it Clicking an Issue binds it to the current
-  **session** and switches to the `issue` tab. Binding/replacing/unbinding the workspace Project is
-  done from this tab.
+  `Backlog` (no milestone) and every milestone present in the Project. Binding/replacing/unbinding
+  the workspace Project is done from this tab.
+- In `projects`, clicking an Issue/PR card or list row opens its GitHub page in DSH's **built-in
+  right sidebar browser**; binding is an explicit `绑定` action on the card/row (v0.4.0).
 - `issue` tab: shows the Issue bound to the current **session** (header, body, labels, comments).
   If unbound: empty state that offers `从项目选择` (switches to projects tab) or pasting an Issue
   URL / `owner/repo#123`.
+- A session with a bound Issue shows a **subtitle under the session title** in the conversation
+  header: a `#228` label chip + issue title (one line, ellipsis), e.g. `#228 修复界面bug` (v0.4.0).
+- The model can bind / unbind / switch the current session's Issue through three agent tools
+  (`github_issue_bind` / `github_issue_switch` / `github_issue_unbind`, v0.4.0); the UI updates
+  without a manual refresh.
 - Everything is read-only against GitHub. No writes to GitHub in v1.
 - Binding state is durable plugin data, shared by all sessions of a profile (workspace → Project is
   per workspace; session → Issue is per session).
@@ -59,7 +65,7 @@ Validated environment facts (installed app, DSH 0.2.1-rc.3):
 
 ## 3. Host plugin
 
-`index.js` exports `name = 'github-projects'`, `inject = ['webServer']`, and `apply(ctx, config)`.
+`index.js` exports `name = 'github-projects'`, `inject = ['webServer', 'tools']`, and `apply(ctx, config)`.
 The `inject` export is mandatory: rows inserted by a bundle patch or a `--patch` overlay can activate
 before the `webServer` fiber (which waits for `webStartup`), and an un-awaited service would silently
 mount no routes. (Loader-delayed activation also means `apply` may run long after boot; do not assume
@@ -100,9 +106,9 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 |---|---|---|
 | `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding}` |
-| `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"errors":[OwnerError]}` |
-| `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool}` |
-| `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO}` |
+| `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
+| `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
+| `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
 | `POST /bind-workspace` | bind Project to a workspace | `{"ok":true,"workspace":WorkspaceBinding}` |
 | `POST /unbind-workspace` | clear workspace binding | `{"ok":true}` |
 | `POST /bind-issue` | bind Issue to a session | `{"ok":true,"session":SessionBinding}` |
@@ -210,15 +216,19 @@ Behaviour rules:
   from a `gh` read. With `ref` it must resolve and fetch the issue via `gh` (404 → `issue-not-found`,
   bad ref → `bad-request`).
 - `/config` reads local bindings: `workspaceId`/`sessionId` come from the query; missing/unknown ids
-  yield `project: null` / `issue: null` (not errors). Its `gh` field is a cached health snapshot
-  (`healthCacheTtlMs`): the first read may probe `gh --version` + `gh api user` (bounded by
-  `healthFirstReadTimeoutMs`, falling back to `error: 'pending'`), later reads return the last
-  snapshot and refresh it in the background, and a failed probe never fails the endpoint.
+  yield `project: null` / `issue: null` (not errors). It NEVER waits for GitHub: the `gh` field is the
+  last cached health snapshot, or `{available:false,version:null,account:null,error:'pending'}` on a
+  cold start, while one background probe refreshes it (`healthCacheTtlMs`). A failed probe never
+  fails the endpoint. (v0.4.0 supersedes the earlier bounded first read.)
 - `/items` and `/issue` never write GitHub. Without `gh`, all GitHub reads fail with `gh-missing`
   (503) or `gh-auth` (503) while `/config` still works.
-- Caching: in-memory TTL cache per key (`projects`, `items:<owner>/<number>`,
-  `issue:<repo>#<number>`) with `config.cacheTtlMs`; `refresh=1` bypasses the read cache. Concurrent
-  identical reads share one in-flight `gh` call (single-flight).
+- Caching (v0.4.0): SWR in-memory cache per key (`projects`, `items:<owner>/<number>`,
+  `issue:<repo>#<number>`) with `cacheTtlMs` as the fresh window and `staleTtlMs` (default 600000) as
+  the stale-serve window. A stale entry returns immediately with `stale: true` and one background
+  refresh revalidates it (single-flight); `refresh=1` waits for a fresh read (`stale: false`); a cold
+  key waits. Successful values also persist best-effort to
+  `$DSH_HOME/plugin-data/github-projects/cache.json` (bounded, atomic; disable with
+  `diskCache: false`) and load at plugin start. See §3.5.
 - Error codes: `bad-request` 400, `not-found` 404, `issue-not-found` 404,
   `project-not-found` 404, `gh-missing` 503, `gh-auth` 503, `gh-failed` 502, `timeout` 504,
   `state-write-failed` 500, `internal` 500. Gate-level answers use their own codes:
@@ -300,6 +310,42 @@ keep the previous file if the write fails (throw `state-write-failed`). Methods 
 `createStateStore(path)` → `{ read(), getWorkspace(workspaceId), getSession(sessionId),
 bindWorkspace(workspaceId, project), unbindWorkspace(workspaceId), bindIssue(sessionId, issue,
 workspaceId), unbindIssue(sessionId), snapshot() }`.
+
+### 3.4 Agent tools (v0.4.0)
+
+The host plugin registers three tools on `ctx.tools`, so the model can bind / unbind / switch the
+current session's Issue without the UI. `exec.agent.session.id` is the current session; tools never
+address another session. Definitions use plain JSON-Schema (`parameters`, `output.schema`,
+`output.render`); `execute` validates `ref` with `parseIssueRef`, resolves the issue through `gh`,
+writes the binding store, and returns the canonical value.
+
+| Tool | Args | Behaviour / output |
+|---|---|---|
+| `github_issue_bind` | `ref: string` (issue URL or `owner/repo#123`) | bind the Issue to the current session; output `{"bound":true,"issue":IssueSummary,"previous":IssueSummary\|null}`; refuses when already bound (use switch) |
+| `github_issue_switch` | `ref: string` | replace the binding; `not bound` error when nothing is bound yet; output `{"switched":true,"issue":IssueSummary,"previous":IssueSummary}` |
+| `github_issue_unbind` | — | clear the binding; output `{"unbound":true,"previous":IssueSummary\|null}` |
+
+Rules: tools require an owning agent (`no current session` error otherwise); `gh`/ref failures surface
+as the contract error codes; after a write the client reflects the binding within ≤4 s (subtitle +
+`issue` tab) without a manual refresh; `output.render` returns one text block such as
+`已绑定 #240 [v1.2.0]…`. Registration is owned by `ctx.effect` so disabling the plugin removes it.
+
+### 3.5 Caching and latency (v0.4.0)
+
+The user opens the projects tab often; the read path must not block on GitHub after the first load.
+
+- `/config` never waits for a `gh` probe (see §3.1); a cold boot returns the `pending` snapshot.
+- `/projects` uses ONE `gh api graphql` call (viewer projects + viewer organizations' projects),
+  keeps only `closed === false` entries, and preserves the per-owner `errors` array.
+- `/items` uses `gh api graphql` paginated at 100 nodes/page; `project` metadata comes from the same
+  payload (no separate `gh project view`); pages are fetched sequentially until `totalCount` or
+  `maxProjectItems` is reached; `truncated` reflects the cap.
+- Client: module-level SWR caches render cached data immediately and revalidate in the background;
+  a `stale: true` response triggers one retry after ~1.2 s; `config` and `items` load in parallel
+  (remembered workspace→Project mapping); the bound Issue detail is prefetched after config; a cold
+  skeleton appears only when no cached data exists.
+- Acceptance: warm projects open renders cached data with no skeleton (<300 ms host response); cold
+  first board load on a 195-item Project is logged and expected ≤3.5 s.
 
 ## 4. Client plugin (`client.js`)
 
@@ -392,10 +438,13 @@ States: loading skeleton → error (retry) → unbound empty state → bound boa
   text filter (and, in list mode, the status chips). Options derive from the unfiltered loaded item
   set; if the selected milestone disappears after a refresh, fall back to `全部` and show a notice.
 - **Cards (board).** Title clamped to 2 lines, `repo#number`, labels (max 2 + `+N`), milestone chip.
-  The whole card is the action: Issue → bind to the current session and
-  `openView('github-issue', 'bound')` (same result as the list `绑定` action); PR/draft → open its
-  GitHub URL in a new tab. The currently bound issue shows a `已绑定` badge. Cards keep a
-  focus-visible outline and are keyboard-activatable (Enter/Space).
+  Clicking the card body (or a list row) opens the Issue/PR GitHub page in DSH's **built-in right
+  sidebar browser** (`sidebarRight.openTab('browser', { params: { url } })`, fallback `window.open`)
+  — it does NOT bind (v0.4.0). Each Issue card has an explicit bind action
+  (`[data-ghp-card-action="bind"]`, label `绑定` / `已绑定`) that binds the Issue to the current
+  session and switches to the `issue` view; the list row `绑定` button behaves the same. Bound cards
+  show the `已绑定` badge. Cards keep a focus-visible outline and are keyboard-activatable
+  (Enter/Space = open in browser).
 - Text filter: title / repo / number / labels (same fields in both modes). Column counts and list
   section counts reflect the filtered set.
 - Refresh button sets `refresh=1`; both modes keep previous data while refreshing with a subtle
@@ -463,7 +512,11 @@ These are part of the contract, not incidental markup. Keep them on the named el
 | `[data-ghp-board]` | board container | present in board mode |
 | `[data-ghp-column="no-status"\|"todo"\|"in-progress"\|"in-review"\|"done"]` (unknown: `other:<raw>`) | each column | column identity; `data-ghp-count` carries the filtered count |
 | `[data-ghp-card]` | each board card | card element; `data-issue="owner/repo#N"` on Issue cards |
-| `[data-ghp-card-action]` | card action | bind/open action (same element or a child button) |
+| `[data-ghp-card-action="open"]` | card body | opens the GitHub page in the built-in browser |
+| `[data-ghp-card-action="bind"]` | bind button | binds the card's Issue to the current session |
+| `[data-ghp-session-subtitle]` | session header subtitle row | present only when the session has a bound Issue |
+| `[data-ghp-subtitle-chip]` | subtitle `#N` chip | bound issue number |
+| `[data-ghp-subtitle-title]` | subtitle title text | truncated issue title (`title` attr has the full text) |
 | `[data-ghp-list]` | list container | present in list mode |
 
 ### 4.3 `issue` view requirements
@@ -506,6 +559,25 @@ States: loading → error → unbound empty state → bound detail.
   picker; Esc closes; focus outline retained; images avoided (no external avatar fetches).
 - Relative time: `刚刚` / `N 分钟前` / `N 小时前` / `N 天前` / `YYYY-MM-DD`.
 
+### 4.5 Session issue subtitle (v0.4.0)
+
+When the current session has a bound Issue, the conversation header shows a second line under the
+session title:
+
+- Layout: `<chip>#N</chip> <issue title>`. The chip is a small tinted label (brand tint, 11px/16px,
+  radius 6px, tabular numerals); the title is 12px/18px `label-secondary`, single line,
+  `text-overflow: ellipsis`, with the full `repo#N title` in the `title` attribute. The row aligns
+  with the title text start, spans the remaining header width, and is hidden when unbound or while
+  the Session is blank (header chrome hidden).
+- Updates within ≤4 s after an agent-tool binding change (cheap local `/config` poll, no `gh`), and
+  immediately after this plugin's own bind/unbind actions.
+- Clicking the row opens the Issue GitHub page in the built-in right sidebar browser (fallback
+  `window.open`).
+- Implementation guard: the shipped header has no subtitle slot, so the client inserts one owned row
+  into `header[data-window-drag]` after the title row and re-ensures it after host re-renders
+  (React portal). If the anchor is absent the feature degrades to no subtitle and never throws; it
+  must not break sessions without a binding.
+
 ## 5. e2e harness (verifier)
 
 Isolated environment, never the user's `~/.dsh` profile or port:
@@ -527,28 +599,41 @@ Isolated environment, never the user's `~/.dsh` profile or port:
    - `tabs` — `["对话","轨迹","projects","issue"]`; `01-tabs.png`;
    - `projects-empty` — unbound state; `02-projects-empty.png`;
    - `projects-picker` — picker open, binds `Astropath-issues` #9; `03-projects-picker.png`;
-   - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, the rendered lane
-     keys are a subsequence of `no-status,todo,in-progress,in-review,done` (plus trailing
-     `other:*`), `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and
-     hidden when its filtered count is 0, the four non-No-status canonical lanes always present, ≥1
-     card; `04-projects-board.png`;
+   - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, rendered lane keys
+     are a subsequence of `no-status,todo,in-progress,in-review,done` (plus trailing `other:*`),
+     `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and hidden when
+     its filtered count is 0, the four non-No-status canonical lanes always present, ≥1 card;
+     `04-projects-board.png`;
+   - `projects-browser` — click an Issue card body (`[data-ghp-card-action="open"]`): assert DSH's
+     built-in right sidebar browser opens (`[data-sidebar-browser-frame]` iframe whose `src` contains
+     `github.com/<repo>/issues/<N>`) and no binding was created; `12-browser-open.png`; close the
+     browser tab afterwards;
    - `projects-list` — toggle to list: `[data-ghp-list]`, grouped sections; `05-projects-list.png`;
    - `projects-milestone` — open the milestone dropdown: options include `全部` + `Backlog` + real
-     project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts
-     shrink and `data-active="true"` moves; `06-projects-milestone.png`; then reset to `全部`;
-   - `issue-empty` — unbound state; `07-issue-empty.png`;
-   - `issue-detail` — bind #240 from the projects view and assert the fully loaded detail;
-     `08-issue-detail.png`; optional `issue-comments` → `09-issue-comments.png`;
+     project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts shrink
+     and `data-active="true"` moves; `06-projects-milestone.png`; then reset to `全部`;
    - `projects-wide` — resize the browser viewport to ~2200×1300 (CDP
-     `Emulation.setDeviceMetricsOverride`), keep the bound projects view open in board mode, and
-     assert the projects page fills the conversation body: `.ghp-page` width ≥ 85% of the available
-     body width and no centred max-width column (previously the page was capped at 1000px); lanes
-     still render left→right under the hidden-No-status rule and share the width equally;
-     `11-projects-wide.png`;
+     `Emulation.setDeviceMetricsOverride`), keep the bound projects view open in board mode, assert
+     the projects page fills the conversation body (`.ghp-page` width ≥ 85% of the available body
+     width, no centred max-width column), lanes render under the hidden-No-status rule and share the
+     width equally; `11-projects-wide.png`; restore 1280×800;
+   - `issue-empty` — `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`,
+     reference input); `07-issue-empty.png`;
+   - `issue-bind-subtitle` — back in projects, click `[data-ghp-card-action="bind"]` on the #240 card;
+     assert the client switches to the `issue` view and the session subtitle appears
+     (`[data-ghp-session-subtitle]` with `[data-ghp-subtitle-chip]` text `#240` and a non-empty
+     `[data-ghp-subtitle-title]` whose `title` attribute carries the full text);
+     `13-issue-subtitle.png`;
+   - `issue-detail` — assert the fully loaded detail; `08-issue-detail.png`; optional
+     `issue-comments` → `09-issue-comments.png`;
+   - `projects-warm` — switch to chat and back to `projects`; assert the cached board renders without
+     a skeleton within 1500 ms and log the measured duration (the cold duration was already logged in
+     `projects-board`); no screenshot;
    - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
      failures;
    - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
-     captured by the Lead after the final install; `11-projects-wide.png` is harness output.
+     captured by the Lead after the final install; `11-projects-wide.png`, `12-browser-open.png` and
+     `13-issue-subtitle.png` are harness output.
 6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit
    nonzero on assertion failure. Must be re-runnable (`node scripts/e2e/run.mjs`).
 
@@ -560,9 +645,12 @@ at least one milestone) for the board and filter stages.
 ## 6. Definition of done
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
-- e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`, in fixture mode
-  and (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
-  milestone-filter and wide-layout stages.
+- e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`,
+  `12-browser-open.png`, `13-issue-subtitle.png`, in fixture mode and (once) real-host mode, covering
+  the board (incl. the hidden-empty-No-status rule), list, milestone-filter, wide-layout,
+  built-in-browser-open and session-subtitle stages plus the warm-open latency assert.
+- Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
+  and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence.

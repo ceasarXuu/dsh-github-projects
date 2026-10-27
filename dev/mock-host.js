@@ -219,6 +219,7 @@ async function handle(req, res, config) {
       owners: [{ login: 'ceasarXuu', type: 'user' }, { login: 'XuyuTech', type: 'organization' }],
       projects,
       fetchedAt: new Date().toISOString(),
+      stale: false,
       errors: [],
     })
   }
@@ -232,11 +233,12 @@ async function handle(req, res, config) {
       items: [...(itemList.items ?? []).map(itemOf), ...syntheticItems],
       fetchedAt: new Date().toISOString(),
       truncated: (itemList.totalCount ?? 0) > (itemList.items ?? []).length,
+      stale: false,
     })
   }
   if (req.method === 'GET' && route === '/issue') {
     await delay(220)
-    return send(res, 200, { issue, fetchedAt: new Date().toISOString() })
+    return send(res, 200, { issue, fetchedAt: new Date().toISOString(), stale: false })
   }
   if (req.method === 'POST' && route === '/bind-workspace') {
     const body = JSON.parse(await readBody(req))
