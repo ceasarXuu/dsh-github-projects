@@ -1,6 +1,6 @@
 # dsh-github-projects
 
-**v0.2.1** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
+**v0.3.0** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
 这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
 GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue。
@@ -31,6 +31,22 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
 不上报遥测、也不直接访问 GitHub。
 
+## 0.3.0 新特性：状态配色与视觉层次 + 空 No status 泳道自动隐藏
+
+- **一套真正的状态配色。** 泳道、列表段、类型图标与 `issue` 页使用明确的调色板：`No status`
+  中性、`TODO` 蓝、`In Progress` 琥珀、`In Review` 紫、`Done` 绿、自定义状态青；Issue 绿、PR 紫、
+  Draft 中性；绑定/选中使用品牌强调色。tint 用 `color-mix` 生成，DSH 浅色与深色主题都成立，
+  不写死深色背景。
+- **颜色只编码状态，不做装饰。** 饱和色只用于状态/类型/绑定/主操作；标题、元信息、标签文字与正文
+  保持中性主题色（不给正文上彩色，也不存在只靠颜色传递的信息——每个彩色圆点旁边都有文字标签）。
+- **空 `No status` 泳道自动隐藏。** 过滤后 `No status` 计数为 0 时不再占一列；其余四个规范列始终
+  显示（空列显示「无条目」），自定义状态列只在有条目时出现。被隐藏的规范列键可通过
+  `data-ghp-hidden-lanes` 读取。
+- **浅色与深色都成立。** accent 与主题无关，所有 tint 都用 `color-mix` 从当前 DSH 主题派生；浅色主题同样保持可读层级（已用 CDP probe 检查：tint/hairline/色点在浅色下可读、无深色面渗漏；probe 文件仅作证据、不随包发布；自动 harness 只跑深色）。
+- **层级整理。** 泳道头加状态色 hairline 与 tint 计数 pill；卡片改为 sunken 泳道上的 raised 卡片；
+  工具栏项目 icon 使用品牌 tint；空态/错误态使用 tint 图标块。动效仅 120ms 颜色/边框过渡，并尊重
+  `prefers-reduced-motion`。
+
 ## 0.2.1（v1.1.1）新特性：全宽自适应
 
 - `projects` 页（泳道与列表）和 `issue` 页现在**铺满会话主体宽度**：`width: 100%`、**无 `max-width`
@@ -59,17 +75,18 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | ![projects 未绑定空态](artifacts/screenshots/02-projects-empty.png) | ![Project 选择器](artifacts/screenshots/03-projects-picker.png) |
 | 未绑定工作区：选择一个 Project | 选择器：按 owner 分组、可过滤 |
 | ![泳道看板](artifacts/screenshots/04-projects-board.png) | ![列表视图](artifacts/screenshots/05-projects-list.png) |
-| 默认泳道看板（五列状态） | 列表视图：分组段 + 状态 chips |
+| 真实项目 #9：状态配色；空 No status 泳道自动隐藏（4 条泳道：TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195） | 列表视图：状态色分组段 + 状态 chips |
 | ![milestone 过滤](artifacts/screenshots/06-projects-milestone.png) | ![Issue 未绑定空态](artifacts/screenshots/07-issue-empty.png) |
-| milestone 过滤（全部 / Backlog / 各里程碑） | 未绑定会话：从项目选择或粘贴链接 |
+| milestone `v1.2.0` 筛选生效（195→19），No status 保持隐藏 | 未绑定会话：从项目选择或粘贴链接 |
 | ![Issue 详情](artifacts/screenshots/08-issue-detail.png) | ![Issue 评论区](artifacts/screenshots/09-issue-comments.png) |
-| 已绑定 Issue：吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
+| 已绑定 Issue：绿色 Open 徽章、吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
 | ![宽窗口全宽布局](artifacts/screenshots/11-projects-wide.png) | |
-| 宽窗口（2200×1300）：`projects` 页面铺满会话区域（窗口宽 86.6%；旧版 1000px 居中限宽仅 45.5%） | |
+| 宽窗口（2200×1300）：页面铺满会话区域（旧 1000px 居上限宽已修复），真实数据 4 条泳道各 454.3px 均分 | |
 
 截图 01–09 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800；`09` 需 `--extra-comments`）。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
-全宽布局证据。`10-desktop-tabs.png` 不同：它是重装 v0.2.1 后**真实 Desktop 应用**的手动现场截图，
+1280×800；`09` 需 `--extra-comments`），并已按 v0.3.0 视觉系统刷新。`11-projects-wide.png` 是 harness
+在 **2200×1300** 下采集的全宽布局 + 状态配色证据。`10-desktop-tabs.png` 不同：它是**真实 Desktop
+应用**的手动现场截图，
 展示用户当前会话头部的两个页签：
 
 ![安装后 Desktop 会话头部](artifacts/screenshots/10-desktop-tabs.png)
@@ -223,13 +240,13 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | 0.2.1（v1.1.1：全宽自适应；v1.1：泳道看板 + milestone 过滤） |
+| 插件版本 | 0.3.0（状态配色 + 空 No status 泳道隐藏；0.2.x：全宽布局 / 泳道看板 / milestone 过滤） |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | 2026-10-28 通过 v1.1.1（0.2.1）验收：宿主测试 69/69；e2e fixture/real 均 PASS（冻结 client `4f41dc9d…`）；`projects-wide` 2200×1300 下页面占窗口 86.6%（旧版 1000px 上限仅 45.5%）；11 张截图齐全（含 Desktop 手动现场图）——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | 2026-10-28 通过 v0.3.0 验收：宿主测试 69/69；e2e fixture/real 均 PASS（冻结 client `813dae78…`）；空 No status 泳道隐藏已验证（real #9 `data-ghp-hidden-lanes="no-status"`、4 条泳道 / 195 卡）；11 张截图全部按新视觉系统刷新；浅色主题手动检查通过——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 目前还没有 `engines.dsh` 版本门禁：如果 DSH 升级改动了 `conversation.view` slot 或会话标准 props，
 可能需要同步更新插件。
@@ -238,6 +255,10 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 - **只读。** 不写 GitHub：不改状态、不评论、不建 Issue、不改字段。
 - **泳道只读：** 不支持拖拽换列，也不支持手动排序。
+- **泳道数量随过滤变化：** `No status` 过滤后为空时自动隐藏（其余四个规范列常驻），自定义状态列
+  只在有条目时出现，因此泳道数量会随 milestone/文本筛选变化。
+- **颜色只作辅助：** 状态/类型色都有文字标签兜底（彩色圆点为装饰），标题与正文保持中性色，
+  不存在只靠颜色传递的信息。
 - **看板布局：** 0.2.1 起页面无宽度上限，泳道、列表与 issue 页都铺满会话主体宽度；列最小宽度
   176px，窗口窄于约 960px 时整个看板横向滚动，宽屏下五列均分。未知自定义状态只做只读扩展列；
   空列保留列头与 0 计数，并显示「无条目」。

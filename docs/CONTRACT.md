@@ -370,10 +370,16 @@ States: loading skeleton → error (retry) → unbound empty state → bound boa
   `POST /unbind-workspace` and show empty state.
 - **View modes.** `board` (泳道视图) is the DEFAULT; `list` (列表视图) is the previous grouped
   layout. The mode may persist per client (e.g. localStorage) but a first mount defaults to board.
-  - `board`: five fixed status columns, left→right: `No status`, `TODO`, `In Progress`,
+  - `board`: five canonical status columns, left→right: `No status`, `TODO`, `In Progress`,
     `In Review`, `Done`. Items are assigned by case-insensitive status match
     (`null`/blank → No status; `todo`; `in progress`; `in review`; `done`). Any other custom status
     gets one extra column appended to the right carrying its raw name — never silently dropped.
+    **`No status` is hidden when its filtered item count is 0** (v0.3.0); the other four canonical
+    columns always render (even empty, showing `无条目`), and an unknown-status column only renders
+    when non-empty. The board exposes the hidden canonical keys on
+    `[data-ghp-board][data-ghp-hidden-lanes="no-status"]` (empty string when nothing is hidden), and
+    the lane order is always a subsequence of `no-status,todo,in-progress,in-review,done` plus
+    trailing `other:<raw>` lanes.
     Column header shows the label plus the count of the currently filtered items; each column body
     scrolls vertically; cards render top-down. The board scrolls horizontally when the columns do
     not fit (min column width ≈ 176px), and columns share the width on wide views. Read-only:
@@ -402,6 +408,47 @@ States: loading skeleton → error (retry) → unbound empty state → bound boa
   page also fills the width). Empty states may centre their copy but the page itself must not gain
   fixed side margins on wide windows. A wide-window regression is an acceptance failure (e2e
   `projects-wide` stage).
+
+#### 4.2.0 Visual system (v0.3.0)
+
+The plugin must look like a deliberate product surface inside the shipped dark/light theme, not a
+grey debug table. Rules:
+
+- **Color = state, not decoration.** Only these roles get saturated color: status lanes/list
+  sections, issue type glyphs, bound/active accents, primary actions, error/success states. Titles,
+  meta, labels and body text stay neutral (`label-primary` / `label-secondary` / `label-tertiary`).
+- **Status palette** (theme-independent accents; tints via `color-mix` so both DSH light and dark
+  themes work, no hardcoded dark backgrounds):
+
+  | Key | Accent | Role |
+  |---|---|---|
+  | `no-status` | `var(--dsw-alias-label-tertiary)` (neutral) | lane dot, rail, count |
+  | `todo` | `var(--dsw-static-blue-500)` (`#3b82f6`) | lane dot, rail, count tint |
+  | `in-progress` | `var(--dsw-static-amber-500)` (`#f59e0b`) | lane dot, rail, count tint |
+  | `in-review` | `#8b5cf6` (violet) | lane dot, rail, count tint |
+  | `done` | `var(--dsw-alias-state-success-primary)` | lane dot, rail, count tint |
+  | `other:<raw>` | `#06b6d4` (cyan) | lane dot, rail |
+  | Issue type | `var(--dsw-alias-state-success-primary)` | 8px type dot |
+  | PR type | `#8b5cf6` | 8px type dot |
+  | Draft type | `var(--dsw-alias-label-tertiary)` | 8px type dot |
+  | Bound / selected | `var(--dsw-alias-state-business-primary)` | border, chip, ring |
+
+- **Hierarchy.** Lane/section: 2px accent hairline at the header's bottom (status color at ~45%
+  mix), 12px/600 neutral label, colored 8px dot, count pill (11px tabular, status-tinted background,
+  secondary text). Cards: raised surface (`bg-layer-2`) on a sunken lane (`bg-layer-1`), 1px
+  `border-l1`, 12px/500 primary title clamped to 2 lines, 11px tertiary meta, labels as neutral
+  chips with 5px hash-colored dots (max 2 + `+N`), violet-tinted milestone chip, `已绑定` brand chip.
+  Hover: `border-l3` + `bg-layer-3` + 120ms transition; no layout shift. Toolbar: 34px brand-tinted
+  project icon tile, 15px/600 title, 12px tertiary meta, neutral count pill, secondary buttons;
+  `解绑` uses error tint only on hover; primary `选择 Project` keeps the host contrast button style.
+  Issue view: green-tinted `Open` / neutral `Closed` badge, 20px/600 title, author/hash-colored
+  comment initials, brand links. Empty/error: 48px tinted icon tile (brand / error), 16px/600 title,
+  13px secondary copy, one primary action.
+- **Motion & a11y.** 120ms color/border transitions only; `prefers-reduced-motion` respected for
+  non-essential animation; focus uses `--dsw-focus-ring-color` 2px ring; every colored dot is
+  decorative (`aria-hidden`) with the text label always present; no color-only information.
+- **Contrast.** Text always uses theme label tokens; colored elements are graphics/chips (≥3:1
+  against their surface where they carry meaning). Never set colored body text.
 
 #### 4.2.1 Test hooks (stable selectors the e2e harness depends on)
 
@@ -480,8 +527,11 @@ Isolated environment, never the user's `~/.dsh` profile or port:
    - `tabs` — `["对话","轨迹","projects","issue"]`; `01-tabs.png`;
    - `projects-empty` — unbound state; `02-projects-empty.png`;
    - `projects-picker` — picker open, binds `Astropath-issues` #9; `03-projects-picker.png`;
-   - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, the five columns in
-     order `no-status,todo,in-progress,in-review,done`, ≥1 card; `04-projects-board.png`;
+   - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, the rendered lane
+     keys are a subsequence of `no-status,todo,in-progress,in-review,done` (plus trailing
+     `other:*`), `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and
+     hidden when its filtered count is 0, the four non-No-status canonical lanes always present, ≥1
+     card; `04-projects-board.png`;
    - `projects-list` — toggle to list: `[data-ghp-list]`, grouped sections; `05-projects-list.png`;
    - `projects-milestone` — open the milestone dropdown: options include `全部` + `Backlog` + real
      project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts
@@ -492,8 +542,9 @@ Isolated environment, never the user's `~/.dsh` profile or port:
    - `projects-wide` — resize the browser viewport to ~2200×1300 (CDP
      `Emulation.setDeviceMetricsOverride`), keep the bound projects view open in board mode, and
      assert the projects page fills the conversation body: `.ghp-page` width ≥ 85% of the available
-     body width and no centred max-width column (previously the page was capped at 1000px); five
-     lanes still render left→right and share the width; `11-projects-wide.png`;
+     body width and no centred max-width column (previously the page was capped at 1000px); lanes
+     still render left→right under the hidden-No-status rule and share the width equally;
+     `11-projects-wide.png`;
    - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
      failures;
    - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
@@ -510,7 +561,8 @@ at least one milestone) for the board and filter stages.
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
 - e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`, in fixture mode
-  and (once) real-host mode, covering the board, list, milestone-filter and wide-layout stages.
+  and (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
+  milestone-filter and wide-layout stages.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence.

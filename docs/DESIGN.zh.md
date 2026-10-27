@@ -7,12 +7,12 @@
 | 项目 | 值 |
 |---|---|
 | 插件包名 | `@local/dsh-github-projects` |
-| 插件版本 | 0.2.1（v1.1.1：全宽自适应；v1.1：泳道看板 + milestone 过滤） |
+| 插件版本 | 0.3.0（视觉系统 + 空 No status 泳道隐藏；0.2.x：全宽布局 / 泳道看板 / milestone 过滤） |
 | 目标宿主 | DeepSeek Harness 0.2.1-rc.3（Desktop 与 `dsh web` 同一套客户端） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
 | 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v1.1.1 全宽修复与验收证据见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v0.3.0 视觉系统与验收证据见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -135,6 +135,26 @@
 验收增加 `projects-wide` 阶段（2200×1300）作为回归门禁：`projects` 页面宽度必须 ≥ 可用 body 宽度的
 85%，且不存在居中限宽列；截图编号为 `11-projects-wide.png`。
 
+### 1.8 v0.3.0 变更摘要
+
+插件 0.3.0 做两件事，宿主 API、配置与数据模型均**不变**（仍只改浏览器半）：
+
+1. **空 `No status` 泳道自动隐藏**（用户诉求）：`No status` 泳道在过滤后没有条目时不再占一列；
+   其余四个规范列（TODO / In Progress / In Review / Done）始终渲染，未知自定义状态列只在非空时出现。
+2. **视觉系统**（用户原话「为组件设计合适的配色，但要保持简洁和信息的层次正确性，现在整个界面没有
+   辨识度」）：引入按状态编码的配色（No status 中性 / TODO 蓝 / In Progress 琥珀 / In Review 紫 /
+   Done 绿 / 其他青）、Issue/PR/Draft 类型色、绑定/品牌强调色，并统一泳道、卡片、工具栏、Issue 页
+   与空态的信息层级；正文与元信息保持中性色。
+
+| 变化 | 0.2.1（v1.1.1） | 0.3.0 |
+|---|---|---|
+| `No status` 泳道 | 始终占一列（空时显示「无条目」） | **过滤后计数为 0 时隐藏**；空状态通过 `[data-ghp-board][data-ghp-hidden-lanes]` 暴露 |
+| 未知自定义状态列 | 始终占一列 | 仅在该列**非空**时渲染 |
+| 配色 | 主要沿用宿主灰阶，状态辨识度低 | 状态调色板 + 类型色 + 品牌强调色（详见 2.7） |
+| 信息层级 | 泳道/卡片/工具栏层级较弱 | 泳道强调色 hairline + 计数 pill、卡片 raised surface、工具栏品牌 icon 等（详见 2.7） |
+| 主题适配 | — | 主题无关 accent + `color-mix` 生成浅/深色 tint，不写死深色背景 |
+| 动效/无障碍 | 无额外动效 | 仅 120ms 颜色/边框过渡，尊重 `prefers-reduced-motion`；颜色不承载唯一信息 |
+
 ---
 
 ## 2. 产品设计
@@ -184,8 +204,9 @@ flowchart LR
 │     │        · 视图切换「泳道 / 列表」· milestone 过滤 · 刷新 · 更换 · 解绑
 │     ├─ 文本筛选（两种视图共用）
 │     ├─ 泳道看板（默认）
-│     │  ├─ 五列：No status · TODO · In Progress · In Review · Done
-│     │  │        （自定义状态追加右侧扩展列）
+│     │  ├─ 规范列：No status · TODO · In Progress · In Review · Done
+│     │  │        （No status 空时隐藏；自定义状态仅非空时追加到右侧）
+│     │  │        每列：状态色点 · 名称 · 计数 pill · 色带
 │     │  └─ 卡片：标题（2 行截断）· repo#number · 标签（2 + +N）· milestone chip
 │     │            · 已绑定徽章 · 整卡操作（绑定 Issue / 打开 PR·Draft）
 │     └─ 列表视图（可切换）
@@ -277,11 +298,12 @@ flowchart TD
 | projects | error | 读取失败（如 `gh-missing`） | 错误卡片 + 中文提示 + 重试 | 重试 |
 | projects | no-workspace | 会话不属于任何工作区 | 空态：「当前会话不属于任何工作区」+ 说明（绑定以工作区为归属） | 先把会话放进工作区 |
 | projects | unbound | 工作区无绑定 | 居中空态：图标、标题「绑定 GitHub Project」、说明、主按钮「选择 Project」、工作区标题/路径提示 | 选择 Project |
-| projects | bound（泳道，默认） | 有绑定、首次挂载或选中泳道 | 工具栏 + milestone 过滤 + 五列泳道看板（含未知状态扩展列） | 刷新/更换/解绑/切列表/milestone 过滤/文本筛选/卡片绑定 Issue |
+| projects | bound（泳道，默认） | 有绑定、首次挂载或选中泳道 | 工具栏 + milestone 过滤 + 泳道看板（No status 空时隐藏；四个规范列常驻；未知状态列仅非空） | 刷新/更换/解绑/切列表/milestone 过滤/文本筛选/卡片绑定 Issue |
 | projects | bound（列表） | 选中列表视图 | 工具栏 + milestone 过滤 + 文本筛选 + 状态 chips + 分组列表 | 刷新/更换/解绑/切泳道/过滤/行内绑定 Issue |
 | projects | milestone-filtered | 选中某个 milestone / Backlog | 两种视图的条目与列/段计数同步收缩；工具栏高亮当前选项 | 切回「全部」/换 milestone |
 | projects | milestone-fallback | 刷新后选中的 milestone 不再存在 | 自动回退「全部」并显示提示 | — |
-| projects | column-empty | 某状态列在当前过滤下没有条目 | 列头保留、计数显示 0、正文显示「无条目」（不隐藏列） | 继续浏览 |
+| projects | column-empty | 四个常驻规范列在当前过滤下没有条目 | 列头保留、计数显示 0、正文显示「无条目」（不隐藏列） | 继续浏览 |
+| projects | hidden-lane | `No status` 或未知状态列过滤后为空 | `No status` 隐藏并由 `data-ghp-hidden-lanes` 暴露；空的自定义状态列不渲染 | 继续浏览 |
 | projects | refreshing | 点刷新/更换后重新拉取 | 保留旧数据 + 轻量加载指示 | 继续浏览 |
 | projects | truncated | 条目数超过 `maxProjectItems` | 列表/看板底部提示"仅显示前 shown 条（共 total 条）" | — |
 | issue | loading | 首次挂载 / 切到该页签 | 骨架占位 | — |
@@ -322,14 +344,17 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
 
 **泳道看板（board，默认视图）**
 
-- 固定五列，从左到右：`No status`、`TODO`、`In Progress`、`In Review`、`Done`。
+- 规范状态列（canonical lanes）从左到右：`No status`、`TODO`、`In Progress`、`In Review`、`Done`。
   条目归属按 `status` 值**大小写不敏感**匹配：空/未设置 → `No status`；`todo`；`in progress`；
   `in review`；`done`。
-- **未知的自定义状态不会被丢弃**：除五列外，其余出现在已加载集合里的 Status 各占一列，追加在
-  最右侧（列标识 `other:<原始值>`），列头显示原始状态名。列数 = 5 + 额外状态数；额外列同样参与
-  过滤后的计数（可能为 0，但列不消失）。
-- 列头显示列名与**当前过滤后**的条目计数（`data-ghp-count`）；某列没有条目时列头、0 计数与
-  正文占位「无条目」仍在，不隐藏列。
+- **空 `No status` 泳道隐藏（v0.3.0）**：`No status` 在**当前过滤后**计数为 0 时不渲染；其余四个
+  规范列始终渲染（即使为空，正文显示「无条目」）。看板通过
+  `[data-ghp-board][data-ghp-hidden-lanes="no-status"]` 暴露被隐藏的规范列键（无隐藏时为空字符串）。
+- **未知的自定义状态不会被丢弃，但空列不显示**：其余出现在已加载集合里的 Status 各占一列，追加在
+  最右侧（列标识 `other:<原始值>`），列头显示原始状态名；这些列只在**非空**时渲染。
+  渲染列顺序始终是 `no-status,todo,in-progress,in-review,done` 的子序列 + 尾部 `other:*` 列。
+- 列头显示状态色点、列名与**当前过滤后**的条目计数 pill（`data-ghp-count`）；空列（四个常驻列）
+  保留列头、0 计数与正文占位「无条目」。
 - 每列内部纵向滚动，卡片自上而下排列；列总宽超出视口时**整个看板横向滚动**（列最小宽度 176px）；
   看板整体最小高度 220px。
 - **布局宽度（v1.1.1 起）**：`projects` 页（泳道与列表）和 `issue` 页都使用 `width: 100%`、
@@ -418,7 +443,62 @@ Issue/评论正文按 React 元素渲染，**绝不使用 `dangerouslySetInnerHT
 
 不支持（按纯文本/段落展示）：HTML、图片、表格、斜体/删除线、脚注、`@mention` 解析、Issue 引用自动展开。这是有意的取舍：GitHub 正文来自外部，渲染面越小，XSS 与隐私风险越低；图片默认不加载，避免把浏览行为泄漏给第三方。
 
-### 2.7 文案与国际化
+### 2.7 视觉系统（v0.3.0）
+
+v0.3.0 为组件引入一套**有辨识度但克制**的配色与层级系统，解决"整个界面没有辨识度"的问题。它是纯
+前端表现层：不改宿主 API、配置与数据模型，也不改变任何交互语义。
+
+**核心原则：颜色只编码状态与动作，正文/元信息保持中性。**
+
+- 只有这些角色使用饱和色：状态泳道/列表段、条目类型图标、绑定/选中强调、主操作、错误/成功状态。
+- 标题、元信息、标签文字与正文一律使用主题的 `label-primary` / `label-secondary` / `label-tertiary`，
+  **从不给正文或标题上彩色**——颜色是"索引"，不是装饰，也不是替代文字的信息载体。
+
+**状态调色板**
+
+| 语义 | Accent 来源 | 用途 |
+|---|---|---|
+| `no-status` | `var(--dsw-alias-label-tertiary)`（中性） | 泳道色点 / 色带 / 计数 |
+| `todo` | `var(--dsw-static-blue-500)`（`#3b82f6`） | 泳道色点 / 色带 / 计数 tint |
+| `in-progress` | `var(--dsw-static-amber-500)`（`#f59e0b`） | 泳道色点 / 色带 / 计数 tint |
+| `in-review` | `#8b5cf6`（紫） | 泳道色点 / 色带 / 计数 tint |
+| `done` | `var(--dsw-alias-state-success-primary)`（绿） | 泳道色点 / 色带 / 计数 tint |
+| `other:<原始值>` | `#06b6d4`（青） | 泳道色点 / 色带 |
+| Issue 类型 | `var(--dsw-alias-state-success-primary)` | 8px 类型圆点 |
+| PR 类型 | `#8b5cf6` | 8px 类型圆点 |
+| Draft 类型 | `var(--dsw-alias-label-tertiary)` | 8px 类型圆点 |
+| 绑定 / 选中 | `var(--dsw-alias-state-business-primary)` | 边框、`已绑定` chip、焦点/强调环 |
+
+accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `color-mix` 与当前主题的表面/文字 token
+混合生成，因此 DSH 的浅色与深色主题下都成立，**不写死深色背景**。
+
+**层级规则（泳道 / 卡片 / 工具栏 / Issue 页 / 空态）**
+
+- **泳道与列表段**：列头底部 2px 状态色 hairline（状态色约 45% 混合），12px/600 中性列名、8px 状态色
+  圆点，计数 pill（11px、tabular-nums、状态 tint 背景 + secondary 文字）。
+- **卡片**：sunken 泳道（`bg-layer-1`）上的 raised 卡片（`bg-layer-2`），1px `border-l1`；标题
+  12px/500 primary、最多 2 行；元信息 11px tertiary；labels 用中性 chip + 5px hash 色点（最多 2 个 +
+  `+N`）；milestone chip 为紫色 tint；`已绑定` 用品牌强调 chip。悬浮：`border-l3` + `bg-layer-3` +
+  120ms 过渡，**不产生布局位移**。
+- **工具栏**：34px 品牌 tint 的项目 icon 方块、15px/600 标题、12px tertiary 元信息、中性计数 pill、
+  次要按钮；`解绑` 仅在 hover 时使用错误色 tint；主按钮「选择 Project」保持宿主的高对比按钮样式。
+- **Issue 页**：绿色 tint 的 `Open` / 中性的 `Closed` 徽章，20px/600 标题，评论作者/哈希用色点标识，
+  链接使用品牌色。
+- **空态 / 错误态**：48px tint 图标块（品牌 / 错误色）、16px/600 标题、13px secondary 说明、一个主操作。
+
+**动效与无障碍**
+
+- 仅使用 120ms 的颜色/边框过渡；`prefers-reduced-motion` 下关闭非必要动画。
+- 焦点使用 `--dsw-focus-ring-color` 2px 焦点环。
+- 每个彩色圆点都是装饰性元素（`aria-hidden`），旁边始终有文字标签；**不存在只靠颜色传递的信息**
+  （状态名、计数、类型文字始终可见）。
+
+**对比度**
+
+- 文字永远使用主题 label token，保证与背景的对比度由宿主主题负责。
+- 彩色元素都是图形/chip：在承载含义时与其所在表面的对比度 ≥ 3:1；不把彩色用于正文。
+
+### 2.8 文案与国际化
 
 - locale 命名空间 `githubProjects`，同时注册中文与英文两套字典；界面文案中文优先、英文完整。
 - 页签标签固定为 `projects` / `issue`，不随语言变化。
@@ -600,10 +680,12 @@ POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 完整的类型定义、字段名与行为规则以 [`docs/CONTRACT.md` §3.1](./CONTRACT.md) 为准；本文不重复维护一份可能漂移的副本。
 
 **v1.1 的泳道/列表与 milestone 过滤不改变本 API。** 宿主仍然只返回 `/items` 的条目数组（含
-`status` 与 `milestone` 字段）；五列分列、未知状态扩展列、列表切换、milestone 选项推导、计数与
-失效回退全部在浏览器半完成，不新增端点、不新增 `gh` 调用。e2e 依赖的稳定选择器
+`status` 与 `milestone` 字段）；分列、列表切换、milestone 选项推导、计数与失效回退全部在浏览器半
+完成，不新增端点、不新增 `gh` 调用。v0.3.0 的视觉系统同样是纯前端 CSS/组件表现层改动，不涉及任何
+接口；空 `No status` 泳道隐藏也在客户端完成。e2e 依赖的稳定选择器
 （`data-ghp-view-mode`、`data-ghp-action="view-board|view-list"`、`data-ghp-board`、
-`data-ghp-column`、`data-ghp-card`、`data-ghp-milestone-option` 等）由契约 §4.2.1 固定。
+`data-ghp-hidden-lanes`、`data-ghp-column`、`data-ghp-card`、`data-ghp-milestone-option` 等）
+由契约 §4.2.1 固定。
 
 ### 3.5 数据流
 
@@ -1129,26 +1211,28 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> 以下为 v1.1.1（0.2.1）的最终验收，基于冻结代码 `client.js` sha256
-> `4f41dc9dd6de7bd1e378a27890cbbb7d6e514043a8596b502636f973d87e3f09`（2026-10-28 05:14）。
-> v1.1（0.2.0）与 v1（0.1.0）的验收记录作为历史基线保留在 8.6。
+> 以下为 v0.3.0 的最终验收，基于冻结代码 `client.js` sha256
+> `813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`（2026-10-28 05:28）。
+> v1.1.1（0.2.1）、v1.1（0.2.0）与 v1（0.1.0）的验收记录作为历史基线保留在 8.6。
 
 ### 8.1 验收清单
 
 | # | 验收项 | 状态 | 证据 |
 |---|---|---|---|
-| A1 | 宿主单元测试通过（v1.1.1 未改宿主半） | ✅ 通过 | `node --test test/host/*.test.mjs` → 69/69，exit 0（2026-10-28） |
-| A2 | e2e fixture 模式 PASS（含 projects-wide） | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T21-15-18-395Z` |
-| A3 | e2e real 模式 PASS（真实 `gh`，含 projects-wide） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T21-15-31-437Z` |
-| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式 0 errors / 0 exceptions / 0 warnings / 0 插件 HTTP ≥400 / 0 网络失败 |
-| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`；绑定 real Project #9（195 条目） |
-| A6 | **泳道为默认视图**：五列顺序固定、≥1 张卡片、未知状态扩展列 | ✅ 通过 | e2e `projects-board`：fixture `1/3/2/1/1`=8、real `0/27/1/1/166`=195（列计数和 == 卡片数）；截图 `04-projects-board.png` |
-| A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：fixture 8 行 / 5 组，real 195 行 / 4 组；截图 `05-projects-list.png` |
-| A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real 选项 `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
-| A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；#240 由泳道卡片绑定并完整加载 |
-| A10 | 安装进本机 Desktop profile 并现场验证（0.2.1 冻结代码） | ✅ 通过 | 0.2.1 重装进真实 `desktop` profile；`/health` → `gh 2.96.0 / ceasarXuu`；真实会话头部四页签；`10-desktop-tabs.png` 重拍（2560×1370，sha256 `2dd32a77…5c42`，手动 Desktop 截图） |
+| A1 | 宿主单元测试通过（v0.3.0 未改宿主半） | ✅ 通过 | `node --test test/host/*.test.mjs` → 69/69，exit 0 |
+| A2 | e2e fixture 模式 PASS | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T21-29-15-300Z` |
+| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T21-29-27-351Z` |
+| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式均 0 errors / 0 exceptions / 0 warnings、0 插件 HTTP ≥400 |
+| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`（v0.3.0 tint 图标块与层级）；绑定 real Project #9 |
+| A6 | **泳道为默认视图**：规范列顺序、卡片计数、未知状态列规则 | ✅ 通过 | e2e `projects-board`：fixture 5 列 `1/3/2/1/1`=8、`hidden=""`；real 4 列 `27/1/1/166`=195、`hidden="no-status"`；列计数和 == 卡片数；截图 `04-projects-board.png` |
+| A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：fixture 8 行 / 5 组，real 195 行 / 4 组；状态色分组段；截图 `05-projects-list.png` |
+| A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：fixture `all 8 / backlog 4 / v1.2.0 4`（8→4→8）；real `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`（195→19→195）；过滤 v1.2.0 时 No-status 保持隐藏；截图 `06-projects-milestone.png` |
+| A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；绿色 tint `Open` 徽章、#240 由泳道卡片绑定并完整加载 |
+| A10 | 安装进本机 Desktop profile 并现场验证（0.3.0 冻结代码） | ✅ 通过 | v0.3.0 重装进真实 `desktop` profile，`/health` → `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 为 Desktop 手动截图（2560×1370，sha256 `2dd32a77…5c42`；页签/头部不随 v0.3.0 改变，视图样式由 harness 截图证明） |
 | A11 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
-| A12 | **全宽自适应（v1.1.1 修复）**：2200×1300 窗口下 `projects` 页面铺满主体宽度，无居中限宽列，五列均分 | ✅ 通过 | e2e `projects-wide`：页面 1905px = 窗口 86.6%（旧 1000px 上限仅 45.5%），左偏移 280px=12.7%，五列各 361.8px（spread 0），列宽和占 board 98.3%；截图 `11-projects-wide.png` |
+| A12 | 全宽自适应（v1.1.1 回归）：2200×1300 页面铺满主体、无居中限宽 | ✅ 通过 | e2e `projects-wide`：页面 86.6% 窗口宽；fixture 5 列各 361.8px、real 4 列各 454.3px，spread 0；截图 `11-projects-wide.png` |
+| A13 | **空 `No status` 泳道隐藏规则**：过滤后计数为 0 时隐藏，四个规范列常驻，`data-ghp-hidden-lanes` 正确暴露 | ✅ 通过 | fixture：`hidden=""`、5 列（No-status 1 条）；过滤 v1.2.0 后 No-status 隐藏、4 列（8→4→8）。real #9：`data-ghp-hidden-lanes="no-status"`、恰好 4 列 195 卡 |
+| A14 | **视觉系统（v0.3.0）**：状态调色板 / 类型色 / 层级在真实截图中可辨认，正文与元信息保持中性 | ✅ 通过 | 01–09/11 real 截图全部按新视觉刷新；浅色主题由 verifier 用 CDP probe 检查（board/list/picker/issue，tint/hairline/dot 可读、无深色面渗漏、0 console errors；probe 文件不随包发布） |
 
 ### 8.2 单元测试
 
@@ -1157,8 +1241,8 @@ cd /Volumes/inwolf-4T/projects/dsh-github-projects
 node --test test/host/*.test.mjs
 ```
 
-**结果（2026-10-28，Node v24.18.0）：`tests 69 / pass 69 / fail 0`，exit 0。** v1.1.1 只改浏览器半的
-布局 CSS，宿主半与测试未变；用例分布与 v1 相同（state 9 / github 25 / plugin 35），全部离线运行。
+**结果（2026-10-28，Node v24.18.0）：`tests 69 / pass 69 / fail 0`，exit 0。** v0.3.0 只改浏览器半的
+视觉/渲染层，宿主半与测试未变（state 9 / github 25 / plugin 35），全部离线运行。
 
 ### 8.3 e2e
 
@@ -1167,64 +1251,66 @@ node scripts/e2e/run.mjs --mode fixture --keep
 node scripts/e2e/run.mjs --mode real --keep --extra-comments
 ```
 
-v1.1.1 阶段（契约 §5）与截图的对应关系：
+v0.3.0 阶段（契约 §5）与截图的对应关系：
 
 | # | 阶段 | 断言 | 截图 |
 |---|---|---|---|
 | 1–3 | `boot` / `app` / `session` | 隔离环境启动、`/health` 应答（real 模式要求可用 `gh`）、一轮 mock 对话让会话非空 | — |
 | 4 | `tabs` | 四页签 `["对话","轨迹","projects","issue"]` | `01-tabs.png` |
-| 5 | `projects-empty` | `projects` 未绑定空态 | `02-projects-empty.png` |
+| 5 | `projects-empty` | `projects` 未绑定空态（含 v0.3.0 空态的 tint 图标/层级） | `02-projects-empty.png` |
 | 6 | `projects-picker` | 选择器打开并绑定 `Astropath-issues` #9 | `03-projects-picker.png` |
-| 7 | `projects-board` | 默认泳道：五列顺序、`data-ghp-count`、≥1 卡片、列计数之和 == 卡片数 | `04-projects-board.png` |
-| 8 | `projects-list` | 切换列表：`[data-ghp-view-mode="list"]`、`[data-ghp-list]`、分组段渲染 | `05-projects-list.png` |
-| 9 | `projects-milestone` | milestone 下拉含 `all` + `backlog` + 具体 milestone；选中后计数收缩、`data-active` 迁移；重置后恢复 | `06-projects-milestone.png` |
-| 10 | **`projects-wide`** | 用 CDP `Emulation.setDeviceMetricsOverride` 调到 **2200×1300**：保持已绑定的泳道视图，断言 `.ghp-page` 宽度 ≥ 可用 body 宽度的 85%（旧版被 1000px 封顶），无居中限宽列，五列仍从左到右并均分宽度；测完恢复到 1280×800 | `11-projects-wide.png` |
+| 7 | `projects-board` | 默认泳道：渲染列键为规范列的子序列 + 尾部 `other:*`；`No status` 当且仅当不在 `data-ghp-hidden-lanes` 中时出现且计数>0 时可见；四个非 No-status 规范列常驻；≥1 卡片、列计数和 == 卡片数 | `04-projects-board.png` |
+| 8 | `projects-list` | 切换列表：`[data-ghp-view-mode="list"]`、`[data-ghp-list]`、分组段与状态色 | `05-projects-list.png` |
+| 9 | `projects-milestone` | milestone 下拉含 `all` + `backlog` + 具体 milestone；选中后计数收缩、`data-active` 迁移；重置恢复 | `06-projects-milestone.png` |
+| 10 | `projects-wide` | 2200×1300：`.ghp-page` ≥ body 85%，无居中限宽，规范列均分宽度；测完恢复 1280×800（visual system 在宽屏下同样成立） | `11-projects-wide.png` |
 | 11 | `issue-empty` | `issue` 未绑定空态 | `07-issue-empty.png` |
 | 12 | `issue-detail` | 从泳道卡片整卡绑定 #240，详情完整加载 | `08-issue-detail.png` |
 | — | `issue-comments`（官方集包含，用 `--extra-comments` 产出） | 滚动到底部截取评论区 | `09-issue-comments.png` |
 | 13 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
 
-> 阶段执行顺序（契约 §5）：`boot, app, session, tabs, projects-empty, projects-picker,
-> projects-board, projects-list, projects-milestone, projects-wide, issue-empty, issue-detail,
-> [issue-comments], console`；fixture 模式执行 13 个阶段，real 模式加 `--extra-comments` 共 14 个。
+> 阶段顺序：`boot, app, session, tabs, projects-empty, projects-picker, projects-board, projects-list,
+> projects-milestone, projects-wide, issue-empty, issue-detail, [issue-comments], console`。
 
-**最终验收（v0.2.1，2026-10-28；`client.js` 冻结于 sha256
-`4f41dc9dd6de7bd1e378a27890cbbb7d6e514043a8596b502636f973d87e3f09`，两次运行间未改动）：**
+**最终验收（v0.3.0，2026-10-28；`client.js` 冻结于 sha256
+`813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`，两次运行间未改动）：**
 
 | 模式 | 命令 / exit | 运行目录 | 结果 |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-18-395Z` | 13 个阶段全 ok；泳道 `1/3/2/1/1`=8；列表 8 行 / 5 组；milestone `all 8 / backlog 4 / v1.2.0 4` 且 8→4→8；**wide：页面 1905px=86.6%，列各 361.8px，8 卡片**；console 0/0/0；截图 01–08 + 11 |
-| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-31-437Z` | 14 个阶段全 ok；live 泳道 `0/27/1/1/166`=195；列表 195 行 / 4 组；milestone `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19` 且 195→19→195；**wide：同样几何、195 卡片**；#240 由泳道卡片绑定并完整加载；console 0/0/0；截图 01–09 + 11 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-15-300Z` | 13 阶段 ok；隐藏规则基线 `hidden=""`、5 列 `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1`=8；过滤 v1.2.0 后 No-status 隐藏（4 列），8→4→8；wide 5 列各 361.8px、页面 86.6%；console 0/0/0；截图 01–08 + 11 |
+| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-27-351Z` | 14 阶段 ok；**`data-ghp-hidden-lanes="no-status"`、恰好 4 列 `todo 27 / in-progress 1 / in-review 1 / done 166`=195**；milestone 195→19→195（No-status 保持隐藏）；wide 4 列各 454.3px、页面 86.6%；#240 由泳道卡片绑定并完整加载；console 0/0/0；截图 01–09 + 11 |
 
-`artifacts/screenshots/` 中 01–09 与 11 来自上表 real 运行（authoritative set，宽视口在 issue 阶段前
-恢复 1280×800，因此 07–09 仍是标准画幅）；`10-desktop-tabs.png` 为 Desktop 手动截图。
-`09-issue-comments.png` 由 `--extra-comments` 产出，属于官方截图集；`11-projects-wide.png` 是
-2200×1300 的宽窗口回归证据（旧版 1000px 居中列只有 45.5% 宽）。
+`artifacts/screenshots/` 中 01–09 与 11 来自上表 real 运行（authoritative v0.3.0 set，全部为**真实 gh 数据**）；
+`10-desktop-tabs.png` 为 Desktop 手动截图。`09-issue-comments.png` 由 `--extra-comments` 产出；
+`11-projects-wide.png` 是 2200×1300 宽窗口 + 隐藏泳道的回归证据。
+
+补充：**浅色主题**另由 verifier 用 CDP probe 检查（board / list / picker / issue detail / issue empty /
+comments，落在 `/tmp/theme-probe/light-*.png`，**不随包发布**；`color-mix` tint 自适应、可读、无深色面
+渗漏、0 console errors）。e2e harness 只跑 DSH 默认深色主题。
 
 ### 8.4 截图
 
-最终截图集共 11 张：`01`–`09` 由 e2e harness 产出（1280×800，`09` 需 `--extra-comments`），
-`10-desktop-tabs.png` 为真实 Desktop 应用的手动现场截图，`11-projects-wide.png` 为 harness 在
-**2200×1300** 下采集的宽窗口截图。
+最终截图集共 11 张（v0.3.0 视觉系统刷新）：`01`–`09` 由 e2e harness 产出（1280×800），
+`10-desktop-tabs.png` 为真实 Desktop 应用手动截图，`11-projects-wide.png` 为 harness 在 2200×1300
+下的宽窗口截图。
 
 | 截图 | 来源 | 内容 | 可核对点 |
 |---|---|---|---|
 | `artifacts/screenshots/01-tabs.png` | harness @1280 | 会话头部四页签 | 标签小写字面量、位于出厂页签之后 |
-| `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | 标题/说明/「选择 Project」、工作区标题与路径 |
-| `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、按 owner 分组、筛选、手动绑定行 |
-| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板** | 五列顺序与列头计数、卡片、横向布局 |
-| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段与计数、状态 chips、「绑定」按钮 |
-| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 下拉选项与计数、选中态、过滤后的列计数 |
-| `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | 从项目选择、粘贴框与提示 |
-| `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 吸顶头部、meta、labels、Markdown 正文 |
-| `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 吸顶头部仍在、作者/相对时间/GitHub 链接 |
-| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动（v0.2.1 重装后） | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签；2560×1370，sha256 `2dd32a77ec800497c0472ac3f2454445db5e9abfdb49089542db22e9469b5c42` |
-| `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | **全宽布局（v1.1.1）** | 2200×1300 宽窗口：`projects` 页面铺满会话区域（1905px = 窗口 86.6%，旧版 1000px 居中限宽回归已修复）；五列各 361.8px 均分 |
+| `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | 48px tint 图标块、16px/600 标题、单一主操作 |
+| `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、owner 分组、筛选、手动绑定行 |
+| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板（v0.3.0 配色，真实数据）** | `No status` 无条目时自动隐藏，其余四条泳道始终显示；真实 #9 为 4 条泳道（TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195）；状态色点/色带、计数 pill、raised 卡片、类型色点 |
+| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段的状态色/计数、状态 chips、中性标题与彩色状态点分层 |
+| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 选中 `v1.2.0` 生效（195→19），No-status 保持隐藏；下拉选项与计数、选中态 |
+| `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | tint 图标块、从项目选择、粘贴框与提示 |
+| `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 绿色 tint `Open` 徽章、吸顶头部、meta、labels、Markdown 正文 |
+| `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 吸顶头部仍在、评论作者/相对时间/GitHub 链接 |
+| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动 | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签 |
+| `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | **全宽布局 + 视觉系统** | 2200×1300 宽窗口：页面铺满会话区域（旧 1000px 居中限宽已修复）；real 数据下 4 列各 454.3px 均分 |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
 ![projects 未绑定空态](../artifacts/screenshots/02-projects-empty.png)
 ![Project 选择器](../artifacts/screenshots/03-projects-picker.png)
-![默认泳道看板](../artifacts/screenshots/04-projects-board.png)
+![默认泳道看板（状态配色）](../artifacts/screenshots/04-projects-board.png)
 ![列表视图](../artifacts/screenshots/05-projects-list.png)
 ![milestone 过滤](../artifacts/screenshots/06-projects-milestone.png)
 ![issue 未绑定空态](../artifacts/screenshots/07-issue-empty.png)
@@ -1233,48 +1319,49 @@ v1.1.1 阶段（契约 §5）与截图的对应关系：
 ![Desktop 安装后的会话头部（真实应用）](../artifacts/screenshots/10-desktop-tabs.png)
 ![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
 
-> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，v0.2.1 重装后刷新）；
-> 01–09 为 harness 的 1280×800 产出，`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出
-> （v1.1.1 全宽回归证据：页面 86.6% 窗口宽 vs 旧版上限 45.5%）。
+> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出）；01–09 为 harness 的
+> 1280×800 real 产出，`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出。01–09 与 11 均已按
+> v0.3.0 视觉系统刷新；真实数据下 `No status` 隐藏，fixture 模式（5 列）的同名截图在批量对比时
+> 可能被覆盖——以本表列出的 real 集为准。浅色主题有手动抽查（见 8.3 补充）。
 
 ### 8.5 安装验证（本机 Desktop profile）
 
-2026-10-28 以 **v0.2.1 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
-profile `desktop`）：
-
-| 步骤 | 命令 / 结果 |
-|---|---|
-| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects` |
-| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启（窗口回到工作区首页属正常重组） |
-| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `{"ok":true,"gh":{"available":true,"version":"gh version 2.96.0 (2026-07-02)","account":"ceasarXuu","error":null}}` |
-| 现场验证 | 真实会话头部出现 `对话 / 轨迹 / projects / issue` → `10-desktop-tabs.png`（2560×1370，sha256 `2dd32a77…5c42`，v0.2.1 重装后重拍，手动 Desktop 截图） |
-| 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（删除依赖与 bundle 条目，见 7.5） |
+2026-10-28 以 **v0.3.0 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
+profile `desktop`）：安装命令 `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`，
+`/health` 返回 `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 为该环境的会话头部手动截图
+（2560×1370，sha256 `2dd32a77…5c42`）。页签与头部不随 v0.3.0 改变，因此该手动图沿用；v0.3.0 的
+视图样式证据以 01–09 / 11 的 refreshed 截图为准。回滚：`dsh plugin --profile desktop remove
+@local/dsh-github-projects`（见 7.5）。
 
 ### 8.6 历史基线与未验证项
 
-**v1.1.1（0.2.1）结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client
-`4f41dc9d…`；run dirs `2026-10-27T21-15-18-395Z` / `2026-10-27T21-15-31-437Z`）；`projects-wide`
-在 2200×1300 下证明页面占窗口 86.6%（旧版上限仅 45.5%，页面左偏移 12.7%，五列各 361.8px、
-spread 0，列宽和占 board 98.3%），无居中限宽；11 张官方截图齐全（01–09 + 11 harness，10 为 v0.2.1
-重装后的手动 Desktop 截图）；真实 profile 安装 + `/health` 已复核。
+**v0.3.0 结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client `813dae78…`；
+run dirs `2026-10-27T21-29-15-300Z` / `2026-10-27T21-29-27-351Z`）；隐藏空泳道规则在 baseline、
+过滤、real 数据三种情形下均验证（real `data-ghp-hidden-lanes="no-status"`）；11 张官方截图全部按
+v0.3.0 视觉系统刷新；浅色主题由 CDP probe 抽查通过（probe 文件不随包发布）。
 
-**v1.1（0.2.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS
-（frozen client `309f63ac…`；run dirs `2026-10-27T20-56-22-460Z` / `2026-10-27T20-56-33-844Z`）；
-10 张官方截图齐全（01–09 harness real + 10 Desktop 手动）。v1.1.1 在该版本上只改页面宽度。
+**v1.1.1（0.2.1）验收基线（2026-10-28）**：宿主测试 69/69；fixture 与 real e2e 均 PASS（frozen
+client `4f41dc9d…`；run dirs `2026-10-27T21-15-18-395Z` / `2026-10-27T21-15-31-437Z`）；
+`projects-wide` 在 2200×1300 下页面占窗口 86.6%（旧版上限 45.5%），五列均分；11 张官方截图齐全。
 
-**v1（0.1.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS；
-真实 Project #9 / Issue #240 渲染完整。截图编号已按后续版本重排，旧文件名不再保留。
+**v1.1（0.2.0）验收基线（2026-10-28）**：泳道看板 + milestone 过滤；宿主测试 69/69；fixture/real
+e2e 均 PASS；10 张官方截图。
 
-未验证项（v1.1.1 补齐后复核）：
+**v1（0.1.0）验收基线（2026-10-28）**：最初的分组列表 + Issue 详情；宿主测试 69/69；fixture/real
+e2e 均 PASS。旧截图编号已随版本重排，不再保留。
+
+未验证项（v0.3.0 补齐后复核）：
 
 - 只在 macOS + DSH Desktop 0.2.1-rc.3 + Chrome 156 上验证；Windows、Linux、其他 DSH 版本未测。
 - 只验证了 `gh` 2.96.0；旧版 2.x 的 `--format json` 兼容性未逐一测试。
 - 只验证了 GitHub.com + 单个账号；GitHub Enterprise Server、多账号切换未测。
 - 未做长时间运行/大 Project（数千条目）、弱网、限流风暴等压力场景验证。
-- 宽布局只在 e2e 的 2200×1300 与 1280×800 两个视口验证；其它分辨率/缩放比例未逐一验证，
-  窄于约 960px 时的横向滚动只按设计实现、未单独截图。
-- 泳道看板未做拖拽（设计上只读）。
-- 未做无障碍（屏幕阅读器）实测；卡片可键盘点击（Enter/Space）由代码实现，未做真机辅助技术测试。
+- 宽布局只在 e2e 的 2200×1300 与 1280×800 两个视口验证；其它分辨率/缩放比例未逐一验证。
+- 视觉系统的深色主题由 e2e 覆盖、浅色主题由 CDP probe 抽查（`/tmp/theme-probe/light-*.png`，不随包
+  发布，也不在官方 11 张截图集内）；未做逐主题/逐对比度设置的 WCAG 实测，颜色对比度依赖宿主
+  label/tint token。
+- 未做无障碍（屏幕阅读器）实测；彩色圆点均为 `aria-hidden`、文字标签常驻的设计未做真机辅助技术测试。
+- 泳道看板未做拖拽（设计上只读）；窄于约 960px 的横向滚动未单独截图。
 - 未在真实 Desktop 中逐项操作泳道切换、milestone 过滤等全部交互；这些路径由 e2e 覆盖。
 
 ---
@@ -1287,7 +1374,10 @@ spread 0，列宽和占 board 98.3%），无居中限宽；11 张官方截图齐
 - **只处理 Issue，不处理 PR 详情**：PR/Draft 条目只能跳转 GitHub。
 - **单 Project**：一个工作区同时只绑定一个 Project。
 - **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
-- **泳道只读**：不支持拖拽卡片改 Status、不支持自定义排序；未知自定义状态只做只读展示（右侧扩展列）。
+- **泳道只读**：不支持拖拽卡片改 Status、不支持自定义排序；未知自定义状态只做只读展示（右侧扩展列，
+  且仅在该列非空时出现）。
+- **空 No status 泳道**：`No status` 在过滤后为空时自动隐藏（其余四个规范列始终显示），因此泳道数量
+  会随筛选结果变化；被隐藏的列键可从 `data-ghp-hidden-lanes` 读取。
 - **列宽与横向滚动**：泳道列最小宽度 176px；宽屏下五列均分可用宽度，窗口窄于约 960px 时整个看板横向滚动。
   页面本身没有宽度上限（v1.1.1 起）。
 - **宿主布局边界**：DSH 的会话输入框（composer）保持宿主 shell 的居中宽度，不随插件全宽而改变；

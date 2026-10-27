@@ -25,10 +25,10 @@ The run prints one JSON line per stage: `{"step": "<name>", "ok": true|false, "d
 | 4 | `tabs` | session header has exactly the shipped `对话`, `轨迹` **and** the plugin's `projects`, `issue` tabs | `01-tabs.png` |
 | 5 | `projects-empty` | `projects` tab renders the unbound empty state (`绑定 GitHub Project`, `选择 Project`) | `02-projects-empty.png` |
 | 6 | `projects-picker` | picker opens, renders project rows + manual binding row, loading finished | `03-projects-picker.png` |
-| 7 | `projects-board` | binds `Astropath-issues` (#9) from the picker, then asserts the v1.1 swimlane board: `[data-ghp-view-mode="board"]`, `[data-ghp-board]`, the five columns in order `no-status,todo,in-progress,in-review,done` with `data-ghp-count`, ≥1 `[data-ghp-card]`, and column counters summing to the rendered cards | `04-projects-board.png` |
+| 7 | `projects-board` | binds `Astropath-issues` (#9) from the picker, then asserts the v1.1 swimlane board under the **v0.3.0 hidden-lane rule**: `[data-ghp-view-mode="board"]`, `[data-ghp-board]`, rendered lane keys a subsequence of `no-status,todo,in-progress,in-review,done` (+ trailing `other:*` only when non-empty), the four non-No-status lanes exactly once in order, `no-status` present iff not listed in `data-ghp-hidden-lanes` (and hidden when its filtered count is 0), every lane `data-ghp-count` == cards in that lane and board total == sum(counts), ≥1 card. Fixture data has a No-status item → 5 lanes + empty hidden list; real Project #9 has none → `data-ghp-hidden-lanes="no-status"` + exactly 4 lanes | `04-projects-board.png` |
 | 8 | `projects-list` | `[data-ghp-action="view-list"]` switches to list mode: `[data-ghp-view-mode="list"]`, `[data-ghp-list]`, grouped status sections with rows | `05-projects-list.png` |
 | 9 | `projects-milestone` | back to board; `[data-ghp-action="milestone"]` opens the dropdown, options include `all` + `backlog` + a concrete milestone (`v1.2.0` when present), selecting it moves `data-active="true"`, shrinks card counts (and keeps counters consistent); captured with the dropdown open; then reset to `all`, counts restored, dropdown closed | `06-projects-milestone.png` |
-| 9b | `projects-wide` | resizes the viewport to 2200×1300 (CDP `Emulation.setDeviceMetricsOverride`), keeps the bound board open and asserts the page fills the conversation body: `.ghp-page` width ≥ 70% of the window (old 1000px cap ≈ 45%), page left edge < 25% of the window (no centred fixed column), five lanes in order sharing the width (equal ±12px, sum ≥85% of board width), ≥1 card; then restores 1280×800 for the issue stages | `11-projects-wide.png` (2200×1300) |
+| 9b | `projects-wide` | resizes the viewport to 2200×1300 (CDP `Emulation.setDeviceMetricsOverride`), keeps the bound board open and re-validates the hidden-lane rule for the visible lanes, then asserts the page fills the conversation body: `.ghp-page` width ≥ 70% of the window (old 1000px cap ≈ 45%), page left edge < 25% of the window (no centred fixed column), the visible lanes in order share the width (equal ±12px, lane sum ≥85% of board width), ≥1 card; the PNG is asserted to be exactly 2200×1300; viewport restored to 1280×800 for the issue stages | `11-projects-wide.png` (2200×1300) |
 | 10 | `issue-empty` | `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`, reference input) | `07-issue-empty.png` |
 | 11 | `issue-detail` | binds #240 from the projects board card (`[data-ghp-card][data-issue="ceasarXuu/Astropath#240"]`, whole card is the action; ref-paste fallback kept) and asserts the fully loaded detail (meta line `N 条评论`, markdown body, labels, comments) | `08-issue-detail.png` |
 | 12 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed) | — |
@@ -40,6 +40,9 @@ Screenshots are 1280×800 viewport PNGs written to
 05-projects-list, 06-projects-milestone, 07-issue-empty, 08-issue-detail,
 11-projects-wide** — the first eight at 1280×800, `11` at **2200×1300** (wide
 layout regression) — plus opt-in `09-issue-comments.png` with `--extra-comments`.
+Board screenshots reflect the v0.3.0 hidden-empty-No-status rule: fixture mode
+shows five lanes, real Project #9 shows four lanes with
+`data-ghp-hidden-lanes="no-status"`.
 `10-desktop-tabs.png` is **not** produced by this harness: it is the manual
 evidence from the user's installed Desktop app (full-window screenshot of a real
 session header showing `对话 | 轨迹 | projects | issue`). The harness deletes stale
@@ -167,36 +170,40 @@ Common failures:
 - `02-projects-empty.png` includes the isolated temp workspace path by design
   (the empty state documents which workspace is being bound).
 
-## Current status (2026-10-28) — plugin 0.2.1 final acceptance, client.js frozen
+## Current status (2026-10-28) — plugin v0.3.0 final acceptance, client.js frozen
 
-`client.js` frozen at sha256 `4f41dc9dd6de7bd1e378a27890cbbb7d6e514043a8596b502636f973d87e3f09`
-(mtime 2026-10-28 05:14; v0.2.1 fix: `.ghp-page` is `width:100%; max-width:none;
-margin:0` — no centred 1000px cap, board lanes `flex:1 1 0` share the full body).
+`client.js` frozen at sha256 `813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`
+(mtime 2026-10-28 05:28; v0.3.0 = hidden-empty-No-status lane rule + the
+§4.2.0 visual system: status palette, tinted count pills, raised cards on
+sunken lanes, hash-colored label/avatar dots, brand accents, full-width layout).
 `index.js` ships `export const inject = ['webServer']`.
 
 | Mode | Command | Exit | Run dir | Result |
 |---|---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-18-395Z` | board `1/3/2/1/1` (8 cards = sum), list 8 rows / 5 groups, milestones `all 8 / backlog 4 / v1.2.0 4` → 8→4→8, **wide 2200×1300: page 1905px = 86.6% of window, left 12.7%, lanes 361.8×5 spread 0, lane sum 1809 = 98.3% of board, 8 cards**, issue bound via card; console 0/0/0; shots 01–08 + 11 |
-| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-31-437Z` | live board `0/27/1/1/166` = 195 cards = sum, list 195 rows / 4 groups, milestones `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19` → 195→19→195, **wide: same geometry with 195 cards**, issue #240 via card + full detail; console 0/0/0; shots 01–09 + 11 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-15-300Z` | hidden-lane rule: `hidden=""`, 5 lanes `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1` (8 == sum); milestone v1.2.0 hides No-status (4 lanes, `todo 0 / in-progress 2 / in-review 1 / done 1`), 8→4→8; wide @2200×1300: 5 lanes `[361.8 ×5]` spread 0, page 86.6% of window, shot exactly 2200×1300; console 0/0/0; shots 01–08 + 11 |
+| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-27-351Z` | hidden-lane rule: **`data-ghp-hidden-lanes="no-status"`, exactly 4 lanes `todo 27 / in-progress 1 / in-review 1 / done 166` = 195 cards = sum**; milestone v1.2.0 keeps No-status hidden, 195→19→195; wide @2200×1300: 4 lanes `[454.3 ×4]` spread 0, page 86.6%, 195 cards; issue #240 via card + full detail; console 0/0/0; shots 01–09 + 11 |
 
-Both authoritative runs were sequential against the frozen client; `artifacts/screenshots/`
-holds the **real-mode** set from `2026-10-27T21-15-31-437Z`. The wide viewport is
-restored to 1280×800 before the issue stages, so `07`–`09` keep the standard frame.
+Both authoritative runs were sequential against the frozen client;
+`artifacts/screenshots/` holds the **real-mode** v0.3.0 set from
+`2026-10-27T21-29-27-351Z`.
 
 Final artifact set (`artifacts/screenshots/`):
 
 | File | Source | Size |
 |---|---|---|
-| `01-tabs.png`, `02-projects-empty.png`, `03-projects-picker.png`, `04-projects-board.png`, `05-projects-list.png`, `06-projects-milestone.png`, `07-issue-empty.png`, `08-issue-detail.png` | harness, authoritative real-host run | 1280×800 |
+| `01-tabs.png`, `02-projects-empty.png`, `03-projects-picker.png`, `04-projects-board.png`, `05-projects-list.png`, `06-projects-milestone.png`, `07-issue-empty.png`, `08-issue-detail.png` | harness, authoritative real-host run (v0.3.0 visual system) | 1280×800 |
 | `09-issue-comments.png` | harness real-host run `--extra-comments` (opt-in) | 1280×800 |
-| `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead), never written/preserved-overwritten by the harness | full app window |
-| `11-projects-wide.png` | harness, `projects-wide` stage (wide-layout regression proof) | 2200×1300 |
+| `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead), never written by the harness | full app window |
+| `11-projects-wide.png` | harness, `projects-wide` stage (wide-layout + hidden-lane proof) | 2200×1300 |
 
-Earlier v1.x screenshot numbers (`04-projects-list.png`, `05-issue-empty.png`,
-`06-issue-detail.png`, `07-desktop-tabs.png`, `08-issue-comments.png`) are removed
-automatically as stale numbered state shots at the start of every run. Older temp
-run directories under `/tmp/dsh-github-projects-e2e/` are development history and
-may be deleted.
+The light theme was additionally verified manually during the v0.3.0 review
+(settings → 浅色; board/list/picker/issue shots rendered correctly via
+`color-mix` tints, zero console errors) — the automated harness runs the DSH
+default dark theme only.
+
+Earlier v1.x/v0.2.x screenshot numbers are removed automatically as stale
+numbered state shots at the start of every run. Older temp run directories under
+`/tmp/dsh-github-projects-e2e/` are development history and may be deleted.
 
 ## File map
 
