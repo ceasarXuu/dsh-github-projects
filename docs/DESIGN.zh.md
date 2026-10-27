@@ -7,12 +7,12 @@
 | 项目 | 值 |
 |---|---|
 | 插件包名 | `@local/dsh-github-projects` |
-| 插件版本 | 0.2.0（v1.1：泳道看板 + milestone 过滤） |
+| 插件版本 | 0.2.1（v1.1.1：全宽自适应；v1.1：泳道看板 + milestone 过滤） |
 | 目标宿主 | DeepSeek Harness 0.2.1-rc.3（Desktop 与 `dsh web` 同一套客户端） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
 | 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v1.1 功能与验收证据见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v1.1.1 全宽修复与验收证据见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -116,6 +116,24 @@
 | 宿主/接口 | `/plugin/github-projects` 9 个端点 | 完全不变；分组、过滤、视图切换全部在浏览器半基于 `/items` 数据完成 |
 
 验收截图与 e2e 阶段随视图扩展更新（编号见[第 8 章](#8-验收与验证证据)）；v1 的验收记录作为历史基线保留在 8.6。
+
+### 1.7 v1.1.1 变更摘要
+
+插件 0.2.1 修复 v1.1 的页面宽度问题：功能、宿主 API、配置与数据模型均**不变**，只改布局宽度。
+
+背景：用户在宽屏 Desktop 窗口（约 2134px）下反馈「咋这么挤，不能做成自适应全宽吗，不要设置宽度上限」。
+根因是 `projects`/`issue` 视图的页面容器 `.ghp-page` 带 `max-width: 1000px; margin: 0 auto`，
+在宽窗口里被挤成居中的一列。
+
+| 变化 | v1.1（0.2.0） | v1.1.1（0.2.1） |
+|---|---|---|
+| 页面宽度 | `.ghp-page` 居中、`max-width: 1000px` | `width: 100%`、`max-width: none`、`margin: 0`，铺满会话主体宽度 |
+| 泳道 | 五列在 1000px 内均分 | 五列在整个可用宽度内 `flex: 1 1 0` 均分；176px 只是横向滚动的下限 |
+| 列表 / Issue 页 | 同样受 1000px 上限 | 同样全宽 |
+| 空态 | 居中 | 页面全宽；空态文案本身保留可读宽度约束（如说明文字 max-width: 470px），不影响页面铺满 |
+
+验收增加 `projects-wide` 阶段（2200×1300）作为回归门禁：`projects` 页面宽度必须 ≥ 可用 body 宽度的
+85%，且不存在居中限宽列；截图编号为 `11-projects-wide.png`。
 
 ---
 
@@ -312,8 +330,14 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
   过滤后的计数（可能为 0，但列不消失）。
 - 列头显示列名与**当前过滤后**的条目计数（`data-ghp-count`）；某列没有条目时列头、0 计数与
   正文占位「无条目」仍在，不隐藏列。
-- 每列内部纵向滚动，卡片自上而下排列；列总宽超出视口时**整个看板横向滚动**（列最小宽度 176px），
-  宽屏下各列均分可用宽度；看板整体最小高度 220px。
+- 每列内部纵向滚动，卡片自上而下排列；列总宽超出视口时**整个看板横向滚动**（列最小宽度 176px）；
+  看板整体最小高度 220px。
+- **布局宽度（v1.1.1 起）**：`projects` 页（泳道与列表）和 `issue` 页都使用 `width: 100%`、
+  `max-width: none`、`margin: 0`，**铺满会话主体宽度**，不设页面级宽度上限、不做居中固定列。
+  宽屏下五列按 `flex: 1 1 0` 均分整个可用宽度；176px 只是列宽的横向滚动下限（窗口窄于约 960px 时
+  出现横向滚动），不是页面宽度上限。页面内边距为 `24px 32px 28px`（窄于 760px 时降为 `16px`），
+  空态说明文字等 copy 元素保留自身的可读宽度（如 470px），但页面容器本身不再限宽。
+  0.2.0 的 1000px 居中列是回归缺陷；e2e `projects-wide`（2200×1300）断言页面宽度 ≥ 可用 body 宽度的 85%。
 - **只读**：不支持拖拽卡片改状态、不支持自定义排序，也不会写回 GitHub。
 - 卡片内容：标题（最多 2 行，超出省略）、`repo#number`、labels（最多 2 个，其余 `+N`）、
   milestone chip；当前会话已绑定的 Issue 带「已绑定」徽章。
@@ -1103,25 +1127,26 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> 以下为 2026-10-28 完成的 v1.1（0.2.0）验收，全部基于冻结代码
-> （`client.js` sha256 `309f63ac1009092dcb34c40000f50807427ac956872ca30c4801e03acd3500d1`）。
-> v1（0.1.0）的验收记录作为历史基线保留在 8.6。
+> 以下为 v1.1.1（0.2.1）的最终验收，基于冻结代码 `client.js` sha256
+> `4f41dc9dd6de7bd1e378a27890cbbb7d6e514043a8596b502636f973d87e3f09`（2026-10-28 05:14）。
+> v1.1（0.2.0）与 v1（0.1.0）的验收记录作为历史基线保留在 8.6。
 
 ### 8.1 验收清单
 
 | # | 验收项 | 状态 | 证据 |
 |---|---|---|---|
-| A1 | 宿主单元测试通过（v1.1 未改宿主半） | ✅ 通过 | `node --test test/host/*.test.mjs` → 69/69，exit 0（2026-10-28） |
-| A2 | e2e fixture 模式 PASS | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0，run dir `2026-10-27T20-56-22-460Z` |
-| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0，run dir `2026-10-27T20-56-33-844Z` |
-| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式均 console 0 errors / 0 exceptions / 0 warnings，tabs = `["对话","轨迹","projects","issue"]` |
-| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`；绑定真实 Project #9（195 条目） |
-| A6 | **泳道为默认视图**：五列顺序固定、≥1 张卡片、未知状态扩展列 | ✅ 通过 | e2e `projects-board`：五列 `no-status/todo/in-progress/in-review/done`，real 计数 0/27/1/1/166 之和 195 == 卡片数；截图 `04-projects-board.png` |
-| A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：real 模式 195 行 / 4 组；fixture 8 行 / 5 组；截图 `05-projects-list.png` |
-| A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real 选项 `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，选中后 195→19→195 且 `data-active` 唯一；截图 `06-projects-milestone.png` |
-| A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；#240 由泳道卡片整卡绑定并完整加载 |
-| A10 | 安装进本机 Desktop profile 并现场验证（0.2.0 冻结代码） | ✅ 通过 | 重装 v0.2.0 到真实 `desktop` profile，`/health` 正常；截图 `10-desktop-tabs.png`（Desktop 手动截图，2560×1370） |
+| A1 | 宿主单元测试通过（v1.1.1 未改宿主半） | ✅ 通过 | `node --test test/host/*.test.mjs` → 69/69，exit 0（2026-10-28） |
+| A2 | e2e fixture 模式 PASS（含 projects-wide） | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T21-15-18-395Z` |
+| A3 | e2e real 模式 PASS（真实 `gh`，含 projects-wide） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T21-15-31-437Z` |
+| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式 0 errors / 0 exceptions / 0 warnings / 0 插件 HTTP ≥400 / 0 网络失败 |
+| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`；绑定 real Project #9（195 条目） |
+| A6 | **泳道为默认视图**：五列顺序固定、≥1 张卡片、未知状态扩展列 | ✅ 通过 | e2e `projects-board`：fixture `1/3/2/1/1`=8、real `0/27/1/1/166`=195（列计数和 == 卡片数）；截图 `04-projects-board.png` |
+| A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：fixture 8 行 / 5 组，real 195 行 / 4 组；截图 `05-projects-list.png` |
+| A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real 选项 `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
+| A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；#240 由泳道卡片绑定并完整加载 |
+| A10 | 安装进本机 Desktop profile 并现场验证 | ✅ 通过（沿用安装验证） | 2026-10-28 已安装并在真实会话验证；0.2.1 为纯布局 CSS 修复，安装方式/宿主面未变；`10-desktop-tabs.png` 为 Desktop 手动截图（非 harness） |
 | A11 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
+| A12 | **全宽自适应（v1.1.1 修复）**：2200×1300 窗口下 `projects` 页面铺满主体宽度，无居中限宽列，五列均分 | ✅ 通过 | e2e `projects-wide`：页面 1905px = 窗口 86.6%（旧 1000px 上限仅 45.5%），左偏移 280px=12.7%，五列各 361.8px（spread 0），列宽和占 board 98.3%；截图 `11-projects-wide.png` |
 
 ### 8.2 单元测试
 
@@ -1130,9 +1155,8 @@ cd /Volumes/inwolf-4T/projects/dsh-github-projects
 node --test test/host/*.test.mjs
 ```
 
-**结果（2026-10-28，Node v24.18.0）：`tests 69 / pass 69 / fail 0`，exit 0。** v1.1 只改浏览器半
-（`client.js`），宿主半与测试未变；用例分布与 v1 相同（state 9 / github 25 / plugin 35），
-全部离线运行（fixtures + 注入 runner，少量临时假 `gh` 脚本），不联网。
+**结果（2026-10-28，Node v24.18.0）：`tests 69 / pass 69 / fail 0`，exit 0。** v1.1.1 只改浏览器半的
+布局 CSS，宿主半与测试未变；用例分布与 v1 相同（state 9 / github 25 / plugin 35），全部离线运行。
 
 ### 8.3 e2e
 
@@ -1141,51 +1165,59 @@ node scripts/e2e/run.mjs --mode fixture --keep
 node scripts/e2e/run.mjs --mode real --keep --extra-comments
 ```
 
-v1.1 阶段（契约 §5）与截图的对应关系：
+v1.1.1 阶段（契约 §5）与截图的对应关系：
 
 | # | 阶段 | 断言 | 截图 |
 |---|---|---|---|
-| 1–3 | `boot` / `app` / `session` | 隔离环境启动、`/health` 应答（real 模式要求可用 `gh`）、首屏对话框关闭、一轮 mock 对话让会话非空 | — |
+| 1–3 | `boot` / `app` / `session` | 隔离环境启动、`/health` 应答（real 模式要求可用 `gh`）、一轮 mock 对话让会话非空 | — |
 | 4 | `tabs` | 四页签 `["对话","轨迹","projects","issue"]` | `01-tabs.png` |
-| 5 | `projects-empty` | `projects` 未绑定空态（`绑定 GitHub Project` / `选择 Project`） | `02-projects-empty.png` |
-| 6 | `projects-picker` | 选择器打开、渲染项目行与手动绑定行、选择 `Astropath-issues` #9 | `03-projects-picker.png` |
-| 7 | `projects-board` | 绑定 #9 后断言默认泳道：`[data-ghp-view-mode="board"]`、`[data-ghp-board]`、五列顺序 `no-status,todo,in-progress,in-review,done`（带 `data-ghp-count`）、≥1 `[data-ghp-card]`，且列计数之和等于渲染卡片数 | `04-projects-board.png` |
-| 8 | `projects-list` | 点 `[data-ghp-action="view-list"]`：`[data-ghp-view-mode="list"]`、`[data-ghp-list]`、分组段与行渲染 | `05-projects-list.png` |
-| 9 | `projects-milestone` | 回泳道后打开 milestone 下拉：选项含 `all` + `backlog` + 具体 milestone（如 `v1.2.0`）；选中后 `data-active="true"` 迁移、卡片计数收缩；截图保留下拉打开状态；随后重置 `all`、计数恢复 | `06-projects-milestone.png` |
-| 10 | `issue-empty` | `issue` 未绑定空态（`为当前会话绑定 Issue` / `从项目选择` / 引用输入框） | `07-issue-empty.png` |
-| 11 | `issue-detail` | 从泳道卡片 `[data-ghp-card][data-issue="…/Astropath#240"]` 整卡绑定 #240（保留 ref-paste 兜底），详情完整加载（meta/labels/Markdown 正文/评论） | `08-issue-detail.png` |
+| 5 | `projects-empty` | `projects` 未绑定空态 | `02-projects-empty.png` |
+| 6 | `projects-picker` | 选择器打开并绑定 `Astropath-issues` #9 | `03-projects-picker.png` |
+| 7 | `projects-board` | 默认泳道：五列顺序、`data-ghp-count`、≥1 卡片、列计数之和 == 卡片数 | `04-projects-board.png` |
+| 8 | `projects-list` | 切换列表：`[data-ghp-view-mode="list"]`、`[data-ghp-list]`、分组段渲染 | `05-projects-list.png` |
+| 9 | `projects-milestone` | milestone 下拉含 `all` + `backlog` + 具体 milestone；选中后计数收缩、`data-active` 迁移；重置后恢复 | `06-projects-milestone.png` |
+| 10 | **`projects-wide`** | 用 CDP `Emulation.setDeviceMetricsOverride` 调到 **2200×1300**：保持已绑定的泳道视图，断言 `.ghp-page` 宽度 ≥ 可用 body 宽度的 85%（旧版被 1000px 封顶），无居中限宽列，五列仍从左到右并均分宽度；测完恢复到 1280×800 | `11-projects-wide.png` |
+| 11 | `issue-empty` | `issue` 未绑定空态 | `07-issue-empty.png` |
+| 12 | `issue-detail` | 从泳道卡片整卡绑定 #240，详情完整加载 | `08-issue-detail.png` |
 | — | `issue-comments`（官方集包含，用 `--extra-comments` 产出） | 滚动到底部截取评论区 | `09-issue-comments.png` |
-| 12 | `console` | 0 console errors / 0 uncaught exceptions / 0 插件 HTTP ≥400 / 0 网络失败（warnings 只报告不判失败） | — |
+| 13 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
 
-**最终验收（2026-10-28，DSH 0.2.1-rc.3，Chrome 156；`client.js` 冻结于 sha256
-`309f63ac1009092dcb34c40000f50807427ac956872ca30c4801e03acd3500d1`，两次运行间未改动）：**
+> 阶段执行顺序（契约 §5）：`boot, app, session, tabs, projects-empty, projects-picker,
+> projects-board, projects-list, projects-milestone, projects-wide, issue-empty, issue-detail,
+> [issue-comments], console`；fixture 模式执行 13 个阶段，real 模式加 `--extra-comments` 共 14 个。
+
+**最终验收（v0.2.1，2026-10-28；`client.js` 冻结于 sha256
+`4f41dc9dd6de7bd1e378a27890cbbb7d6e514043a8596b502636f973d87e3f09`，两次运行间未改动）：**
 
 | 模式 | 命令 / exit | 运行目录 | 结果 |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T20-56-22-460Z` | 泳道计数 `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1`（和 8 == 卡片 8）；列表 8 行 / 5 组；milestone `all 8 / backlog 4 / v1.2.0 4`，8→4→8；Issue 由泳道卡片绑定；console 0/0/0；截图 01–08 |
-| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T20-56-33-844Z` | 真实计数 `no-status 0 / todo 27 / in-progress 1 / in-review 1 / done 166`（和 195 == 卡片 195）；列表 195 行 / 4 组；milestone `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，选中后 195→19→195；#240 由泳道卡片绑定并完整加载；console 0/0/0；截图 01–08 + 09 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-18-395Z` | 13 个阶段全 ok；泳道 `1/3/2/1/1`=8；列表 8 行 / 5 组；milestone `all 8 / backlog 4 / v1.2.0 4` 且 8→4→8；**wide：页面 1905px=86.6%，列各 361.8px，8 卡片**；console 0/0/0；截图 01–08 + 11 |
+| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-15-31-437Z` | 14 个阶段全 ok；live 泳道 `0/27/1/1/166`=195；列表 195 行 / 4 组；milestone `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19` 且 195→19→195；**wide：同样几何、195 卡片**；#240 由泳道卡片绑定并完整加载；console 0/0/0；截图 01–09 + 11 |
 
-`artifacts/screenshots/` 中的 01–09 来自上表 real 运行（每次运行会覆盖同名截图；要复跑请串行执行）。
-两个模式均通过全部已执行阶段（fixture 12 个：11 个阶段 + 最后的 console 检查；real 另加 `issue-comments` 共 13 个）；`09-issue-comments.png` 由 `--extra-comments` 产出，属于官方截图集。
-`scripts/e2e/README.md` 的 Current status 是同一批数据的权威记录。
+`artifacts/screenshots/` 中 01–09 与 11 来自上表 real 运行（authoritative set，宽视口在 issue 阶段前
+恢复 1280×800，因此 07–09 仍是标准画幅）；`10-desktop-tabs.png` 为 Desktop 手动截图。
+`09-issue-comments.png` 由 `--extra-comments` 产出，属于官方截图集；`11-projects-wide.png` 是
+2200×1300 的宽窗口回归证据（旧版 1000px 居中列只有 45.5% 宽）。
 
 ### 8.4 截图
 
-最终截图集共 10 张：`01`–`09` 由 e2e harness 产出（1280×800；`09` 需 `--extra-comments` 且属于官方集），
-`10-desktop-tabs.png` 为真实 Desktop 应用的手动现场截图（非 harness 输出，已在 v0.2.0 重装后刷新）。
+最终截图集共 11 张：`01`–`09` 由 e2e harness 产出（1280×800，`09` 需 `--extra-comments`），
+`10-desktop-tabs.png` 为真实 Desktop 应用的手动现场截图，`11-projects-wide.png` 为 harness 在
+**2200×1300** 下采集的宽窗口截图。
 
-| 截图 | 内容 | 可核对点 |
-|---|---|---|
-| `artifacts/screenshots/01-tabs.png` | 会话头部四页签 | 标签小写字面量、位于出厂页签之后 |
-| `artifacts/screenshots/02-projects-empty.png` | `projects` 未绑定空态 | 标题/说明/「选择 Project」、工作区标题与路径 |
-| `artifacts/screenshots/03-projects-picker.png` | Project 选择器 | 覆盖层、按 owner 分组、筛选、手动绑定行 |
-| `artifacts/screenshots/04-projects-board.png` | **默认泳道看板** | 五列顺序与列头计数、卡片（标题/`repo#number`/labels/milestone）、横向布局 |
-| `artifacts/screenshots/05-projects-list.png` | **列表视图** | 分组段与计数、状态 chips、「绑定」按钮 |
-| `artifacts/screenshots/06-projects-milestone.png` | **milestone 过滤** | 下拉打开：`全部 195 / Backlog 172 / v1.1.0 4 / v1.2.0 19`；选中 `v1.2.0` 后列计数收缩为 19/19 |
-| `artifacts/screenshots/07-issue-empty.png` | `issue` 未绑定空态 | 从项目选择、粘贴框与提示 |
-| `artifacts/screenshots/08-issue-detail.png` | 已绑定 Issue 详情 | 吸顶头部、meta、labels、Markdown 正文 |
-| `artifacts/screenshots/09-issue-comments.png` | Issue 评论（官方集的一部分，由 `--extra-comments` 产出） | 吸顶头部仍在、评论作者/「4 天前」相对时间/GitHub 链接 |
-| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 真实安装后的会话头部（手动，v0.2.0 重装后刷新） | 真实会话上出现 `对话 \| 轨迹 \| projects \| issue` 四页签；2560×1370，sha256 `325cb0cae38bd8417ffb650362234999d8c28382732791e0af0fb7718233d5fc` |
+| 截图 | 来源 | 内容 | 可核对点 |
+|---|---|---|---|
+| `artifacts/screenshots/01-tabs.png` | harness @1280 | 会话头部四页签 | 标签小写字面量、位于出厂页签之后 |
+| `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | 标题/说明/「选择 Project」、工作区标题与路径 |
+| `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、按 owner 分组、筛选、手动绑定行 |
+| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板** | 五列顺序与列头计数、卡片、横向布局 |
+| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段与计数、状态 chips、「绑定」按钮 |
+| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 下拉选项与计数、选中态、过滤后的列计数 |
+| `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | 从项目选择、粘贴框与提示 |
+| `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 吸顶头部、meta、labels、Markdown 正文 |
+| `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 吸顶头部仍在、作者/相对时间/GitHub 链接 |
+| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动 | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签 |
+| `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | **全宽布局（v1.1.1）** | 2200×1300 宽窗口：`projects` 页面铺满会话区域（1905px = 窗口 86.6%，旧版 1000px 居中限宽回归已修复）；五列各 361.8px 均分 |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
 ![projects 未绑定空态](../artifacts/screenshots/02-projects-empty.png)
@@ -1197,41 +1229,42 @@ v1.1 阶段（契约 §5）与截图的对应关系：
 ![已绑定 Issue 详情](../artifacts/screenshots/08-issue-detail.png)
 ![Issue 评论区](../artifacts/screenshots/09-issue-comments.png)
 ![Desktop 安装后的会话头部（真实应用）](../artifacts/screenshots/10-desktop-tabs.png)
+![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
 
-> `10-desktop-tabs.png` 是在真实 Desktop 应用上重装 v0.2.0（冻结代码）后手动拍摄的（非 harness 输出，
-> 2560×1370，2026-10-28 04:58）；其余 01–09 为 e2e harness 的 real 模式产出（1280×800）。
-> 04 对应默认泳道五列视图，05 对应列表切换，06 对应 milestone 下拉与过滤。
+> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出）；01–09 为 harness 的
+> 1280×800 产出；`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出（v1.1.1 全宽回归证据，
+> 页面 86.6% 窗口宽 vs 旧版上限 45.5%）。
 
 ### 8.5 安装验证（本机 Desktop profile）
 
-2026-10-28 以 **v0.2.0 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，profile `desktop`）：
-
-| 步骤 | 命令 / 结果 |
-|---|---|
-| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects` |
-| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启（窗口回到工作区首页属正常重组） |
-| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `{"ok":true,"gh":{"version":"gh version 2.96.0 (2026-07-02)","account":"ceasarXuu"}}`（摘要；`available:true`） |
-| 现场验证 | 真实会话「Astropath 品牌 icons 设计」头部出现 `对话 / 轨迹 / projects / issue` → 截图 `10-desktop-tabs.png`（2560×1370，sha256 `325cb0ca…33d5fc`，04:58 刷新） |
-| 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（删除依赖与 bundle 条目，见 7.5） |
+2026-10-28 已在真实 Desktop 环境完成安装与现场验证（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
+profile `desktop`）：安装命令、profile 变化、HMR 重载、`/health` 与回滚方式见 7.2 / 7.5。
+v1.1.1（0.2.1）只改布局 CSS，不改变包结构、宿主半与安装机制，因此安装验证沿用该记录；
+`10-desktop-tabs.png` 是该环境的会话头部手动截图（非 harness 输出）。
 
 ### 8.6 历史基线与未验证项
 
-**v1.1（0.2.0）结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client
-`309f63ac…`）；10 张官方截图齐全（01–09 harness real + 10 Desktop 手动）；真实 Desktop 重装后
-页签与 `/health` 正常。以下为仍未覆盖的范围。
+**v1.1.1（0.2.1）结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client
+`4f41dc9d…`；run dirs `2026-10-27T21-15-18-395Z` / `2026-10-27T21-15-31-437Z`）；`projects-wide`
+在 2200×1300 下证明页面占窗口 86.6%（旧版上限仅 45.5%），五列均分且无居中限宽；11 张官方截图齐全
+（01–09 + 11 harness，10 手动 Desktop）。
 
-**v1（0.1.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS
-（real 运行目录 `/tmp/dsh-github-projects-e2e/2026-10-27T20-16-19-778Z`）；真实 Project #9 / Issue #240
-渲染完整；Desktop profile 安装后 `/health` 200、会话头部出现四页签。v1.1 只扩展浏览器半视图，
-宿主结论沿用；截图编号已按 v1.1 验收集重排，旧文件名不再保留。
+**v1.1（0.2.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS
+（frozen client `309f63ac…`；run dirs `2026-10-27T20-56-22-460Z` / `2026-10-27T20-56-33-844Z`）；
+10 张官方截图齐全（01–09 harness real + 10 Desktop 手动）。v1.1.1 在该版本上只改页面宽度。
 
-未验证项：
+**v1（0.1.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS；
+真实 Project #9 / Issue #240 渲染完整。截图编号已按后续版本重排，旧文件名不再保留。
+
+未验证项（v1.1.1 补齐后复核）：
 
 - 只在 macOS + DSH Desktop 0.2.1-rc.3 + Chrome 156 上验证；Windows、Linux、其他 DSH 版本未测。
 - 只验证了 `gh` 2.96.0；旧版 2.x 的 `--format json` 兼容性未逐一测试。
 - 只验证了 GitHub.com + 单个账号；GitHub Enterprise Server、多账号切换未测。
 - 未做长时间运行/大 Project（数千条目）、弱网、限流风暴等压力场景验证。
-- 泳道看板未做拖拽（设计上只读）；窄窗口横向滚动的视觉细节未单独截图验证。
+- 宽布局只在 e2e 的 2200×1300 与 1280×800 两个视口验证；其它分辨率/缩放比例未逐一验证，
+  窄于约 960px 时的横向滚动只按设计实现、未单独截图。
+- 泳道看板未做拖拽（设计上只读）。
 - 未做无障碍（屏幕阅读器）实测；卡片可键盘点击（Enter/Space）由代码实现，未做真机辅助技术测试。
 - 未在真实 Desktop 中逐项操作泳道切换、milestone 过滤等全部交互；这些路径由 e2e 覆盖。
 
@@ -1246,7 +1279,7 @@ v1.1 阶段（契约 §5）与截图的对应关系：
 - **单 Project**：一个工作区同时只绑定一个 Project。
 - **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
 - **泳道只读**：不支持拖拽卡片改 Status、不支持自定义排序；未知自定义状态只做只读展示（右侧扩展列）。
-- **列宽下限**：泳道列最小宽度 176px，窗口较窄时需要横向滚动整个看板。
+- **列宽与横向滚动**：泳道列最小宽度 176px；宽屏下五列均分可用宽度，窗口窄于约 960px 时整个看板横向滚动。页面本身没有宽度上限（v1.1.1 起）。
 - **milestone 过滤受读取上限约束**：选项与计数只统计已加载条目；超过 `maxProjectItems` 的条目不会出现在
   下拉里，也不会被过滤到。
 - **视图偏好是本地偏好**：来回切换「泳道 / 列表」只影响当前客户端，不写入 profile 绑定文件。

@@ -395,6 +395,14 @@ States: loading skeleton → error (retry) → unbound empty state → bound boa
 - Refresh button sets `refresh=1`; both modes keep previous data while refreshing with a subtle
   indicator; `truncated` shows a footer notice.
 
+- **Layout width (v1.1.1).** The project view fills the conversation body width: the page element has
+  `width: 100%` and **no max-width cap / no centered fixed column**, on any window width. The five
+  lanes share the full available width equally (`flex: 1 1 0` with the 176px min only as a
+  horizontal-scroll floor). This applies to both board and list modes and to the issue view (its
+  page also fills the width). Empty states may centre their copy but the page itself must not gain
+  fixed side margins on wide windows. A wide-window regression is an acceptance failure (e2e
+  `projects-wide` stage).
+
 #### 4.2.1 Test hooks (stable selectors the e2e harness depends on)
 
 These are part of the contract, not incidental markup. Keep them on the named elements.
@@ -481,10 +489,15 @@ Isolated environment, never the user's `~/.dsh` profile or port:
    - `issue-empty` — unbound state; `07-issue-empty.png`;
    - `issue-detail` — bind #240 from the projects view and assert the fully loaded detail;
      `08-issue-detail.png`; optional `issue-comments` → `09-issue-comments.png`;
+   - `projects-wide` — resize the browser viewport to ~2200×1300 (CDP
+     `Emulation.setDeviceMetricsOverride`), keep the bound projects view open in board mode, and
+     assert the projects page fills the conversation body: `.ghp-page` width ≥ 85% of the available
+     body width and no centred max-width column (previously the page was capped at 1000px); five
+     lanes still render left→right and share the width; `11-projects-wide.png`;
    - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
      failures;
    - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
-     captured by the Lead after the final install.
+     captured by the Lead after the final install; `11-projects-wide.png` is harness output.
 6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit
    nonzero on assertion failure. Must be re-runnable (`node scripts/e2e/run.mjs`).
 
@@ -496,8 +509,8 @@ at least one milestone) for the board and filter stages.
 ## 6. Definition of done
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
-- e2e harness exits 0 with screenshots 01–08 (and optional 09) in fixture mode and (once)
-  real-host mode, covering the board, list and milestone-filter stages.
+- e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`, in fixture mode
+  and (once) real-host mode, covering the board, list, milestone-filter and wide-layout stages.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence.

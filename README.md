@@ -1,6 +1,6 @@
 # dsh-github-projects
 
-**v0.2.0** · the GitHub Project and Issue bound to your DSH session, one tab away.
+**v0.2.1** · the GitHub Project and Issue bound to your DSH session, one tab away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
@@ -34,6 +34,17 @@ and the header returns to normal.
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
+## What's new in 0.2.1 (v1.1.1) — full-width layout
+
+- The `projects` page (board **and** list) and the `issue` page now fill the conversation body width:
+  `width: 100%`, **no `max-width` cap**, no centred fixed column. On wide Desktop windows the five
+  lanes share the full available width equally instead of being squeezed into a centred ~1000px
+  column.
+- The 176px lane minimum is only the horizontal-scroll floor for narrow windows (below ~960px); it is
+  not a page width cap. Empty-state copy may keep a readable measure — the page itself is full width.
+- Regression guard: the new e2e `projects-wide` stage asserts at 2200×1300 that the page fills ≥85%
+  of the body width → `artifacts/screenshots/11-projects-wide.png`.
+
 ## What's new in 0.2.0 (v1.1)
 
 - **Swimlane board (default view).** Five fixed status columns left→right: `No status`, `TODO`,
@@ -62,11 +73,14 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | Milestone filter (All / Backlog / milestones) | Unbound session: choose from a Project or paste a link |
 | ![issue detail](artifacts/screenshots/08-issue-detail.png) | ![issue comments](artifacts/screenshots/09-issue-comments.png) |
 | Bound Issue: sticky header, body, labels | Comments with author, relative time and links |
+| ![wide layout](artifacts/screenshots/11-projects-wide.png) | |
+| 2200×1300 wide window: the projects page fills the session area (86.6% of the window; the old 1000px cap would have been 45.5%) | |
 
 Screenshots 01–09 are captured by the isolated e2e harness in **real-host mode** against live `gh`
-(real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`). `10-desktop-tabs.png` is
-different: it is a manual capture of the **real Desktop app** after reinstalling v0.2.0, showing the
-tabs on a live session:
+(real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`). `11-projects-wide.png` is
+harness output at **2200×1300**, proving the full-width layout. `10-desktop-tabs.png` is different: it
+is a manual capture of the **real Desktop app** after reinstalling v0.2.1, showing the tabs on a live
+session:
 
 ![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -231,13 +245,13 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | 0.2.0 (v1.1: swimlane board + milestone filter) |
+| Plugin version | 0.2.1 (v1.1.1: full-width adaptive layout; v1.1: swimlane board + milestone filter) |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v1.1 accepted 2026-10-28: 69/69 host tests; e2e PASS in fixture and real modes (frozen client `309f63ac…`); 10 screenshots incl. the manual Desktop capture — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v1.1.1 (0.2.1) accepted 2026-10-28: 69/69 host tests; e2e PASS in fixture and real modes (frozen client `4f41dc9d…`); `projects-wide` at 2200×1300 shows the page filling 86.6% of the window (old 1000px cap = 45.5%); 11 screenshots incl. manual Desktop capture — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 There is no formal `engines.dsh` gate yet: a DSH upgrade that changes the `conversation.view` slot
 or session standard props may require a plugin update.
@@ -246,9 +260,11 @@ or session standard props may require a plugin update.
 
 - **Read-only.** No writing to GitHub: no status changes, comments, issue creation or field edits.
 - **The board is read-only:** no drag-and-drop between columns, no manual card ordering.
-- **Board layout:** columns have a 176px minimum width, so narrow windows scroll horizontally;
-  a status the board doesn't know gets its own read-only extra column on the right; an empty column
-  keeps its header, a 0 count and a “No items” placeholder.
+- **Board layout:** since 0.2.1 the page has no width cap — board, list and issue pages fill the
+  conversation body. Columns have a 176px minimum width, so windows narrower than ~960px scroll
+  horizontally; wide windows spread the five lanes across the full width. A status the board doesn't
+  know gets its own read-only extra column on the right; an empty column keeps its header, a 0 count
+  and a “No items” placeholder.
 - **Milestone filter scope:** options and counts come from the loaded items only (capped by
   `maxProjectItems`); milestones of items beyond the cap are not listed.
 - **View mode is a local preference:** switching between board and list is remembered per client and

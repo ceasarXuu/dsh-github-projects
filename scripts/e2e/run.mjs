@@ -40,6 +40,7 @@ const STAGES = [
   'projects-board',
   'projects-list',
   'projects-milestone',
+  'projects-wide',
   'issue-empty',
   'issue-detail',
   'issue-comments',
@@ -155,11 +156,12 @@ async function main() {
     '01-tabs.png', '02-projects-empty.png', '03-projects-picker.png',
     '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
-    '10-desktop-tabs.png',
+    '10-desktop-tabs.png', '11-projects-wide.png',
   ])
+  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png'])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
     const numberedStateShot = /^\d\d-.*\.png$/u.test(name) && !EXPECTED_SHOTS.has(name)
-    if (name.startsWith('failure-') || numberedStateShot) {
+    if (name.startsWith('failure-') || numberedStateShot || DERIVED_SHOTS.has(name)) {
       try { rmSync(join(SCREENSHOT_DIR, name), { force: true }) } catch { /* ignore */ }
     }
   }
@@ -441,6 +443,82 @@ async function main() {
         }
       })
       if (milestoneOk === false) throw new Error('projects-milestone stage failed')
+    }
+
+    // ------------------------------------------------------ projects wide --
+    // Wide-window regression (CONTRACT §4.2 "Layout width (v1.1.1)"): the page
+    // must fill the conversation body with no max-width cap. The 1280×800 run
+    // cannot show this — the old bug was nearly invisible there — so the stage
+    // resizes to 2200×1300, measures, shoots, then restores the 1280×800 frame
+    // for the issue stages.
+    if (gated('projects-wide')) {
+      const projectsWideOk = await runStage('projects-wide', async () => {
+        const WIDTH = 2200
+        const HEIGHT = 1300
+        await setViewport(resources.cdp, WIDTH, HEIGHT)
+        // Wait for the ResizeObserver-driven reflow to settle (page width must be
+        // stable across two consecutive samples, not still growing).
+        const wide = await waitForWideLayout(resources.cdp, emitTimeout(20_000))
+        assert(wide.innerWidth === WIDTH, `viewport did not resize (innerWidth=${wide.innerWidth}, expected ${WIDTH})`)
+        assert(wide.hasBoard, 'bound board is not open during projects-wide ([data-ghp-board] missing)')
+        const pagePct = (wide.pageWidth / wide.innerWidth) * 100
+        const leftPct = (wide.pageLeft / wide.innerWidth) * 100
+        assert(
+          wide.pageWidth >= wide.innerWidth * 0.7,
+          `projects page is cramped at ${WIDTH}px: .ghp-page width=${wide.pageWidth}px (${pagePct.toFixed(1)}% of window; old 1000px cap ≈ 45%). ` +
+          'CONTRACT §4.2 Layout width (v1.1.1) requires width:100% with no max-width cap.',
+        )
+        assert(
+          wide.pageLeft < wide.innerWidth * 0.25,
+          `projects page is centred/fixed at ${WIDTH}px: .ghp-page left=${wide.pageLeft}px (${leftPct.toFixed(1)}% of window). ` +
+          'No centred max-width column is allowed.',
+        )
+        const expectedColumns = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
+        assert(
+          expectedColumns.every((key, index) => wide.laneKeys[index] === key),
+          `wide board lane order is wrong: ${JSON.stringify(wide.laneKeys)}`,
+        )
+        assert(wide.cardCount >= 1, 'wide board renders no cards')
+        assert(
+          wide.laneWidthSum >= wide.boardWidth * 0.85,
+          `wide board lanes do not share the board width: laneWidths=${JSON.stringify(wide.laneWidths)} sum=${wide.laneWidthSum} boardWidth=${wide.boardWidth}`,
+        )
+        const laneSpread = Math.max(...wide.laneWidths) - Math.min(...wide.laneWidths)
+        assert(
+          laneSpread <= 12,
+          `wide board lanes are not equal-width (spread=${laneSpread}px, laneWidths=${JSON.stringify(wide.laneWidths)}) — CONTRACT requires flex:1 1 0`,
+        )
+        await settle(400)
+        const screenshot = await shot('11-projects-wide.png')
+        const size = pngDimensions(screenshot)
+        assert(
+          size.width === WIDTH && size.height === HEIGHT,
+          `wide screenshot is ${size.width}x${size.height}, expected ${WIDTH}x${HEIGHT}`,
+        )
+        // Restore the standard frame before the issue stages (07–09).
+        await setViewport(resources.cdp, 1280, 800)
+        assert(
+          (await resources.cdp.evaluate('window.innerWidth')) === 1280,
+          'viewport was not restored to 1280x800 after projects-wide',
+        )
+        await settle(300)
+        return {
+          screenshot,
+          screenshotSize: `${size.width}x${size.height}`,
+          viewport: `${WIDTH}x${HEIGHT}`,
+          pageWidth: wide.pageWidth,
+          pageLeft: wide.pageLeft,
+          pageWidthPct: Number(pagePct.toFixed(1)),
+          pageLeftPct: Number(leftPct.toFixed(1)),
+          boardWidth: wide.boardWidth,
+          laneKeys: wide.laneKeys,
+          laneWidths: wide.laneWidths,
+          laneWidthSum: wide.laneWidthSum,
+          laneSpread,
+          cardCount: wide.cardCount,
+        }
+      })
+      if (projectsWideOk === false) throw new Error('projects-wide stage failed')
     }
 
     // -------------------------------------------------------- issue empty --
@@ -834,6 +912,72 @@ async function openIssueCard(cdp, issueRef) {
     ;(action ?? card).click()
     return true
   })()`)
+}
+
+// ------------------------------------------------- wide-layout (v1.1.1) helpers --
+
+/** Resize the page viewport through CDP and wait for the window to report it. */
+async function setViewport(cdp, width, height) {
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
+  await cdp.waitFor(`window.innerWidth === ${width} && window.innerHeight === ${height}`, {
+    timeoutMs: 15_000,
+    label: `viewport ${width}x${height}`,
+  })
+  await sleep(250)
+}
+
+const WIDE_LAYOUT = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const viewRoot = [...document.querySelectorAll('[data-ghp-view-mode="board"]')].find(vis)
+  const page = viewRoot === undefined ? null : viewRoot.querySelector('.ghp-page')
+  const board = document.querySelector('[data-ghp-board]')
+  const columns = [...document.querySelectorAll('[data-ghp-board] [data-ghp-column]')]
+  const cards = [...document.querySelectorAll('[data-ghp-board] [data-ghp-card]')].filter(vis)
+  const pageRect = page === null ? null : page.getBoundingClientRect()
+  const boardRect = board === null ? null : board.getBoundingClientRect()
+  const laneWidths = columns.map(el => Math.round(el.getBoundingClientRect().width * 10) / 10)
+  return {
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    hasBoard: board !== null,
+    hasPage: page !== null,
+    pageWidth: pageRect === null ? 0 : Math.round(pageRect.width * 10) / 10,
+    pageLeft: pageRect === null ? -1 : Math.round(pageRect.left * 10) / 10,
+    boardWidth: boardRect === null ? 0 : Math.round(boardRect.width * 10) / 10,
+    laneKeys: columns.map(el => el.getAttribute('data-ghp-column')),
+    laneWidths,
+    laneWidthSum: Math.round(laneWidths.reduce((sum, width) => sum + width, 0) * 10) / 10,
+    cardCount: cards.length,
+  }
+})()`
+
+/** Wait for the 2200px reflow to settle (page present and width stable). */
+async function waitForWideLayout(cdp, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let previousWidth = -1
+  let stableTicks = 0
+  let last = null
+  while (Date.now() < deadline) {
+    last = await cdp.evaluate(WIDE_LAYOUT)
+    if (last.hasPage && last.hasBoard && last.pageWidth > 0) {
+      stableTicks = Math.abs(last.pageWidth - previousWidth) < 1 ? stableTicks + 1 : 0
+      previousWidth = last.pageWidth
+      if (stableTicks >= 2) return last
+    } else {
+      stableTicks = 0
+    }
+    await sleep(200)
+  }
+  throw new Error(`wide layout did not settle within ${timeoutMs}ms (last: ${JSON.stringify(last)})`)
+}
+
+/** Actual PNG pixel size, parsed from the IHDR chunk. */
+function pngDimensions(file) {
+  const buffer = readFileSync(file)
+  if (buffer.length < 24 || buffer.toString('ascii', 1, 4) !== 'PNG') {
+    throw new Error(`not a PNG file: ${file}`)
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
 }
 
 await main()
