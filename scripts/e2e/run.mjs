@@ -46,6 +46,7 @@ const STAGES = [
   'issue-bind-subtitle',
   'issue-detail',
   'issue-comments',
+  'sidebar-subtitle',
   'projects-warm',
   'console',
 ]
@@ -117,7 +118,7 @@ Options:
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
-Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-browser-open, 13-issue-subtitle)
+Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-browser-open, 13-issue-subtitle, 14-sidebar-subtitle)
 Temp root: /tmp/dsh-github-projects-e2e/<timestamp>/
 `
 
@@ -165,9 +166,9 @@ async function main() {
     '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
     '10-desktop-tabs.png', '11-projects-wide.png', '12-browser-open.png',
-    '13-issue-subtitle.png',
+    '13-issue-subtitle.png', '14-sidebar-subtitle.png',
   ])
-  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-browser-open.png', '13-issue-subtitle.png'])
+  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-browser-open.png', '13-issue-subtitle.png', '14-sidebar-subtitle.png'])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
     const numberedStateShot = /^\d\d-.*\.png$/u.test(name) && !EXPECTED_SHOTS.has(name)
     if (name.startsWith('failure-') || numberedStateShot || DERIVED_SHOTS.has(name)) {
@@ -752,6 +753,98 @@ async function main() {
       if (commentsOk === false) throw new Error('issue-comments stage failed')
     }
 
+    // ----------------------------------------------------- sidebar subtitle --
+    // v0.4.1 §4.6: the left sidebar session row is decorated from the /bindings
+    // SWR map (poll ≈4 s) once the session has a bound Issue. The stage runs
+    // after the binding is created and waits up to 6 s for the injected row.
+    if (gated('sidebar-subtitle')) {
+      const sidebarOk = await runStage('sidebar-subtitle', async () => {
+        const sidebar = await waitForSidebarSubtitle(resources.cdp, emitTimeout(6_000))
+        assert(sidebar.subtitleCount === 1, `expected exactly one [data-ghp-sidebar-subtitle] in the sidebar, got ${sidebar.subtitleCount}`)
+        assert(sidebar.boundRow !== null, 'sidebar subtitle is not inside a [data-row-key^="session:"] session row')
+        assert(sidebar.chipText.replace(/\s+/gu, '') === '#240', `sidebar subtitle chip is ${JSON.stringify(sidebar.chipText)}, expected "#240"`)
+        assert(sidebar.titleText.length > 0, 'sidebar subtitle title text is empty')
+        assert(
+          sidebar.titleAttr.includes('ceasarXuu/Astropath#240') && sidebar.titleAttr.includes('会话名称丰富化'),
+          `sidebar subtitle title attribute does not carry the full repo#N title: ${JSON.stringify(sidebar.titleAttr.slice(0, 160))}`,
+        )
+        assert(sidebar.rowHeight >= 40, `bound session row is ${sidebar.rowHeight}px high; v0.4.1 requires the two-line row ≥ 40px (shipped single line is 32px)`)
+        assert(sidebar.titleBottom !== null, 'could not measure the session row title for the geometric assertion')
+        assert(
+          sidebar.subtitleTop >= sidebar.titleBottom - 2,
+          `sidebar subtitle (top=${sidebar.subtitleTop}) is not below the row title (bottom=${sidebar.titleBottom})`,
+        )
+        assert(
+          sidebar.subtitleWidth <= sidebar.rowWidth + 1,
+          `sidebar subtitle width (${sidebar.subtitleWidth}) exceeds the row width (${sidebar.rowWidth})`,
+        )
+        assert(
+          sidebar.whiteSpace === 'nowrap' && (sidebar.textOverflow === 'ellipsis' || sidebar.overflowing !== false),
+          `sidebar subtitle title is not a single-line ellipsised row (whiteSpace=${sidebar.whiteSpace}, textOverflow=${sidebar.textOverflow}, overflowing=${sidebar.overflowing})`,
+        )
+        assert(sidebar.otherSessionSubtitles === 0, `unbound session rows contain ${sidebar.otherSessionSubtitles} sidebar subtitle(s)`)
+        assert(sidebar.workspaceSubtitles === 0, `workspace rows contain ${sidebar.workspaceSubtitles} sidebar subtitle(s)`)
+        // Whole-window evidence: sidebar + the open issue view; reset the issue
+        // scrollport so the detail header is visible again after issue-comments.
+        await resources.cdp.evaluate(`(() => {
+          const root = document.querySelector('[class~="ghp-root"]')
+          if (root !== null) root.scrollTop = 0
+          return true
+        })()`)
+        await settle(400)
+        const screenshot = await shot('14-sidebar-subtitle.png')
+        // §4.6 click behavior: clicking the sidebar subtitle opens the Issue page
+        // in the built-in browser and must NOT change the selected session.
+        const selectedBefore = await resources.cdp.evaluate(`(() => {
+          const row = [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')]
+            .find(el => el.getBoundingClientRect().width > 0)
+          return row === undefined ? null : row.getAttribute('data-row-key')
+        })()`)
+        const clickedSubtitle = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const subtitle = [...document.querySelectorAll('[data-ghp-sidebar-subtitle]')].find(vis)
+          if (subtitle === undefined) return false
+          subtitle.click()
+          return true
+        })()`)
+        assert(clickedSubtitle, 'could not click the sidebar session subtitle')
+        const clickBrowser = await waitForSidebarBrowser(resources.cdp, emitTimeout(20_000), 'ceasarXuu/Astropath#240')
+        const selectedAfter = await resources.cdp.evaluate(`(() => {
+          const row = [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')]
+            .find(el => el.getBoundingClientRect().width > 0)
+          return row === undefined ? null : row.getAttribute('data-row-key')
+        })()`)
+        assert(selectedAfter === selectedBefore, `clicking the sidebar subtitle changed the selected session (${JSON.stringify(selectedBefore)} → ${JSON.stringify(selectedAfter)})`)
+        const clickCloseOk = await closeSidebarBrowser(resources.cdp, emitTimeout(15_000))
+        assert(clickCloseOk, 'could not close the built-in browser opened from the sidebar subtitle')
+        const collapsedAfterClick = await collapseRightSidebar(resources.cdp)
+        assert(collapsedAfterClick, 'right sidebar is still expanded after the sidebar-subtitle click check')
+        await settle(200)
+        return {
+          screenshot,
+          clickOpenedBrowser: clickBrowser.src,
+          clickSelectedRowUnchanged: selectedAfter === selectedBefore,
+          selectedRow: selectedBefore,
+          chipText: sidebar.chipText,
+          titleText: clip(sidebar.titleText, 200),
+          titleAttr: clip(sidebar.titleAttr, 300),
+          rowKey: sidebar.boundRow,
+          rowHeight: sidebar.rowHeight,
+          subtitleTop: sidebar.subtitleTop,
+          titleBottom: sidebar.titleBottom,
+          subtitleWidth: sidebar.subtitleWidth,
+          rowWidth: sidebar.rowWidth,
+          whiteSpace: sidebar.whiteSpace,
+          textOverflow: sidebar.textOverflow,
+          overflowing: sidebar.overflowing,
+          sidebarSubtitleCount: sidebar.subtitleCount,
+          unboundSessionRows: sidebar.unboundSessionRows,
+          workspaceRows: sidebar.workspaceRows,
+        }
+      })
+      if (sidebarOk === false) throw new Error('sidebar-subtitle stage failed')
+    }
+
     // ------------------------------------------------------ projects warm --
     // v0.4.0 §3.5: after the first load the projects view is served from the
     // module-level SWR cache — switching back must render the board without a
@@ -855,6 +948,9 @@ async function main() {
         config: {
           responses: configResponses.length,
           ghPending: configPending.length,
+        },
+        bindings: {
+          responses: pluginResponses.filter(entry => /\/plugin\/github-projects\/bindings(?:\?|$)/u.test(entry.url)).length,
         },
       }
     })
@@ -1540,6 +1636,63 @@ const PLUGIN_FETCH_INSTRUMENTATION = `(() => {
 /** Read the plugin API responses recorded by the in-page instrumentation. */
 async function readPluginResponses(cdp) {
   return cdp.evaluate(`window.__dshE2EPluginResponses === undefined ? [] : window.__dshE2EPluginResponses`).catch(() => [])
+}
+
+// ------------------------------------ v0.4.1 sidebar session-row subtitle --
+
+const SIDEBAR_SUBTITLE_SNAPSHOT = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const rowOf = (el) => (el.getAttribute('data-row-key') || '')
+  const rows = [...document.querySelectorAll('[data-row-key]')].filter(vis)
+  const sessionRows = rows.filter(el => rowOf(el).startsWith('session:'))
+  const workspaceRows = rows.filter(el => rowOf(el).startsWith('workspace:'))
+  const subtitles = [...document.querySelectorAll('[data-ghp-sidebar-subtitle]')].filter(vis)
+  if (subtitles.length === 0) return null
+  const subtitle = subtitles[0]
+  const row = subtitle.closest('[data-row-key^="session:"]')
+  const chip = subtitle.querySelector('[data-ghp-sidebar-subtitle-chip]')
+  const title = subtitle.querySelector('[data-ghp-sidebar-subtitle-title]')
+  const style = title === null ? null : getComputedStyle(title)
+  // Shipped first-line row title (class token such as "*_title"); exclude our injected nodes.
+  const titleCandidates = row === null ? [] : [...row.querySelectorAll('span,div')].filter(el => {
+    if (el.closest('[data-ghp-sidebar-subtitle]') !== null) return false
+    if (!vis(el)) return false
+    return [...el.classList].some(cls => /(?:^|_)title$/iu.test(cls))
+  })
+  const rowTitle = titleCandidates.sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0]
+  const rowRect = row === null ? null : row.getBoundingClientRect()
+  const subtitleRect = subtitle.getBoundingClientRect()
+  return {
+    subtitleCount: subtitles.length,
+    boundRow: row === null ? null : rowOf(row),
+    chipText: chip === null ? '' : (chip.innerText || chip.textContent || '').trim(),
+    titleText: title === null ? '' : (title.innerText || title.textContent || '').trim(),
+    titleAttr: title === null ? '' : (title.getAttribute('title') || ''),
+    rowHeight: rowRect === null ? 0 : Math.round(rowRect.height * 10) / 10,
+    rowWidth: rowRect === null ? 0 : Math.round(rowRect.width * 10) / 10,
+    subtitleTop: Math.round(subtitleRect.top * 10) / 10,
+    subtitleWidth: Math.round(subtitleRect.width * 10) / 10,
+    titleBottom: rowTitle === undefined ? null : Math.round(rowTitle.getBoundingClientRect().bottom * 10) / 10,
+    whiteSpace: style === null ? null : style.whiteSpace,
+    textOverflow: style === null ? null : style.textOverflow,
+    overflowing: title === null ? null : title.scrollWidth > title.clientWidth,
+    unboundSessionRows: sessionRows.filter(el => el.querySelector('[data-ghp-sidebar-subtitle]') === null).length,
+    otherSessionSubtitles: sessionRows.filter(el => el !== row && el.querySelector('[data-ghp-sidebar-subtitle]') !== null).length,
+    workspaceRows: workspaceRows.length,
+    workspaceSubtitles: workspaceRows.filter(el => el.querySelector('[data-ghp-sidebar-subtitle]') !== null).length,
+  }
+})()`
+
+/** Wait for the /bindings-poll decorator to inject the sidebar session subtitle. */
+async function waitForSidebarSubtitle(cdp, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await cdp.evaluate(SIDEBAR_SUBTITLE_SNAPSHOT).catch(() => null)
+    if (last !== null && last.subtitleCount >= 1 && last.chipText.length > 0 && last.titleText.length > 0) return last
+    await sleep(150)
+  }
+  throw new Error(`sidebar session subtitle did not appear within ${timeoutMs}ms (last: ${JSON.stringify(last)})`)
 }
 
 await main()

@@ -45,6 +45,14 @@ const ISSUE_SUMMARY = {
   state: 'open',
 }
 
+const SECOND_ISSUE_SUMMARY = {
+  repo: 'ceasarXuu/Astropath',
+  number: 91,
+  title: 'Relay 数据流量统计（账户级）',
+  url: 'https://github.com/ceasarXuu/Astropath/issues/91',
+  state: 'closed',
+}
+
 const sleep = (ms) => new Promise(resolve => { setTimeout(resolve, ms) })
 
 function useApp(t, options) {
@@ -200,6 +208,70 @@ test('GET /config answers instantly while the very first gh probe hangs', async 
   release()
   await sleep(25)
   assert.equal(expectJson(await app.get('/config')).gh.available, true)
+})
+
+/* ------------------------------------------------------------------ */
+/* GET /bindings (v0.4.1 sidebar decoration)                           */
+/* ------------------------------------------------------------------ */
+
+test('GET /bindings returns the empty binding map and never invokes gh', async (t) => {
+  const app = useApp(t)
+  const started = Date.now()
+  const body = expectJson(await app.get('/bindings'))
+  const elapsed = Date.now() - started
+  assert.deepEqual(Object.keys(body).sort(), ['sessions', 'updatedAt'])
+  assert.deepEqual(body.sessions, {})
+  assert.match(body.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
+  assert.ok(Number.isFinite(Date.parse(body.updatedAt)))
+  assert.ok(elapsed < 50, `/bindings took ${String(elapsed)}ms`)
+  // Local store only: not even the cached gh health probe is touched.
+  assert.equal(app.calls.length, 0)
+})
+
+test('GET /bindings returns every bound session with exact IssueSummary fields', async (t) => {
+  const app = useApp(t)
+  await app.post('/bind-issue', { sessionId: 'session-A', workspaceId: 'ws-1', issue: ISSUE_SUMMARY })
+  await app.post('/bind-issue', { sessionId: 'session-B', issue: SECOND_ISSUE_SUMMARY })
+  assert.equal(app.calls.length, 0, 'complete-summary binds must not read gh')
+
+  const body = expectJson(await app.get('/bindings'))
+  assert.deepEqual(body.sessions, {
+    'session-A': ISSUE_SUMMARY,
+    'session-B': SECOND_ISSUE_SUMMARY,
+  })
+  // Only the BindingsResponse keys; no workspace map and no stale field.
+  assert.deepEqual(Object.keys(body.sessions).sort(), ['session-A', 'session-B'])
+  assert.deepEqual(Object.keys(body.sessions['session-A']).sort(), ['number', 'repo', 'state', 'title', 'url'])
+  assert.equal(app.calls.length, 0, '/bindings must never invoke gh')
+})
+
+test('GET /bindings removes unbound sessions and ignores unknown request state', async (t) => {
+  const app = useApp(t)
+  await app.post('/bind-issue', { sessionId: 'session-A', workspaceId: 'ws-1', issue: ISSUE_SUMMARY })
+  await app.post('/bind-issue', { sessionId: 'session-B', issue: SECOND_ISSUE_SUMMARY })
+
+  await app.post('/unbind-issue', { sessionId: 'session-A' })
+  const afterUnbind = expectJson(await app.get('/bindings'))
+  assert.deepEqual(Object.keys(afterUnbind.sessions), ['session-B'])
+
+  // Arbitrary query parameters/ids are irrelevant to this route.
+  const withQuery = expectJson(await app.get('/bindings?sessionId=session-A&workspaceId=nope&refresh=1'))
+  assert.deepEqual(withQuery.sessions, afterUnbind.sessions)
+  assert.equal(app.calls.length, 0)
+})
+
+test('GET /bindings stays cheap and never invokes a hanging gh runner', async (t) => {
+  // Every gh invocation would hang forever; /bindings must not start one.
+  const runner = createRunner(async () => new Promise(() => {}))
+  const app = useApp(t, { runner })
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const started = Date.now()
+    const body = expectJson(await app.get('/bindings'))
+    assert.ok(Date.now() - started < 50, `/bindings blocked ${String(Date.now() - started)}ms`)
+    assert.deepEqual(body.sessions, {})
+  }
+  assert.equal(app.calls.length, 0, 'a hanging gh runner was invoked by /bindings')
+  assert.equal(app.routes.length, 1, 'still the single prefix route (no extra registration)')
 })
 
 /* ------------------------------------------------------------------ */

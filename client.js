@@ -313,6 +313,109 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* 1c. Session→Issue binding map (§4.6): one cheap /bindings poll      */
+    /*     feeds both the header subtitle and the sidebar decorator.       */
+    /* ------------------------------------------------------------------ */
+
+    /** SessionId → IssueSummary for every bound session (local state only). */
+    const sessionIssueBindings = new Map()
+    const bindingMapListeners = new Set()
+    let bindingMapInflight = null
+
+    function issueBindingOf(sessionId) {
+      if (typeof sessionId !== 'string' || sessionId === '') return null
+      const issue = sessionIssueBindings.get(sessionId)
+      return isPlainObject(issue) ? issue : null
+    }
+
+    function sameIssueSummary(left, right) {
+      if (left === null || left === undefined) return right === null || right === undefined
+      if (right === null || right === undefined) return false
+      return left.repo === right.repo
+        && left.number === right.number
+        && left.title === right.title
+        && left.url === right.url
+        && left.state === right.state
+    }
+
+    function notifyBindingMapListeners() {
+      for (const listener of [...bindingMapListeners]) {
+        try { listener() } catch (_listenerFailed) { /* one bad listener must not break the rest */ }
+      }
+    }
+
+    function subscribeBindingMap(listener) {
+      bindingMapListeners.add(listener)
+      return () => { bindingMapListeners.delete(listener) }
+    }
+
+    /** Replace the map from a `/bindings.sessions` object; notify only on change. */
+    function applyBindingsSnapshot(sessions) {
+      const next = new Map()
+      if (isPlainObject(sessions)) {
+        for (const [sessionId, issue] of Object.entries(sessions)) {
+          if (typeof sessionId === 'string' && sessionId !== '' && isPlainObject(issue)) next.set(sessionId, issue)
+        }
+      }
+      let changed = next.size !== sessionIssueBindings.size
+      if (!changed) {
+        for (const [sessionId, issue] of next) {
+          if (!sameIssueSummary(sessionIssueBindings.get(sessionId) ?? null, issue)) {
+            changed = true
+            break
+          }
+        }
+      }
+      sessionIssueBindings.clear()
+      for (const [sessionId, issue] of next) sessionIssueBindings.set(sessionId, issue)
+      if (changed) notifyBindingMapListeners()
+      return changed
+    }
+
+    /** Optimistic local update from our own successful bind/unbind writes. */
+    function setSessionIssueBinding(sessionId, issue) {
+      const next = {}
+      for (const [id, value] of sessionIssueBindings) next[id] = value
+      if (issue === null || issue === undefined) delete next[sessionId]
+      else next[sessionId] = issue
+      applyBindingsSnapshot(next)
+    }
+
+    /** Refresh the binding map from GET /bindings (single-flight, no gh). */
+    function refreshBindingMap() {
+      if (bindingMapInflight !== null) return bindingMapInflight
+      const promise = apiGet('/bindings')
+        .then((data) => {
+          applyBindingsSnapshot(isPlainObject(data) ? data.sessions : null)
+          return sessionIssueBindings
+        })
+        .finally(() => {
+          if (bindingMapInflight === promise) bindingMapInflight = null
+        })
+      bindingMapInflight = promise
+      return promise
+    }
+
+    /** Poll + binding-changed plumbing, owned by the plugin effect in apply(). */
+    function installBindingMap(ctx) {
+      ctx.effect(() => {
+        let stopped = false
+        const tick = () => {
+          if (stopped) return
+          refreshBindingMap().catch(() => { /* keep the last known map */ })
+        }
+        tick()
+        const timer = window.setInterval(tick, SESSION_POLL_MS)
+        const off = onBindingChanged(tick)
+        return () => {
+          stopped = true
+          window.clearInterval(timer)
+          off()
+        }
+      }, 'github-projects: /bindings map')
+    }
+
+    /* ------------------------------------------------------------------ */
     /* 2. Dictionaries — every content string, zh first and en complete.   */
     /* ------------------------------------------------------------------ */
 
@@ -1722,29 +1825,16 @@ window.__ModuleLoader__.load({
       sessionRef.current = sessionId
       const hasIssue = issue !== null
 
-      // Cheap local binding poll (no gh calls) + immediate refresh after our
-      // own bind/unbind writes.
+      // Read the shared session→Issue map (one cheap /bindings poll in apply);
+      // our own writes update the map optimistically and fan out immediately.
       useEffect(() => {
-        let cancelled = false
-        const refresh = () => {
-          const id = sessionRef.current
-          if (cancelled || typeof id !== 'string' || id === '') return
-          apiGet(`/config${queryString({ sessionId: id })}`)
-            .then((data) => {
-              if (cancelled) return
-              const next = isPlainObject(data.session) && isPlainObject(data.session.issue) ? data.session.issue : null
-              setIssue((previous) => (sameBoundIssue(previous, next) ? previous : next))
-            })
-            .catch(() => { /* subtitle degrades silently */ })
+        const sync = () => {
+          const next = issueBindingOf(sessionRef.current)
+          setIssue((previous) => (sameBoundIssue(previous, next) ? previous : next))
         }
-        refresh()
-        const timer = window.setInterval(refresh, SESSION_POLL_MS)
-        const off = onBindingChanged(refresh)
-        return () => {
-          cancelled = true
-          window.clearInterval(timer)
-          off()
-        }
+        sync()
+        const unsubscribe = subscribeBindingMap(sync)
+        return unsubscribe
       }, [sessionId])
 
       // Own a header row: insert after the title row / before the tabs container
@@ -1830,6 +1920,129 @@ window.__ModuleLoader__.load({
         }, textOf(issue.title))),
         host,
       )
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 8b. Sidebar session subtitle decorator (§4.6).                      */
+    /* ------------------------------------------------------------------ */
+
+    function sidebarSubtitleNodeFor(issue) {
+      const node = document.createElement('button')
+      node.type = 'button'
+      node.className = 'ghp-sidebar-subtitle'
+      node.setAttribute('data-ghp-sidebar-subtitle', '')
+      const chip = document.createElement('span')
+      chip.className = 'ghp-sidebar-subtitle-chip'
+      chip.setAttribute('data-ghp-sidebar-subtitle-chip', '')
+      const title = document.createElement('span')
+      title.className = 'ghp-sidebar-subtitle-title'
+      title.setAttribute('data-ghp-sidebar-subtitle-title', '')
+      node.append(chip, title)
+      // Open the Issue in DSH's built-in browser without selecting the session.
+      node.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const current = node.__ghpIssue
+        if (isPlainObject(current)) openGithubUrl(current.url)
+      })
+      node.__ghpIssue = null
+      return node
+    }
+
+    function updateSidebarSubtitleNode(node, issue) {
+      node.__ghpIssue = issue
+      const chip = node.querySelector('[data-ghp-sidebar-subtitle-chip]')
+      const title = node.querySelector('[data-ghp-sidebar-subtitle-title]')
+      const numberText = `#${issue.number}`
+      const titleText = textOf(issue.title)
+      const fullText = `${textOf(issue.repo)}#${issue.number} ${titleText}`.trim()
+      if (chip !== null && chip.textContent !== numberText) chip.textContent = numberText
+      if (title !== null) {
+        if (title.textContent !== titleText) title.textContent = titleText
+        if (title.getAttribute('title') !== fullText) title.setAttribute('title', fullText)
+      }
+      const aria = `${numberText} ${titleText}`.trim()
+      if (node.getAttribute('aria-label') !== aria) node.setAttribute('aria-label', aria)
+    }
+
+    /**
+     * Guarded DOM decorator (the shipped sidebar has no subtitle slot): for every
+     * session row with a binding, ensure exactly one `[data-ghp-sidebar-subtitle]`
+     * child; remove it for unbound sessions. Sweeps are rAF-throttled and driven
+     * by the binding map, a tree MutationObserver and a 1.5s re-ensure interval.
+     */
+    function installSidebarSubtitles(ctx) {
+      ctx.effect(() => {
+        let stopped = false
+        let scheduled = false
+        let observer = null
+        let observedTree = null
+
+        const findTree = () => {
+          const sampleRow = document.querySelector('[data-row-key^="session:"]')
+          if (sampleRow === null) return null
+          const tree = sampleRow.closest('[role="tree"]')
+          if (tree !== null) return tree
+          const parent = sampleRow.parentElement
+          return parent === null ? null : parent.parentElement ?? parent
+        }
+
+        const ensureObserver = () => {
+          if (stopped) return
+          if (observedTree !== null && observedTree.isConnected) return
+          if (observer === null) observer = new MutationObserver(() => schedule())
+          observer.disconnect()
+          observedTree = findTree()
+          if (observedTree !== null) observer.observe(observedTree, { childList: true, subtree: true })
+        }
+
+        const sweep = () => {
+          scheduled = false
+          if (stopped) return
+          ensureObserver()
+          const rows = document.querySelectorAll('[data-row-key^="session:"]')
+          for (const row of rows) {
+            if (!(row instanceof HTMLElement)) continue
+            const rowKey = row.getAttribute('data-row-key') ?? ''
+            if (!rowKey.startsWith('session:')) continue
+            const sessionId = rowKey.slice('session:'.length)
+            const issue = issueBindingOf(sessionId)
+            const existing = row.querySelector(':scope > [data-ghp-sidebar-subtitle]')
+            if (issue === null) {
+              if (existing !== null) existing.remove()
+              continue
+            }
+            if (existing === null) {
+              const node = sidebarSubtitleNodeFor(issue)
+              updateSidebarSubtitleNode(node, issue)
+              row.appendChild(node)
+            } else {
+              updateSidebarSubtitleNode(existing, issue)
+            }
+          }
+        }
+
+        const schedule = () => {
+          if (stopped || scheduled) return
+          scheduled = true
+          window.requestAnimationFrame(sweep)
+        }
+
+        schedule()
+        const timer = window.setInterval(() => { ensureObserver(); schedule() }, 1500)
+        const unsubscribe = subscribeBindingMap(schedule)
+        const offEvent = onBindingChanged(schedule)
+        window.addEventListener('resize', schedule)
+        return () => {
+          stopped = true
+          if (observer !== null) observer.disconnect()
+          window.clearInterval(timer)
+          unsubscribe()
+          offEvent()
+          window.removeEventListener('resize', schedule)
+          for (const node of document.querySelectorAll('[data-ghp-sidebar-subtitle]')) node.remove()
+        }
+      }, 'github-projects: sidebar session subtitles')
     }
 
     /* ------------------------------------------------------------------ */
@@ -2504,6 +2717,7 @@ window.__ModuleLoader__.load({
           if (!mountedRef.current) return
           setProject(null)
           setSessionIssue(null)
+          setSessionIssueBinding(sessionId, null)
           setItemsState({ status: 'idle', data: null, error: null })
           reloadConfig()
           dispatchBindingChanged()
@@ -2532,6 +2746,7 @@ window.__ModuleLoader__.load({
           prefetchIssueDetail(issue)
           if (!mountedRef.current) return
           setSessionIssue(issue)
+          setSessionIssueBinding(sessionId, issue)
           dispatchBindingChanged()
           if (typeof openView === 'function') openView('github-issue', 'bound')
         } catch (error) {
@@ -2917,27 +3132,18 @@ window.__ModuleLoader__.load({
         return () => { cancelled = true }
       }, [sessionId, workspaceId, configTick])
 
+      // Binding changes (our own writes, other tabs, agent tools) arrive through
+      // the shared /bindings map; this view needs no second /config poll.
       useEffect(() => {
         if (typeof sessionId !== 'string' || sessionId === '') return undefined
-        let cancelled = false
-        const refresh = () => {
-          readConfigNow(sessionId, workspaceId)
-            .then((data) => {
-              if (cancelled || !mountedRef.current || !isPlainObject(data)) return
-              setGh(isPlainObject(data.gh) ? data.gh : null)
-              const session = isPlainObject(data.session) ? data.session : null
-              setSummary(session !== null && isPlainObject(session.issue) ? session.issue : null)
-            })
-            .catch(() => { /* polling is best effort */ })
+        const sync = () => {
+          if (!mountedRef.current) return
+          const next = issueBindingOf(sessionId)
+          setSummary((previous) => (sameIssueSummary(previous, next) ? previous : next))
         }
-        const timer = window.setInterval(refresh, SESSION_POLL_MS)
-        const off = onBindingChanged(refresh)
-        return () => {
-          cancelled = true
-          window.clearInterval(timer)
-          off()
-        }
-      }, [sessionId, workspaceId])
+        sync()
+        return subscribeBindingMap(sync)
+      }, [sessionId])
 
       const summaryRepo = summary === null || summary === undefined ? '' : textOf(summary.repo)
       const summaryNumber = summary === null || summary === undefined ? null : summary.number
@@ -3014,6 +3220,7 @@ window.__ModuleLoader__.load({
           if (!mountedRef.current) return
           setSummary(null)
           setDetailState({ status: 'idle', data: null, error: null })
+          setSessionIssueBinding(sessionId, null)
           reloadConfig()
           dispatchBindingChanged()
         } catch (error) {
@@ -3042,6 +3249,7 @@ window.__ModuleLoader__.load({
           setSummary(bound)
           setRefInput('')
           setBindState({ busy: false, error: null })
+          if (bound !== null) setSessionIssueBinding(sessionId, bound)
           setDetailQuery((current) => ({ n: current.n + 1, refresh: false }))
           setConfigTick((value2) => value2 + 1)
           dispatchBindingChanged()
@@ -3210,7 +3418,7 @@ window.__ModuleLoader__.load({
    theme-independent; every tint is derived with color-mix from the active
    DSH theme tokens, so light and dark both resolve correctly.
    ========================================================================== */
-.ghp-root, .ghp-overlay, .ghp-session-subtitle {
+.ghp-root, .ghp-overlay, .ghp-session-subtitle, .ghp-sidebar-subtitle {
   --ghp-accent-no-status: var(--dsw-alias-label-tertiary, #8a8a8a);
   --ghp-accent-todo: var(--dsw-static-blue-500, #3b82f6);
   --ghp-accent-in-progress: var(--dsw-static-amber-500, #f59e0b);
@@ -4312,6 +4520,65 @@ a.ghp-board-card { text-decoration: none; }
   outline-offset: 2px;
 }
 
+/* Sidebar session subtitle (§4.6): a wrapping second line inside the shipped
+   session-tree row. Layout override uses :has so unbound rows keep the 32px row. */
+[data-row-key^="session:"]:has([data-ghp-sidebar-subtitle]) {
+  height: auto;
+  min-height: 32px;
+  flex-wrap: wrap;
+  padding-block: 2px;
+  row-gap: 2px;
+}
+.ghp-sidebar-subtitle {
+  box-sizing: border-box;
+  flex: 0 0 100%;
+  min-width: 0;
+  margin-inline-start: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--dsw-radius-xs, 4px);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #8a8a8a);
+  font: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.ghp-sidebar-subtitle:hover { color: var(--dsw-alias-label-secondary, #a3a3a3); }
+.ghp-sidebar-subtitle:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: 1px;
+}
+.ghp-sidebar-subtitle-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  box-sizing: border-box;
+  height: 14px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 26%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ghp-accent-brand) 14%, transparent);
+  color: var(--ghp-accent-brand);
+  font-size: 10px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ghp-sidebar-subtitle-title {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Session issue subtitle (§4.5): a second, quieter line under the session title. */
 .ghp-session-subtitle {
   box-sizing: border-box;
@@ -4379,6 +4646,8 @@ a.ghp-board-card { text-decoration: none; }
 
     function apply(ctx) {
       bindSidebarRightServices(ctx)
+      installBindingMap(ctx)
+      installSidebarSubtitles(ctx)
 
       ctx.effect(() => {
         const tag = document.createElement('style')

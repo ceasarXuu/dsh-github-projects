@@ -1,11 +1,12 @@
 # dsh-github-projects
 
-**v0.4.0** · the GitHub Project and Issue bound to your DSH session, one tab away.
+**v0.4.1** · the GitHub Project and Issue bound to your DSH session, one tab away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
 filter — and `issue` shows the Issue bound to the **session**, with a one-line **issue subtitle**
-under the session title. Clicking a card opens GitHub in DSH's built-in right-sidebar browser; a
+under the session title in the conversation header **and** under the session row in the left sidebar
+session tree (v0.4.1). Clicking a card opens GitHub in DSH's built-in right-sidebar browser; a
 separate **Bind** action binds the Issue to the session, and the model can do the same through three
 agent tools. Everything is read-only against GitHub — it is a viewing surface, not a writer.
 
@@ -37,6 +38,22 @@ returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
+
+## What's new in 0.4.1 — issue subtitle in the sidebar session tree
+
+- **The subtitle now also appears under every bound session row in the left sidebar** (selected or not,
+  across all workspaces), matching the conversation-header subtitle: a tinted `#N` chip plus the
+  issue title on a second line (single line, ellipsis, full `repo#N title` in the tooltip). The row
+  grows from 32px to ~41px only while it has a subtitle; the first line (status, title, time, pin,
+  actions) is untouched.
+- Clicking the sidebar subtitle opens the Issue in DSH's built-in right-sidebar browser **without
+  changing the selected session**.
+- Binding changes — including agent-tool `bind`/`switch`/`unbind` — are reflected in the sidebar
+  within **≤4 s** through a new local `GET /bindings` endpoint (poll ~4 s + immediate
+  `binding-changed` event), with no `gh` call and no need to reopen the tree.
+- Honest note: the shipped sidebar has no subtitle slot, so the client injects a guarded row via a
+  `[data-row-key^="session:"]` DOM decorator (`:has()` layout override + MutationObserver); if the
+  host DOM changes, the sidebar subtitle degrades to hidden without errors.
 
 ## What's new in 0.4.0 — issue subtitle, agent tools, browser-open and faster reads
 
@@ -123,13 +140,17 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed) | |
 | ![built-in browser](artifacts/screenshots/12-browser-open.png) | ![issue subtitle](artifacts/screenshots/13-issue-subtitle.png) |
 | Clicking an Issue card body opens GitHub in DSH's built-in right-sidebar browser — **no binding** is created. Web build: the iframe is refused by github.com's `X-Frame-Options: DENY` (blank pane, URL still shown); Desktop's Electron webview renders it. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens the built-in browser) |
+| ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | |
+| Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41px); binding changes sync via `/bindings` (~4 s poll + binding event); click opens the built-in browser without changing the selected session | |
 
-Screenshots 01–09, 12 and 13 are captured by the isolated e2e harness in **real-host mode** against
-live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`), refreshed for the
-v0.4.0 features. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
-layout. `10-desktop-tabs.png` is different: it is a manual 1313×790 crop of the **real Desktop app**
-after the v0.4.0 install (sha256 `1f375330…6e38`), showing the session title, the `#240 …` issue
-subtitle row (captured while the session was bound through an agent tool) and the four tabs:
+Screenshots 01–09 and 12–14 are captured by the isolated e2e harness in **real-host mode** against
+live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `13` is the
+conversation-header subtitle and `14` the sidebar session-row subtitle (v0.4.1). `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
+layout. `10-desktop-tabs.png` is different: it is a manual 2560×1370 full-window capture of the **real
+Desktop app** after the v0.4.1 install (sha256 `5347164c…8226`), showing two bound rows in the left
+sidebar with their second-line `#240 [v1.2.0]…` subtitles, the open session's header subtitle, and the
+four tabs. It was captured while the session was bound through an agent tool (the test binding was then
+unbound; the user's own binding remains):
 
 ![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -297,6 +318,28 @@ Layout:
 | `test/` | Host unit tests + captured `gh` fixtures |
 | `artifacts/screenshots/` | e2e acceptance screenshots |
 
+### Local API
+
+The browser half talks to the plugin over a loopback-only JSON API (prefix
+`/plugin/github-projects`; `application/json`, `cache-control: no-store`, errors as
+`{"error":{"code","message"}}`). Ten endpoints:
+
+| Method + path | Purpose |
+|---|---|
+| `GET /health` | `gh` availability |
+| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (never waits on `gh`) |
+| `GET /bindings` | every durable session→Issue binding (local only; polled ~4 s for the sidebar subtitle) |
+| `GET /projects?refresh=1` | accessible Projects, grouped by owner (SWR, `stale` flag) |
+| `GET /items?owner=&number=&refresh=1` | one Project's items (paginated GraphQL, `stale` flag) |
+| `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments (`stale` flag) |
+| `POST /bind-workspace` | bind a Project to a workspace |
+| `POST /unbind-workspace` | clear a workspace binding |
+| `POST /bind-issue` | bind an Issue to a session |
+| `POST /unbind-issue` | clear a session binding |
+
+Only the plugin's own browser half consumes it; POSTs are origin/content-type/size gated, and nothing
+writes to GitHub.
+
 The e2e harness runs in an isolated temp `DSH_HOME` and workspace on its own port — it never touches
 your running profile or the window you're using. See [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md) for the
 Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the frozen interface.
@@ -305,13 +348,13 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | 0.4.0 (issue subtitle, agent tools, built-in-browser click, faster SWR reads; 0.3.0: visual system + hidden `No status` lane; 0.2.x: full-width layout, swimlane board, milestone filter) |
+| Plugin version | 0.4.1 (sidebar session-row subtitle + local `GET /bindings`; 0.4.0: header subtitle, agent tools, built-in-browser click, faster SWR reads; 0.3.0: visual system + hidden `No status` lane) |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v0.4.0 accepted 2026-10-28: 87/87 host tests; e2e PASS in fixture and real modes (17/17 stages each; frozen client `7fa1ef01…`, index `4e025542…`); subtitle/browser-open/SWR verified; agent tools live-verified in the Desktop app (bind/switch/unbind, header subtitle); warm projects re-open 27–72 ms with no skeleton; 13 screenshots — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v0.4.1 accepted 2026-10-28: 91/91 host tests; e2e PASS in fixture and real modes (18/18 stages each; frozen client `e1ae2410…`, index `b52964f7…`); sidebar subtitle verified (row 41px, chip `#240`, click does not change selection); `/bindings` 1–7 ms local; warm re-open 17–56 ms with no skeleton; 14 screenshots — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 There is no formal `engines.dsh` gate yet: a DSH upgrade that changes the `conversation.view` slot
 or session standard props may require a plugin update.
@@ -343,9 +386,14 @@ or session standard props may require a plugin update.
 - **Caps:** up to `maxProjectItems` items (GraphQL pagination stops at the cap) and `maxComments`
   comments (oldest first) per read; there is no client "load more". Long issue bodies are truncated at
   100,000 characters.
-- **Issue subtitle is header-injection fragile:** the shipped header has no subtitle slot, so the
-  plugin inserts a guarded portal row under the title. If a DSH upgrade changes that header DOM, the
-  subtitle degrades to hidden (no errors, nothing else breaks); it needs re-checking on DSH upgrades.
+- **Issue subtitle is host-DOM fragile in two places:** the shipped header has no subtitle slot, so
+  the plugin inserts a guarded portal row under the title; the sidebar has no slot either, so a
+  guarded decorator injects a second line into `[data-row-key^="session:"]` rows (`:has()` height
+  override + MutationObserver). If a DSH upgrade changes either DOM, that subtitle degrades to hidden
+  (no errors, nothing else breaks) and needs re-checking.
+- **Sidebar subtitle updates on a ~4 s poll:** the header/sidebar listen to a local `binding-changed`
+  event for the plugin's own actions, but agent-tool changes may take up to ~4 s to show in the
+  sidebar. Bound rows grow from 32px to ~41px while a subtitle is present; unbound rows stay 32px.
 - **Agent tools only target the current session:** there is no parameter to bind/unbind another
   session. They also need a host with `ctx.tools` and an owning agent; the UI reflects tool changes
   via a cheap local poll (≤4 s), not a push channel.

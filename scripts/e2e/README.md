@@ -34,16 +34,20 @@ The run prints one JSON line per stage: `{"step": "<name>", "ok": true|false, "d
 | 12 | `issue-bind-subtitle` | **v0.4.0**: clicks the explicit `[data-ghp-card-action="bind"]` button on the #240 card (asserts it does **not** open the browser), asserts the client switches to the `issue` view, and that the session header subtitle (§4.5) appears: `[data-ghp-session-subtitle]` with `[data-ghp-subtitle-chip]` text `#240`, non-empty `[data-ghp-subtitle-title]` whose `title` attribute carries the full issue title, inside `header[data-window-drag]`, single-line (`nowrap`/height ≤26px) and ellipsised (`text-overflow: ellipsis` or scrollWidth > clientWidth) | `13-issue-subtitle.png` |
 | 13 | `issue-detail` | already on the bound `issue` view after the bind action; asserts the fully loaded detail (meta line `N 条评论`, markdown body, labels, comments) | `08-issue-detail.png` |
 | opt | `issue-comments` | only with `--extra-comments`: scrolls the issue view to the bottom and shoots the comments | `09-issue-comments.png` |
-| 14 | `projects-warm` | **v0.4.0 §3.5**: switches to `对话` and back to `projects`, measures until the cached `[data-ghp-view-mode="board"]`/`[data-ghp-board]` renders with **no** `[class*="ghp-skeleton"]`; asserts ≤ **1500 ms** and that no cold skeleton was ever rendered (module-level SWR cache hit), and logs the cold duration from `projects-board` (`coldBoardMs`) alongside `warmMs` | — |
-| 15 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed). The only allowlisted error is the documented github.com `X-Frame-Options` iframe refusal (Web-only); the stage also asserts a boolean `stale` on every 2xx `/projects`, `/items`, `/issue` response and logs per-request host timings | — |
+| 14 | `sidebar-subtitle` | **v0.4.1 §4.6**: with the session still bound to #240, waits up to 6 s for the left-sidebar decorator (module-level binding map from `GET /bindings`, SWR poll ≈4 s) to inject the row subtitle: exactly one `[data-ghp-sidebar-subtitle]` inside the bound `[data-row-key^="session:"]` row, `[data-ghp-sidebar-subtitle-chip]` text `#240`, non-empty `[data-ghp-sidebar-subtitle-title]` whose `title` attribute carries the full `repo#N title`; geometry: two-line row ≥ 40px (shipped single line is 32px), subtitle below the row title (`subtitle.top ≥ title.bottom − 2`), subtitle width ≤ row width, single-line `nowrap`+`ellipsis`; other session rows and workspace rows carry no subtitle | `14-sidebar-subtitle.png` (whole window, sidebar + issue view) |
+| 15 | `projects-warm` | **v0.4.0 §3.5**: switches to `对话` and back to `projects`, measures until the cached `[data-ghp-view-mode="board"]`/`[data-ghp-board]` renders with **no** `[class*="ghp-skeleton"]`; asserts ≤ **1500 ms** and that no cold skeleton was ever rendered (module-level SWR cache hit), and logs the cold duration from `projects-board` (`coldBoardMs`) alongside `warmMs` | — |
+| 16 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed). The only allowlisted error is the documented github.com `X-Frame-Options` iframe refusal (Web-only); the stage also asserts a boolean `stale` on every 2xx `/projects`, `/items`, `/issue` response and logs per-request host timings | — |
 
 Screenshots are 1280×800 viewport PNGs written to
 [`artifacts/screenshots/`](../../artifacts/screenshots). Acceptance set:
 **01-tabs, 02-projects-empty, 03-projects-picker, 04-projects-board,
 05-projects-list, 06-projects-milestone, 07-issue-empty, 08-issue-detail,
-11-projects-wide, 12-browser-open, 13-issue-subtitle** — 01–09 at 1280×800
-(09 opt-in), `11` at **2200×1300** (wide layout), `12` is the built-in-browser
-open state, `13` is the session-header issue subtitle.
+11-projects-wide, 12-browser-open, 13-issue-subtitle,
+14-sidebar-subtitle** — 01–09 at 1280×800 (09 opt-in), `11` at **2200×1300**
+(wide layout), `12` is the built-in-browser open state, `13` is the session-header
+issue subtitle, `14` is the left-sidebar session-row subtitle (whole window). The
+sidebar decoration is driven by `GET /bindings` (local state only, SWR poll ≈4 s),
+so the stage waits up to 6 s for the injected row after the bind action.
 Board screenshots reflect the v0.3.0 hidden-empty-No-status rule: fixture mode
 shows five lanes, real Project #9 shows four lanes with
 `data-ghp-hidden-lanes="no-status"`.
@@ -59,7 +63,7 @@ artifact directory matches the current numbering.
 |---|---|
 | `--mode=fixture\|real` | host half under test. `fixture` mounts [`dev/mock-host.js`](../../dev/mock-host.js) (contract-shaped data from `test/fixtures/`, in-memory bindings, **no network, no gh**). `real` mounts [`index.js`](../../index.js) (real `gh`, read-only). Default `fixture`. |
 | `--keep` | keep the temp run directory (`home/`, `workspace/`, `documents/`, `logs/`, `chrome-profile/`). A failing run is kept even without this flag. |
-| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-milestone`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-board`, `projects-browser`, `projects-list`, `projects-milestone`, `projects-wide`, `issue-empty`, `issue-bind-subtitle`, `issue-detail`, `issue-comments`, `projects-warm`, `console`. |
+| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-milestone`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-board`, `projects-browser`, `projects-list`, `projects-milestone`, `projects-wide`, `issue-empty`, `issue-bind-subtitle`, `issue-detail`, `issue-comments`, `sidebar-subtitle`, `projects-warm`, `console`. |
 | `--headful` | run Chrome with a visible window (local debugging; default is `--headless=new`). |
 | `--extra-comments` | also capture `09-issue-comments.png`. |
 | `--timeout-scale=<n>` | multiply every stage timeout (slow machines: `1.5`). Default `1`. |
@@ -177,6 +181,10 @@ allowlisted entry (matched by regex in `run.mjs` → `BENIGN_CONSOLE_ERRORS`) is
   dismisses it (recorded in the `app` stage `dismissed` field).
 - `--mode real` performs only read calls, but rate limits / a temporary GitHub
   failure can still fail a stage; re-run or fall back to `--mode fixture`.
+- The sidebar session-row subtitle is injected by a guarded DOM decorator driven
+  by `GET /bindings` (SWR poll ≈4 s plus an immediate `binding-changed` refresh);
+  the stage waits up to 6 s after a bind. If the sidebar row anchors ever change,
+  the feature degrades to no subtitle (the stage then fails with the last snapshot).
 - The built-in right-sidebar browser is enabled through the overlay only; the
   Web build cannot embed github.com (`X-Frame-Options: DENY`), so screenshot
   `12-browser-open.png` shows the browser tab/address with a refused frame body.
@@ -189,63 +197,62 @@ allowlisted entry (matched by regex in `run.mjs` → `BENIGN_CONSOLE_ERRORS`) is
 - `02-projects-empty.png` includes the isolated temp workspace path by design
   (the empty state documents which workspace is being bound).
 
-## Current status (2026-10-28) — plugin v0.4.0 final acceptance (frozen)
+## Current status (2026-10-28) — plugin v0.4.1 final acceptance (frozen)
 
 Frozen inputs for the authoritative pair:
-`client.js` sha256 `7fa1ef01f4a86969eb6660c8f474f53cdb0ce4cc73fcf1fac878814359102885`,
-`index.js` sha256 `4e025542ee37429123f44d56b21e87b5abb968000fe4a86bb45947a0003d130f`,
-`github.js` sha256 `a4d279f987054142b4537e3ab1122d749ae5c4241f017920f73c9a9a0eb75a5d`,
+`client.js` sha256 `e1ae2410f8e289c563561cdeb7140b7d957dc74975902a9a96ec450e18141879`,
+`index.js` sha256 `b52964f72c27691353b14b15b1cc8f52069879a30deb6f87350a5dd45bc19057`
+(`GET /bindings` added), `github.js` sha256 `a4d279f987054142b4537e3ab1122d749ae5c4241f017920f73c9a9a0eb75a5d`,
 `state.js` sha256 `484af66b19838088453351690b6789a64ad47c33fdf8bc3366ac66a886775304`
-(the host half also ships the three agent tools and GraphQL/SWR reads, covered by
-`node --test test/host/*.mjs`, not by the browser harness).
+(unchanged since v0.4.0).
 
 | Mode | Command | Exit | Run dir |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-06-883Z` |
-| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-20-913Z` |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-08-920Z` |
+| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-24-532Z` |
 
-All 17 stages pass in both modes (boot, app, session, tabs, projects-empty,
+All 18 stages pass in both modes (boot, app, session, tabs, projects-empty,
 projects-picker, projects-board, projects-browser, projects-list,
 projects-milestone, projects-wide, issue-empty, issue-bind-subtitle,
-issue-detail, [issue-comments], projects-warm, console); screenshots in
-`artifacts/screenshots/` are the real-mode authoritative set.
+issue-detail, [issue-comments], sidebar-subtitle, projects-warm, console).
+`artifacts/screenshots/` holds the real-mode authoritative set.
 
-Measured evidence (fixture → real):
-- built-in browser (`projects-browser`): address bar + `[data-sidebar-browser-frame]`
-  iframe both `https://github.com/ceasarXuu/Astropath/issues/240`, dockkit tab
-  `github.com`; no binding created (no subtitle, board still mounted, view-tab row
-  clamped while the right sidebar is open); tab closed via the dockkit context menu
-  and the right sidebar re-collapsed afterwards;
-- session subtitle (`issue-bind-subtitle`): chip `#240`, full
-  `repo#N title` in the `title` attribute, `nowrap`+`ellipsis`, inside
-  `header[data-window-drag]`, its own row above the view tabs
-  (`subtitle.bottom 61 ≤ tabs.top 71`) and left-aligned with the session title
-  (row.x 300 == title.x 300);
-- latency (`projects-warm` / `projects-board`): **cold board 317 ms → 3699 ms**,
-  **warm re-open 27 ms → 72 ms**, `skeletonSeen:false` in both modes (module SWR
-  cache hit; one subtle background spinner allowed). Real-mode host timings logged
-  via CDP for `/config` 0–15 ms, warm `/items` 6–17 ms, `/issue` cold ≈1.2 s; the
-  cold `/items` (2 GraphQL pages) is inside the 3.1–3.7 s range reported by the
-  host owner, so the cold client number is at the contract's ≤3.5 s expectation
-  (3.70 s measured once, logged not asserted);
-- host contract (`console`): every 2xx `/projects`, `/items`, `/issue` response
-  carries a boolean `stale` (fixture `false`; real fresh-window `false`;
-  `stale:true` would be logged not failed); `/config` 200s logged, cold
-  `gh.error:"pending"` is legal and never treated as an error;
-- console: **0 errors / 0 exceptions / 0 warnings** in both modes (the Web-only
-  github.com `X-Frame-Options` iframe refusal is allowlisted but did not surface).
+v0.4.1 evidence (fixture → real):
+- sidebar session-row subtitle (`sidebar-subtitle`): exactly 1
+  `[data-ghp-sidebar-subtitle]` in the bound `session:<id>` row; chip `#240`,
+  full `repo#N title` in the `title` attribute; **row height 41px** (shipped single
+  line is 32), subtitle below the row title (`top 342 ≥ title.bottom 340 − 2`),
+  width 240 ≤ row 256, `nowrap`+`ellipsis` (overflowing), no subtitle on other
+  session/workspace rows; clicking it opened the built-in browser at
+  `https://github.com/ceasarXuu/Astropath/issues/240` **without changing the
+  selected session** (row key identical), then the tab was closed and the sidebar
+  re-collapsed;
+- `/bindings` (host v0.4.1): fixture 5 / real 7 observed responses, all 200 with
+  the `{sessions, updatedAt}` shape at 1–7 ms (local store, no `gh`); it is
+  intentionally excluded from the `stale` filter (it carries no `stale` field);
+- header subtitle (v0.4.0) unchanged: chip `#240`, own row above tabs
+  (`bottom 61 ≤ tabs.top 71`), left-aligned with the session title (x 300);
+- latency: cold board **313 ms → 3497 ms**, warm re-open **17 ms → 56 ms**,
+  `skeletonSeen:false` both modes; real host `/config` 1–16 ms, warm `/items`
+  7–33 ms, `/issue` cold 1.18 s;
+- host contract: boolean `stale` on every 2xx `/projects`, `/items`, `/issue`
+  (4 fixture / 7 real responses, 0 missing, 0 `stale:true`);
+- console: **0 errors / 0 exceptions / 0 warnings** both modes; built-in browser,
+  header subtitle, hidden-lane, milestone, wide-layout and warm assertions all
+  still green.
 
-Final artifact set (`artifacts/screenshots/`):
+Final artifact set (`artifacts/screenshots/`, 14 files):
 
 | File | Source | Size |
 |---|---|---|
 | `01-tabs.png` … `09-issue-comments.png` | harness, authoritative real-host run (09 = `--extra-comments`) | 1280×800 |
 | `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead), never written by the harness | full app window |
-| `11-projects-wide.png` | harness, `projects-wide` (hidden lanes + full width) | 2200×1300 |
-| `12-browser-open.png` | harness, `projects-browser` (right-sidebar browser, address + refused iframe body in Web) | 1280×800 |
-| `13-issue-subtitle.png` | harness, `issue-bind-subtitle` (header subtitle row) | 1280×800 |
+| `11-projects-wide.png` | harness, `projects-wide` | 2200×1300 |
+| `12-browser-open.png` | harness, `projects-browser` | 1280×800 |
+| `13-issue-subtitle.png` | harness, `issue-bind-subtitle` | 1280×800 |
+| `14-sidebar-subtitle.png` | harness, `sidebar-subtitle` (whole window: sidebar row subtitle + issue view) | 1280×800 |
 
-Earlier screenshot numbers from v1.x/v0.2.x/v0.3.0 are removed automatically as
+Earlier screenshot numbers from previous versions are removed automatically as
 stale numbered state shots at the start of every run. Older temp run directories
 under `/tmp/dsh-github-projects-e2e/` are development history and may be deleted.
 

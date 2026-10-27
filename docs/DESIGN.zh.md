@@ -7,12 +7,12 @@
 | 项目 | 值 |
 |---|---|
 | 插件包名 | `@local/dsh-github-projects` |
-| 插件版本 | 0.4.0（会话 Issue 副标题 / Agent 工具 / 内置浏览器打开 / 更快读取；0.3.0：视觉系统 + 空 No status 泳道；0.2.x：全宽 / 泳道 / milestone） |
+| 插件版本 | 0.4.1（侧栏会话行副标题 + `/bindings`；0.4.0：头部副标题 / Agent 工具 / 内置浏览器 / 更快读取；0.3.0：视觉系统 + 空泳道） |
 | 目标宿主 | DeepSeek Harness 0.2.1-rc.3（Desktop 与 `dsh web` 同一套客户端） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
 | 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v0.4.0 验收证据见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v0.4.1 验收证据见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -186,6 +186,20 @@
 | 冷/热延迟 | `/projects` ~3.1s、`/items` ~4.6s | `/projects` ~1.4s、`/items` ~3.4s（冷）；warm 打开 <300ms 且无骨架 |
 | 配置 | 8 个键 | 新增 `staleTtlMs` / `diskCache` / `cacheFile`（共 11 个） |
 
+### 1.10 v0.4.1 变更摘要
+
+用户澄清：Issue 副标题**不仅要出现在会话头部，也要出现在左侧栏（sidebar session tree）的会话行标题下**。
+0.4.1 因此新增：
+
+| 变化 | 0.4.0 | 0.4.1 |
+|---|---|---|
+| 副标题位置 | 仅会话头部标题下 | 会话头部 **+ 左侧栏每个已绑定会话行的标题下**（选中/未选中、所有工作区都显示） |
+| 侧栏行高 | 32px 单行 | 有副标题的行变为两行（实测约 41px，`min-height` 保持 32px）；第一行（状态点/标题/时间/pin/操作）不变 |
+| 侧栏数据源 | 无 | 新增本地只读端点 `GET /bindings`（无需 `gh`）；客户端维护 module 级 binding map，约 4s 轮询 + `binding-changed` 事件，agent 工具改绑后 ≤4s 反映 |
+| 点击语义 | — | 点侧栏副标题在**内置右侧浏览器**打开 Issue，**不改变当前选中的会话** |
+| 宿主接口 | 9 个端点 | 新增 `GET /bindings`（共 10 个）；其余接口不变 |
+| 实现方式 | 头部 portal 注入 | 侧栏无 subtitle slot：客户端用 guarded DOM decorator（扫描 `[data-row-key^="session:"]`、`MutationObserver` + 轮询兜底、`:has` 布局覆盖）；锚点缺失时静默降级为不显示 |
+
 ---
 
 ## 2. 产品设计
@@ -221,6 +235,13 @@ flowchart LR
 ### 2.3 信息架构
 
 ```text
+左侧栏（Sidebar session tree）
+├─ 工作区分组 → 会话行 [data-row-key="session:<id>"]
+│  ├─ 第一行：状态点 · 会话标题 · 时间 · pin · 操作（保持原样）
+│  └─ Issue 副标题（v0.4.1，仅已绑定会话；选中/未选中均显示）
+│     ├─ #N chip + Issue 标题（单行省略，title 属性带全文）
+│     └─ 点击 → 内置右侧浏览器打开（不改变当前选中会话）
+├─ 未绑定会话行：无副标题，行高保持 32px
 会话头部
 ├─ 标题行：会话标题 · 标题右侧为功能入口
 ├─ Issue 副标题（v0.4.0，仅已绑定 Issue 时显示；出厂头部无此 slot，插件通过受控 portal 行注入）
@@ -384,6 +405,9 @@ sequenceDiagram
 | issue | refreshing | 点刷新 | 保留旧数据 + 轻量指示 | — |
 | 会话头部 | subtitle-visible | 会话已绑定 Issue（来自 UI 或 agent 工具） | 标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 全文）；≤4s 内自动出现/更新 | 点击 → 内置浏览器 |
 | 会话头部 | subtitle-hidden | 未绑定 Issue，或会话为空白（头部 chrome 隐藏） | 不显示副标题，不占位、不报错 | — |
+| 侧栏 | sidebar-subtitle-visible | 会话已绑定 Issue（选中/未选中、任意工作区的行） | 行标题下第二行：`#N` chip + 标题（单行省略、tooltip 全文）；行高实测约 41px（≥40px），第一行内容不变 | 点击副标题 → 内置浏览器（不改变选中会话） |
+| 侧栏 | sidebar-subtitle-hidden | 未绑定会话、工作区行、搜索结果行 | 不注入副标题，行高保持 shipped 32px | — |
+| 侧栏 | sidebar-subtitle-updated | agent 工具改绑/解绑、或本插件绑定变化 | module binding map 更新（`GET /bindings` 轮询 ~4s + `binding-changed` 事件），副标题 ≤4s 内出现/更新/移除，无需重开侧栏树 | — |
 | Agent 工具 | tools-idle | 模型未调用 | — | — |
 | Agent 工具 | tool-bound / switched | 模型调用 bind / switch 且成功 | 当前会话绑定写入；副标题 + issue 页签在 ≤4s 内更新 | — |
 
@@ -590,9 +614,12 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
 - 错误提示按错误码映射（见 3.7），不直接展示 `gh` stderr；技术细节保留在控制台/日志侧。
 - 时间使用相对时间（2.6.5），不依赖系统 locale 的绝对时间格式。
 
-### 2.9 会话 Issue 副标题（v0.4.0）
+### 2.9 会话 Issue 副标题：头部与侧栏（v0.4.0 / v0.4.1）
 
-已绑定 Issue 的会话，在会话标题下显示一行副标题，用来"一眼看到这个会话在跟哪个 Issue 干活"。
+已绑定 Issue 的会话在**两处**显示同一份副标题信息：会话头部标题下（v0.4.0）与左侧栏会话行
+标题下（v0.4.1），用来"一眼看到这个会话在跟哪个 Issue 干活"。
+
+#### 2.9.1 会话头部副标题（v0.4.0）
 
 - 布局：`<chip>#N</chip> <Issue 标题>`。chip 为品牌 tint 的小标签（11px/16px、圆角 6px、
   tabular-nums）；标题 12px/18px `label-secondary`，单行 `text-overflow: ellipsis`，`title` 属性
@@ -607,6 +634,32 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
   这是对宿主私有 DOM 的受控依赖，列为已知脆弱点（见第 9 章）。
 - 测试钩子（契约 §4.2.1）：`[data-ghp-session-subtitle]`、`[data-ghp-subtitle-chip]`、
   `[data-ghp-subtitle-title]`（title 属性带全文）。
+
+#### 2.9.2 左侧栏会话行副标题（v0.4.1）
+
+- **出现位置**：左侧栏 session tree 中**每一个已绑定 Issue 的会话行**，无论该行是否被选中、属于哪个
+  工作区；未绑定会话、工作区分组行、搜索结果行都不显示。
+- **布局**：在 shipped 会话行（`[data-row-key="session:<sessionId>"]`，32px 单行 flex）标题下方增加
+  第二行：`#N` chip（品牌 tint，10px/14px、tabular）+ Issue 标题（11px/15px，单行
+  `text-overflow: ellipsis`，`title` 属性为完整 `repo#N title`）。有副标题的行通过
+  `:has([data-ghp-sidebar-subtitle])` 变为换行两行（`height:auto; min-height:32px; flex-wrap:wrap;
+  padding-block:2px`），实际高度约 41px（验收要求 ≥40px）；第一行的状态点、标题、时间、pin 与操作
+  保持原样；副标题缩进与标题对齐（`margin-inline-start:20px`）。
+- **数据与更新**：客户端从新的本地端点 `GET /bindings` 拉取全部会话绑定，维护 module 级 binding map；
+  约 4s 轮询一次，并在插件 `binding-changed` 事件时立即刷新。因此 agent 工具 bind/switch/unbind 后，
+  侧栏副标题在 ≤4s 内出现/更新/移除，无需重新展开侧栏树。`/bindings` 直接读本地 store，不经 SWR、
+  也没有 `stale` 字段，轮询成本很低。
+- **点击**：在 **DSH 内置右侧栏浏览器**打开该 Issue 的 GitHub 页面（`window.open` 兜底），并
+  `stopPropagation` **不改变当前选中的会话**——查看 Issue 不会切换你正在看的对话。
+- **实现（诚实说明）**：shipped 侧栏没有 subtitle slot，客户端用一个受控 DOM decorator：
+  - 扫描 `[data-row-key^="session:"]`，为已绑定会话注入/更新一个副标题元素；
+  - 用 `MutationObserver` 监听侧栏树的重渲染，另有约 1.5 s 的定期 re-ensure 兜底；
+  - 布局用 `:has()` 覆盖行高，不修改宿主组件本身；
+  - 行锚点不存在（宿主结构变化）时静默降级为"不显示侧栏副标题"，绝不抛错、不影响会话行本身的
+    点击与选中。
+  这依赖宿主私有 DOM（行 key 前缀 + 结构），列为已知脆弱点（见第 9 章）。
+- **测试钩子**：`[data-ghp-sidebar-subtitle]`（副标题元素）、`[data-ghp-sidebar-subtitle-chip]`
+  （`#N` chip）、`[data-ghp-sidebar-subtitle-title]`（截断标题，`title` 属性带全文）。
 
 ### 2.10 Agent 工具：会话级 Issue 绑定（v0.4.0）
 
@@ -773,6 +826,7 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
 |---|---|---|
 | `GET /health` | `gh` 可用性 | `{ok, gh: {available, version, account, error}}` |
 | `GET /config?sessionId=&workspaceId=` | 当前绑定 + `gh` 健康快照（见下） | `{gh, workspace: {workspaceId, project}, session: {sessionId, issue, workspaceId}}` |
+| `GET /bindings` (v0.4.1) | 全部会话绑定（侧栏副标题装饰用；纯本地） | `{"sessions":{sessionId:IssueSummary},"updatedAt":ISO}` |
 | `GET /projects?refresh=1` | 可访问的 Project，按 owner 分组 | `{owners, projects, fetchedAt, errors}` |
 | `GET /items?owner=&number=&refresh=1` | 一个 Project 的条目 | `{project, items, fetchedAt, truncated}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | 一个 Issue 详情 + 评论 | `{issue, fetchedAt}` |
@@ -780,6 +834,11 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
 | `POST /unbind-workspace` | 清除工作区绑定 | `{ok}` |
 | `POST /bind-issue` | 把 Issue 绑到会话（`issue` 摘要或 `ref` 二选一） | `{ok, session: {sessionId, issue, workspaceId}}` |
 | `POST /unbind-issue` | 清除会话绑定 | `{ok}` |
+
+`/bindings` 的行为（v0.4.1）：它**纯本地只读、不调用 `gh`**，直接读绑定存储快照，返回当前 profile
+内所有 `sessionId → IssueSummary` 映射与 `updatedAt`；没有 SWR 缓存、也没有 `stale` 字段。客户端用它渲染左侧栏副标题：
+约 4s 轮询一次（SWR），并在 `binding-changed` 事件时立即刷新；这是该端点的唯一用途，不参与页面
+主数据流。
 
 `/config` 的行为（v0.4.0 起）：它**只读本地绑定，永远不等待 `gh`**。响应里的 `gh` 字段是最近
 一次健康快照；冷启动时直接返回占位 `{available:false, version:null, account:null, error:"pending"}`，
@@ -822,7 +881,9 @@ POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 （`data-ghp-view-mode`、`data-ghp-action="view-board|view-list"`、`data-ghp-board`、
 `data-ghp-hidden-lanes`、`data-ghp-column`、`data-ghp-card`、`data-ghp-card-action="open|bind"`、
 `data-ghp-milestone-option`、`data-ghp-session-subtitle`、`data-ghp-subtitle-chip`、
-`data-ghp-subtitle-title` 等）由契约 §4.2.1 固定。
+`data-ghp-subtitle-title`、`data-ghp-sidebar-subtitle`、`data-ghp-sidebar-subtitle-chip`、
+`data-ghp-sidebar-subtitle-title` 等）由契约 §4.2.1/§4.6 固定。v0.4.1 新增的 `GET /bindings`
+只服务侧栏副标题装饰，属于本地端点，不改变页面主数据接口。
 
 #### 3.4.1 Agent 工具注册（v0.4.0）
 
@@ -924,6 +985,32 @@ v0.4.0 起 `/projects` 与 `/items` 的数据来自 GraphQL payload（Issue 详�
   若 REST 响应带 `pull_request` 字段，判定为 PR，以 `issue-not-found`（"这是 Pull Request"）拒绝绑定。
 - 引用解析：`parseIssueRef` 接受 `https://github.com/o/r/issues/n`（含 `http`、尾斜杠、query）、
   `github.com/o/r/issues/n`、`o/r#n`、`o/r n`，返回 `{repo, number}` 或 `null`。
+
+#### 3.5.4 侧栏副标题的数据流（v0.4.1）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 浏览器半（module binding map）
+    participant H as 宿主 /plugin/github-projects
+    participant S as state.json
+    participant D as 侧栏 DOM decorator
+
+    C->>H: GET /bindings（轮询 ~4s / binding-changed 事件后立即）
+    H->>S: 读本地绑定（不调 gh）
+    S-->>H: sessions: {sessionId: IssueSummary}
+    H-->>C: {sessions, updatedAt}
+    C->>C: 更新 module binding map
+    alt map 有绑定 / 绑定变化
+        C->>D: 扫描 [data-row-key^="session:"] 注入/更新副标题
+    else 未绑定 / 已解绑
+        C->>D: 移除对应副标题，行恢复 32px
+    end
+    D-->>D: MutationObserver 在宿主重渲染后再次确保元素存在
+```
+
+关键点：`/bindings` 是纯本地端点，轮询不产生 GitHub 调用；`binding-changed` 事件让本插件自己的
+绑定/解绑立即生效，agent 工具的改绑最迟在下一轮轮询（≤4s）反映到侧栏。
 
 ### 3.6 缓存、SWR、磁盘缓存与延迟（v0.4.0）
 
@@ -1040,10 +1127,10 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 | 文件 | 作用 |
 |---|---|
-| `index.js` | Cordis 宿主插件入口：`resolveConfig`、路由注册、9 个端点、请求门禁、SWR/磁盘缓存与单飞编排、3 个 agent 工具注册 |
+| `index.js` | Cordis 宿主插件入口：`resolveConfig`、路由注册、10 个端点（含 v0.4.1 `GET /bindings`）、请求门禁、SWR/磁盘缓存与单飞编排、3 个 agent 工具注册 |
 | `github.js` | `gh` 适配器：`execFile` 封装与错误分类、GraphQL 查询（Projects、分页 items）、Issue REST 查询、规范化器、`parseIssueRef` |
 | `state.js` | 绑定存储：原子 JSON 写入、串行队列、损坏文件容错、`bind*/unbind*/get*` |
-| `client.js` | 浏览器半：两个视图、slot 注册、locale 字典、CSS、fetch 封装、SWR 缓存、安全 Markdown 渲染、会话副标题 portal、内置浏览器打开 |
+| `client.js` | 浏览器半：两个视图、slot 注册、locale 字典、CSS、fetch 封装、SWR 缓存、安全 Markdown 渲染、会话头部副标题 portal、**侧栏副标题 DOM decorator（v0.4.1）**、内置浏览器打开 |
 | `cordis.patch.yml` | bundle 补丁（宿主行 + 默认配置） |
 | `package.json` | 包声明：`dsh.bundle.patch`、`dsh.client`、脚本 |
 | `icon.svg` | 插件图标（继承 `currentColor`，随主题着色） |
@@ -1420,32 +1507,34 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> 以下为 v0.4.0 的最终验收，冻结输入为：`client.js` sha256
-> `7fa1ef01f4a86969eb6660c8f474f53cdb0ce4cc73fcf1fac878814359102885`、`index.js`
-> `4e025542…d130f`、`github.js` `a4d279f9…75a5d`、`state.js` `484af66b…75304`（2026-10-28）。
-> v0.3.0、v1.1.1、v1.1、v1 的验收记录作为历史基线保留在 8.6。
+> 以下为 v0.4.1 的最终验收，冻结输入为：`client.js` sha256
+> `e1ae2410f8e289c563561cdeb7140b7d957dc74975902a9a96ec450e18141879`、`index.js`
+> `b52964f7…9057`、`github.js` `a4d279f9…75a5d`、`state.js` `484af66b…75304`（2026-10-28）。
+> v0.4.0、v0.3.0、v1.1.1、v1.1、v1 的验收记录作为历史基线保留在 8.6。
 
 ### 8.1 验收清单
 
 | # | 验收项 | 状态 | 证据 |
 |---|---|---|---|
-| A1 | 宿主单元测试通过（含 agent 工具与 GraphQL/SWR 新测试） | ✅ 通过 | `node --test test/host/*.test.mjs`（87 用例）→ **87/87 pass，0 fail** |
-| A2 | e2e fixture 模式 PASS（含新阶段） | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T22-30-06-883Z` |
-| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T22-30-20-913Z` |
+| A1 | 宿主单元测试通过（含 `/bindings` 新测试） | ✅ 通过 | `node --test test/host/*.test.mjs` → **91/91 pass，0 fail**（state 9 / github 31 / plugin 51） |
+| A2 | e2e fixture 模式 PASS（含 `sidebar-subtitle` 新阶段） | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T22-59-08-920Z` |
+| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T22-59-24-532Z` |
 | A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式 console **0 errors / 0 exceptions / 0 warnings** |
-| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`；绑定真实 Project #9 |
-| A6 | **泳道为默认视图**：规范列顺序、隐藏空 No-status、计数一致 | ✅ 通过 | fixture 5 列 `1/3/2/1/1`=8；real 4 列 `27/1/1/166`=195（`data-ghp-hidden-lanes="no-status"`）；截图 `04-projects-board.png` |
-| A7 | **点卡片打开内置右侧浏览器且不产生绑定** | ✅ 通过 | e2e `projects-browser`：地址栏与 `[data-sidebar-browser-frame]` iframe src 均为 `https://github.com/ceasarXuu/Astropath/issues/240`，dockkit tab `github.com`，未创建绑定（无副标题、看板仍在），随后关闭 tab；截图 `12-browser-open.png` |
-| A8 | 「泳道 / 列表」切换、列表行点击=浏览器、行内绑定按钮 | ✅ 通过 | e2e `projects-list`：列表模式渲染与行内「绑定」按钮；截图 `05-projects-list.png` |
-| A9 | **milestone 过滤**：全部 / Backlog / 里程碑、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
+| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker` |
+| A6 | 泳道为默认视图、隐藏空 No-status、计数一致 | ✅ 通过 | fixture 5 列 `1/3/2/1/1`=8；real 4 列 `27/1/1/166`=195（No-status 隐藏）；截图 `04-projects-board.png` |
+| A7 | 点卡片打开内置浏览器且不产生绑定 | ✅ 通过 | e2e `projects-browser`：URL/iframe 正确、未创建绑定、tab 关闭；截图 `12-browser-open.png` |
+| A8 | 泳道/列表切换、列表行点击=浏览器、行内绑定按钮 | ✅ 通过 | e2e `projects-list`；截图 `05-projects-list.png` |
+| A9 | milestone 过滤、计数收缩、失效回退 | ✅ 通过 | real `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
 | A10 | `issue` 空态 | ✅ 通过 | 截图 `07-issue-empty.png` |
-| A11 | **显式绑定 → 会话副标题**：`[data-ghp-session-subtitle]` 出现，chip 为 `#240`，标题非空且 `title` 属性带全文 | ✅ 通过 | e2e `issue-bind-subtitle`：chip `#240`、`title` 属性带完整 `repo#N title`、`nowrap+ellipsis`；副标题自成一行且位于 tabs 之上（bottom 61 ≤ tabs top 71）、与标题左对齐（x 300 == 300）；截图 `13-issue-subtitle.png` |
-| A12 | `issue` 详情 / 评论 | ✅ 通过 | 截图 `08-issue-detail` / `09-issue-comments`；#240 详情完整加载 |
-| A13 | 全宽自适应（v1.1.1 回归）：2200×1300 铺满主体、隐藏泳道规则仍成立 | ✅ 通过 | e2e `projects-wide`：页面 86.6% 窗口宽；fixture 5 列、real 4 列均分；截图 `11-projects-wide.png` |
-| A14 | **warm 打开无骨架**：缓存看板 ≤1500 ms 渲染且无 skeleton，冷/热耗时均记录 | ✅ 通过 | e2e `projects-warm` / `projects-board`：**cold board 317 ms（fixture）→ 3699 ms（real）**，**warm re-open 27 ms → 72 ms**，两模式 `skeletonSeen:false`（模块级 SWR 命中，允许一次轻量后台刷新指示）；real 冷启动 3.70 s 略高于契约 ≤3.5 s 期望，按记录不判失败。宿主 GraphQL 冷启动 `/projects` ~1.05–1.7 s、`/items`（195 卡）~3.1–3.7 s（旧 ~2.8–3.1 / ~5.3–5.4 s）；磁盘缓存跨重启后用缓存响应 ~4 ms |
-| A15 | **Agent 工具**：3 个工具的注册、参数校验、仅当前会话、输出与错误语义 | ✅ 通过 | 宿主单测（87 用例中的 tools/GraphQL/SWR 部分，fake `ctx.tools` + fake `exec.agent.session`）；**并在真实 Desktop 应用里实测**：bind #240 → switch #91 → unbind 三次工具调用返回预期文本，`state.json` 中绑定出现/消失，Desktop 头部在绑定期间显示 `#240 …` 副标题（截图 10） |
-| A16 | 安装进本机 Desktop profile 并现场验证（0.4.0 冻结代码） | ✅ 通过 | v0.4.0 重装进真实 `desktop` profile，`/health` → `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 在重装后刷新（1313×790 裁剪，sha256 `1f375330…6e38`，agent 工具绑定期间拍摄，随后解绑） |
-| A17 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
+| A11 | 显式绑定 → **会话头部**副标题（chip `#240`、title 全文、位置/对齐） | ✅ 通过 | e2e `issue-bind-subtitle`：chip `#240`、title 全文、副标题行在 tabs 之上（bottom 61 ≤ 71）、与标题左对齐（x 300）；截图 `13-issue-subtitle.png` |
+| A12 | `issue` 详情 / 评论 | ✅ 通过 | 截图 `08-issue-detail` / `09-issue-comments` |
+| A13 | 全宽自适应回归（2200×1300 铺满、隐藏泳道规则） | ✅ 通过 | e2e `projects-wide`：页面 86.6% 窗口宽；截图 `11-projects-wide.png` |
+| A14 | warm 打开无骨架（缓存看板 ≤1500 ms）与冷/热耗时记录 | ✅ 通过 | e2e：**cold board 313 ms（fixture）→ 3497 ms（real）**，**warm re-open 17 ms → 56 ms**，`skeletonSeen:false`；宿主 `/config` 1–16 ms、warm `/items` 7–33 ms、cold `/issue` 1.18 s |
+| A15 | Agent 工具：3 个工具注册/语义/仅当前会话（含真实 Desktop 现场验证） | ✅ 通过 | v0.4.0 已在真实 Desktop 应用现场验证 bind/switch/unbind（v0.4.1 未改工具）；v0.4.1 宿主测试继续覆盖 |
+| A16 | 安装进本机 Desktop profile 并现场验证（0.4.1 冻结代码） | ✅ 通过 | v0.4.1 重装进真实 `desktop` profile，`/health` 正常；`10-desktop-tabs.png` 刷新为 2560×1370 全窗口（sha256 `5347164c…8226`），同时展示侧栏两行副标题与会话头部副标题；agent 工具绑定期间拍摄，随后解除测试绑定 |
+| A17 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 install/uninstall 命令与实测一致 |
+| A18 | **侧栏会话行副标题（v0.4.1）**：已绑定会话行标题下出现副标题，chip `#240`、标题非空且 `title` 带全文；副标题在标题下方（`subtitle.top >= title.bottom - 2`）；行高 > shipped 32px（≥40px）；未绑定会话行无副标题 | ✅ 通过 | e2e `sidebar-subtitle`：恰好在绑定的 session 行有 1 个 `[data-ghp-sidebar-subtitle]`，chip `#240`、title 全文、nowrap+ellipsis；**行高 41px**（shipped 32），subtitle top 342 ≥ title.bottom 340−2，width 240 ≤ row 256；其它 session/workspace 行无副标题；点击副标题打开内置浏览器且**不切换选中会话**；截图 `14-sidebar-subtitle.png` |
+| A19 | **`GET /bindings`**：纯本地端点，返回 `{sessions, updatedAt}`，供侧栏副标题 map；不调用 `gh` | ✅ 通过 | e2e 运行期间观察到 fixture 5 / real 7 次 200 响应，1–7 ms，形状为 `{sessions, updatedAt}`；无 `stale` 字段（有意排除在 stale 过滤之外）；宿主单测覆盖 |
 
 ### 8.2 单元测试
 
@@ -1454,11 +1543,10 @@ cd /Volumes/inwolf-4T/projects/dsh-github-projects
 node --test test/host/*.test.mjs
 ```
 
-**结果（2026-10-28，Node v24.18.0）：`tests 87 / pass 87 / fail 0`，exit 0。** v0.4.0 新增的用例覆盖：
-GraphQL 规范化（Projects/items）、SWR（fresh/stale/refresh=1/单飞）、磁盘缓存（持久化、
-`diskCache:false`）、3 个 agent 工具的注册与 bind/switch/unbind 语义。三个文件用例数：
-`state.test.mjs` 9、`github.test.mjs` 31、`plugin.test.mjs` 47；全部离线运行（GraphQL/REST fixtures +
-fake `ctx.tools`/`exec.agent.session`，不联网）。
+**结果（2026-10-28，Node v24.18.0）：`tests 91 / pass 91 / fail 0`，exit 0。** v0.4.1 新增
+`GET /bindings` 端点、binding map/侧栏装饰相关用例；三个文件用例数：`state.test.mjs` 9、
+`github.test.mjs` 31、`plugin.test.mjs` 51；全部离线运行（GraphQL/REST fixtures + fake
+`ctx.tools`/`exec.agent.session`，不联网）。
 
 ### 8.3 e2e
 
@@ -1467,7 +1555,7 @@ node scripts/e2e/run.mjs --mode fixture --keep
 node scripts/e2e/run.mjs --mode real --keep --extra-comments
 ```
 
-v0.4.0 阶段（契约 §5）与截图的对应关系：
+v0.4.1 阶段（契约 §5）与截图的对应关系：
 
 | # | 阶段 | 断言 | 截图 |
 |---|---|---|---|
@@ -1475,55 +1563,54 @@ v0.4.0 阶段（契约 §5）与截图的对应关系：
 | 4 | `tabs` | 四页签 `["对话","轨迹","projects","issue"]` | `01-tabs.png` |
 | 5 | `projects-empty` | `projects` 未绑定空态 | `02-projects-empty.png` |
 | 6 | `projects-picker` | 选择器打开并绑定 `Astropath-issues` #9 | `03-projects-picker.png` |
-| 7 | `projects-board` | 默认泳道、隐藏空 No-status、列计数和 == 卡片数；记录冷启动耗时 | `04-projects-board.png` |
-| 8 | `projects-browser` | 点 Issue 卡片主体 `[data-ghp-card-action="open"]`：DSH 内置右侧浏览器打开（`[data-sidebar-browser-frame]` iframe src 含 `github.com/<repo>/issues/<N>`），且**未创建绑定**；随后关闭浏览器 tab | `12-browser-open.png` |
-| 9 | `projects-list` | 切换列表：`[data-ghp-list]`、分组段渲染；行点击同样走内置浏览器 | `05-projects-list.png` |
-| 10 | `projects-milestone` | milestone 下拉、选中后计数收缩、`data-active` 迁移、重置恢复 | `06-projects-milestone.png` |
+| 7 | `projects-board` | 默认泳道、隐藏空 No-status、列计数一致；记录冷启动耗时 | `04-projects-board.png` |
+| 8 | `projects-browser` | 点卡片主体 → 内置右侧浏览器打开 GitHub（URL/iframe 正确），未创建绑定；关闭 tab | `12-browser-open.png` |
+| 9 | `projects-list` | 切换列表、分组段渲染；行点击同样走内置浏览器 | `05-projects-list.png` |
+| 10 | `projects-milestone` | milestone 下拉、计数收缩、`data-active` 迁移、重置恢复 | `06-projects-milestone.png` |
 | 11 | `projects-wide` | 2200×1300：页面 ≥ body 85%、无居中限宽、隐藏泳道规则与均分宽度 | `11-projects-wide.png` |
 | 12 | `issue-empty` | `issue` 未绑定空态 | `07-issue-empty.png` |
-| 13 | `issue-bind-subtitle` | 在列表/卡片上点「绑定」#240 → 切到 issue 视图 + 会话副标题出现（chip `#240`、标题非空、`title` 属性带全文） | `13-issue-subtitle.png` |
-| 14 | `issue-detail` | 详情完整加载（meta/正文/labels/评论） | `08-issue-detail.png` |
+| 13 | `issue-bind-subtitle` | 点「绑定」#240 → 切到 issue 视图 + 会话头部副标题出现 | `13-issue-subtitle.png` |
+| 14 | `issue-detail` | Issue 详情完整加载 | `08-issue-detail.png` |
 | — | `issue-comments`（官方集包含，用 `--extra-comments` 产出） | 滚动到评论区截图 | `09-issue-comments.png` |
-| 15 | `projects-warm` | 切到对话再切回 `projects`：**缓存看板无骨架、≤1500 ms 内渲染**，并记录实测耗时 | — |
-| 16 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
+| 15 | **`sidebar-subtitle`** | 会话仍绑定 #240 时：左侧栏恰好该会话行含 `[data-ghp-sidebar-subtitle]`，chip 为 `#240`、标题非空；副标题位于标题下方（`subtitle.top >= title.bottom - 2`）；行高 ≥40px（shipped 32px）；未绑定会话行无副标题 | `14-sidebar-subtitle.png` |
+| 16 | `projects-warm` | 切走再切回：缓存看板无骨架、≤1500 ms 渲染并记录耗时 | — |
+| 17 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
 
 > 阶段顺序（契约 §5）：`boot, app, session, tabs, projects-empty, projects-picker, projects-board,
 > projects-browser, projects-list, projects-milestone, projects-wide, issue-empty, issue-bind-subtitle,
-> issue-detail, [issue-comments], projects-warm, console`；**两个模式均 17/17 阶段通过**
-> （`issue-comments` 截图仅由 real 的 `--extra-comments` 产出，不影响阶段通过数）。
+> issue-detail, [issue-comments], sidebar-subtitle, projects-warm, console`；
+> **两个模式均 18/18 阶段通过**。
 
-**最终验收（v0.4.0，2026-10-28，冻结输入见 §8 开头）：**
+**最终验收（v0.4.1，2026-10-28；冻结输入见 §8 开头）：**
 
 | 模式 | 命令 / exit | 运行目录 | 结果 |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-06-883Z` | **17/17 阶段全 ok**；隐藏规则基线 `hidden=""` 5 列 `1/3/2/1/1`=8；内置浏览器打开 #240 且未绑定；副标题断言通过；**cold board 317 ms、warm re-open 27 ms、无 skeleton**；wide 5 列 361.8px/86.6%；console 0/0/0；截图 01–08 + 11–13 |
-| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-20-913Z` | **17/17 阶段全 ok**；real 4 列 `27/1/1/166`=195（`data-ghp-hidden-lanes="no-status"`）；内置浏览器 URL/iframe 正确且未绑定；副标题 chip `#240`、title 全文、位置/对齐断言通过；**cold board 3699 ms（冷启动目标 ≤3.5 s，实测略高、记录不判失败）、warm re-open 72 ms、无 skeleton**；宿主 `/config` 0–15 ms、warm `/items` 6–17 ms、cold `/issue` ≈1.22 s；wide 86.6%；#240 详情完整；console 0/0/0；截图 01–09 + 11–13 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-08-920Z` | **18/18 阶段全 ok**；侧栏副标题：绑定行唯一副标题、chip `#240`、行高 41px、点击打开内置浏览器不切会话；hidden-lane 5 列 `1/3/2/1/1`；`/bindings` 5 次 200 响应 1–7 ms；cold board 313 ms、warm 17 ms 无 skeleton；console 0/0/0；截图 01–08 + 11–14 |
+| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-24-532Z` | **18/18 阶段全 ok**；real 4 列 `27/1/1/166`=195；头部+侧栏副标题断言通过；`/bindings` 7 次 200 响应 1–7 ms；cold board 3497 ms、warm 56 ms 无 skeleton；宿主 `/config` 1–16 ms、warm `/items` 7–33 ms、cold `/issue` 1.18 s；console 0/0/0；截图 01–09 + 11–14 |
 
-`artifacts/screenshots/` 中 01–09、11–13 来自 real 运行；`10-desktop-tabs.png` 为 Desktop 手动截图。
-`09-issue-comments.png` 由 `--extra-comments` 产出；`11-projects-wide.png` 为 2200×1300 宽窗口证据；
-`12-browser-open.png` 证明内置浏览器打开；`13-issue-subtitle.png` 证明会话副标题。
+`artifacts/screenshots/` 中 01–09、11–14 来自 real 运行；`10-desktop-tabs.png` 为 Desktop 手动截图。
 
 ### 8.4 截图
 
-最终截图集共 13 张：`01`–`09` 由 e2e harness 产出（1280×800），`10-desktop-tabs.png` 为真实 Desktop
-应用手动截图，`11-projects-wide.png` 为 2200×1300 宽窗口截图，`12-browser-open.png` 与
-`13-issue-subtitle.png` 为 1280×800 的新功能证据。
+最终截图集共 14 张（v0.4.1）：`01`–`09` 与 `11`–`14` 由 e2e harness 产出（`01`–`09`、`12`–`14`
+为 1280×800；`11` 为 2200×1300），`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（2560×1370 全窗口，v0.4.1 重装后刷新）。
 
 | 截图 | 来源 | 内容 | 可核对点 |
 |---|---|---|---|
-| `artifacts/screenshots/01-tabs.png` | harness @1280 | 会话头部四页签 | 标签小写字面量、位于出厂页签之后 |
+| `artifacts/screenshots/01-tabs.png` | harness @1280 | 会话头部四页签 | 标签小写字面量 |
 | `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | tint 图标块、单一主操作 |
-| `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、owner 分组、筛选、手动绑定行 |
-| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板** | 状态色、隐藏空 No-status、真实 #9 四泳道 195 卡 |
-| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段、状态 chips、行内「绑定」按钮 |
-| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 下拉选项、选中态、过滤后计数 |
+| `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、owner 分组、手动绑定行 |
+| `artifacts/screenshots/04-projects-board.png` | harness @1280 | 默认泳道看板 | 状态色、隐藏空 No-status、真实 #9 四泳道 195 卡 |
+| `artifacts/screenshots/05-projects-list.png` | harness @1280 | 列表视图 | 分组段、状态 chips、行内「绑定」按钮 |
+| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | milestone 过滤 | 下拉选项、选中态、过滤后计数 |
 | `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | 从项目选择、粘贴框 |
 | `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 吸顶头部、labels、Markdown 正文 |
 | `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 作者/相对时间/GitHub 链接 |
-| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动（v0.4.0 重装后） | 真实 Desktop 会话头部 | 1313×790 裁剪；会话标题 + `#240 …` Issue 副标题行 + `对话 \| 轨迹 \| projects \| issue` 页签；sha256 `1f375330d953f1ba671e0e346b4f76ca116d9027dedf3239893bc5ff4ef36e38`；在 agent 工具绑定期间拍摄（随后解绑） |
+| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动（v0.4.1 重装后） | 真实 Desktop 应用窗口 | 2560×1370 全窗口；左侧栏两个已绑定会话行（「Session 未读状态设计」「插件绑定 GitHub Projects 与 Issue」）各显示第二行 `#240 [v1.2.0]…` 副标题，打开的会话头部也在标题下显示同一副标题；sha256 `5347164c…8226`。在 agent 工具绑定期间拍摄（测试绑定随后解绑，用户自己的绑定保留） |
 | `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | 全宽布局 | 页面铺满会话区域、状态色泳道均分 |
-| `artifacts/screenshots/12-browser-open.png` | harness @1280 | **点击 Issue 卡片正文 → 内置右侧浏览器** | dockkit tab `github.com`、地址栏与 iframe src 均为 `https://github.com/ceasarXuu/Astropath/issues/240`；**未创建绑定**（卡片仍显示「绑定」）。注意 Web 版内置浏览器是 iframe，github.com 的 `X-Frame-Options: DENY` 会拒绝内嵌（截图为空白 pane）；Desktop 版用 Electron webview 正常渲染。绑定请用卡片上的「绑定」按钮 |
-| `artifacts/screenshots/13-issue-subtitle.png` | harness @1280 | **会话 Issue 副标题** | 会话标题下第二行显示 `#240` chip + Issue 标题（单行省略、tooltip 带完整 `repo#N title`），第三行才是视图 tabs；副标题行位于 tabs 之上（bottom 61 ≤ tabs top 71）且与标题左对齐（x 300 == 300）；点击可打开内置浏览器 |
+| `artifacts/screenshots/12-browser-open.png` | harness @1280 | 点卡片 → 内置右侧浏览器 | 右侧 browser tab 打开 GitHub URL，未创建绑定（Web 版 X-Frame-Options 限制见说明） |
+| `artifacts/screenshots/13-issue-subtitle.png` | harness @1280 | **会话头部副标题** | `#240` chip + Issue 标题（单行省略，tooltip 全文） |
+| `artifacts/screenshots/14-sidebar-subtitle.png` | harness @1280 | **左侧栏会话行副标题（v0.4.1）** | 选中会话行第二行 `#240` chip + 标题（单行省略、tooltip 全文）；行高 32→41px；绑定变化经 `GET /bindings` 约 4s 轮询/绑定事件同步；点击副标题在内置浏览器打开 Issue 且不切换当前会话；未绑定行/工作区行无副标题 |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
 ![projects 未绑定空态](../artifacts/screenshots/02-projects-empty.png)
@@ -1538,64 +1625,73 @@ v0.4.0 阶段（契约 §5）与截图的对应关系：
 ![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
 ![卡片点击在内置右侧浏览器打开 GitHub](../artifacts/screenshots/12-browser-open.png)
 ![会话 Issue 副标题](../artifacts/screenshots/13-issue-subtitle.png)
+![左侧栏会话行的 Issue 副标题](../artifacts/screenshots/14-sidebar-subtitle.png)
 
-> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，Lead 维护，v0.4.0 重装后刷新为
-> 1313×790 裁剪，sha256 `1f375330…`）；01–09、12、13 为 harness 的 1280×800 产出，
-> `11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出。`12` 的空白 iframe 是 Web 版
-> X-Frame-Options 限制所致，不是打开失败（Desktop 版用 Electron `<webview>` 正常渲染）。
+> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，Lead 维护，v0.4.1 重装后刷新为
+> 2560×1370 全窗口，sha256 `5347164c…`）；01–09、12–14 为 harness 的 1280×800 产出，
+> `11-projects-wide.png` 为 2200×1300 宽窗口产出。
+> `12` 的空白 iframe 是 Web 版 X-Frame-Options 限制所致，不是打开失败（Desktop 版 webview 正常）。
+> `14`（v0.4.1）：会话树中的 session 行显示已绑定 Issue 的副标题（`#240` + 标题，单行省略）；
+> 绑定变化通过 `GET /bindings` 约 4s 轮询/`binding-changed` 事件同步；点击副标题在内置浏览器打开
+> 该 Issue，不切换当前会话。
 
 ### 8.5 安装验证（本机 Desktop profile）
 
-2026-10-28 以 **v0.4.0 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
+2026-10-28 以 **v0.4.1 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
 profile `desktop`）：
 
 | 步骤 | 命令 / 结果 |
 |---|---|
-| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`（与 7.2 一致） |
+| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`（见 7.2） |
 | profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启 |
-| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `{"ok":true,"gh":{"version":"gh version 2.96.0 (2026-07-02)","account":"ceasarXuu"}}` |
-| Agent 工具现场验证 | 在真实会话中由模型调用 `github_issue_bind`（#240）→ `github_issue_switch`（#91）→ `github_issue_unbind`，渲染结果与 `output.render` 文本一致，`state.json` 中绑定出现/消失，Desktop 头部在绑定期间显示 `#240 …` 副标题 |
-| 现场截图 | `10-desktop-tabs.png`（1313×790 裁剪，sha256 `1f375330…6e38`，重装后刷新，绑定期间拍摄） |
+| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `gh 2.96.0 / ceasarXuu` |
+| 现场验证 | 左侧栏两个已绑定会话行显示第二行 `#240 [v1.2.0]…` 副标题，打开的会话头部也显示同一副标题；`10-desktop-tabs.png`（2560×1370 全窗口，sha256 `5347164c…8226`）在 agent 工具绑定期间拍摄，随后解除测试绑定（用户自己的绑定保留） |
 | 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（见 7.5） |
 
 ### 8.6 历史基线与未验证项
 
-**v0.4.0 结论**：宿主测试 **87/87**；fixture 与 real 两个 e2e 模式均 17/17 阶段 PASS（冻结输入
-client `7fa1ef01…` / index `4e025542…` / github `a4d279f9…` / state `484af66b…`；run dirs
-`2026-10-27T22-30-06-883Z` / `2026-10-27T22-30-20-913Z`）；会话副标题、内置浏览器打开（不绑定）、
-warm 打开无骨架（27/72 ms）、real 隐藏空 No-status（4 列 195 卡）、wide 86.6%、console 0/0/0 均已
-验证；**3 个 agent 工具在真实 Desktop 应用里现场跑通**（bind/switch/unbind + state.json + 头部副标题），
-`10-desktop-tabs.png` 已按 v0.4.0 重装刷新；13 张截图齐全。冷启动 real 看板 3.70 s 略高于 3.5 s
-目标（记录、不判失败）。
+**v0.4.1 结论**：宿主测试 **91/91**；fixture 与 real 两个 e2e 模式均 **18/18 阶段 PASS**（冻结输入
+client `e1ae2410…` / index `b52964f7…`；run dirs `2026-10-27T22-59-08-920Z` /
+`2026-10-27T22-59-24-532Z`）；侧栏会话行副标题实测（行高 41px、chip `#240`、唯一注入、点击不切换
+会话）、`GET /bindings`（1–7 ms、`{sessions, updatedAt}`、无 `stale`）、warm 17/56 ms 无骨架、
+console 0/0/0 均验证；14 张截图齐全（01–09 + 11–14 为 real 模式权威集，10 为 v0.4.1 重装后刷新
+的 Desktop 全窗口截图）。
+
+**v0.4.0 验收基线（2026-10-28）**：宿主测试 87/87；fixture 与 real 均 17/17 阶段 PASS（冻结输入
+client `7fa1ef01…` / index `4e025542…` / github `a4d279f9…` / state `484af66b…`）；头部副标题、
+内置浏览器打开（不绑定）、warm 27/72 ms 无骨架、隐藏空 No-status、wide 86.6%、console 0/0/0；
+agent 工具在真实 Desktop 现场跑通；13 张截图。
 
 **v0.3.0 验收基线（2026-10-28）**：视觉系统 + 空 No-status 泳道隐藏；宿主测试 69/69；fixture/real
-e2e 均 PASS（frozen client `813dae78…`）；11 张截图；real #9 `data-ghp-hidden-lanes="no-status"`、
-4 条泳道 195 卡。
+PASS（frozen client `813dae78…`）；11 张截图。
 
 **v1.1.1（0.2.1）验收基线（2026-10-28）**：全宽布局；宿主测试 69/69；fixture/real PASS；
-`projects-wide` 2200×1300 页面 86.6%（旧上限 45.5%）；11 张截图。
+`projects-wide` 2200×1300 页面 86.6%；11 张截图。
 
 **v1.1（0.2.0）/ v1（0.1.0）**：泳道看板 + milestone 过滤 / 最初的分组列表 + Issue 详情；均通过
 fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保留。
 
-未验证项（v0.4.0 补齐后复核）：
+未验证项（v0.4.1 补齐后复核）：
 
 - 只在 macOS + DSH Desktop 0.2.1-rc.3 + Chrome 156 上验证；Windows、Linux、其他 DSH 版本未测。
 - 只验证了 `gh` 2.96.0；旧版 2.x 的 GraphQL/REST 兼容性未逐一测试。
 - 只验证了 GitHub.com + 单个账号；GitHub Enterprise Server、多账号切换未测。
-- **会话副标题依赖宿主私有 header DOM**：只在当前 DSH 版本验证；宿主升级若改变
-  `header[data-window-drag]` 结构，副标题会降级隐藏（不影响主功能），需要随版本复核。
-- **Agent 工具的模型侧行为**只在宿主单测（fake `ctx.tools`/`exec.agent.session`）验证，未做真实模型
-  端到端调用；工具后 UI 在 ≤4s 内更新由本地轮询保证，非实时推送。
-- **内置浏览器打开**依赖 DSH 右侧栏 browser tab；Web 版是 iframe，github.com 的
-  `X-Frame-Options: DENY` 会拒绝内嵌（Desktop Electron webview 正常渲染）；回退 `window.open` 的
-  体验未单独截图验证。
+- **会话副标题依赖宿主私有 DOM（两处）**：头部 portal 依赖 `header[data-window-drag]`；侧栏
+  decorator 依赖 `[data-row-key^="session:"]` 行锚点、`:has()` 覆盖与 `MutationObserver`。
+  宿主升级若改变结构，两处都会降级为不显示（不报错），需要随版本复核。
+- **侧栏副标题更新有 ≤4s 轮询延迟**：不是推送；本插件自己的绑定/解绑由 `binding-changed` 事件立即
+  触发，agent 工具改绑最迟下一轮轮询反映。
+- **侧栏行高变化**：有副标题的会话行实测约 41px、无副标题仍 32px；极窄侧栏下标题截断行为未单独截图。
+- **Agent 工具的模型侧行为**在真实 Desktop 现场验证过 bind/switch/unbind，但未做跨模型/
+  跨 DSH 版本的矩阵验证；工具需要宿主提供 `ctx.tools` 与 owning agent。
+- **内置浏览器**依赖 DSH 右侧栏 browser tab；Web 版 iframe 受 github.com `X-Frame-Options: DENY`
+  限制（Desktop Electron webview 正常）。
 - **GraphQL 分页/缓存**：`/items` 只取到 `maxProjectItems`（默认 200）即停；`staleTtlMs`（10 min）
-  内可能先显示旧数据；磁盘缓存跨重启保留读取结果。均按设计记录在 §3.6/§9。
-- **延迟数字是参考值**：/projects ~1.4 s、/items 冷 ~3.4 s、warm 打开 <300 ms 等数字来自本机实测，
-  会随网络、项目大小、`gh` 版本变化；real 冷启动看板本次实测 3.70 s（记录值，未断言 ≤3.5 s）。
+  内可能先显示旧数据；磁盘缓存跨重启保留读取结果。
+- **延迟数字是参考值**：/projects /items /warm 等数字来自本机实测，随网络、项目大小、`gh` 版本变化；
+  real 冷启动看板 3.70 s（记录值，未断言 ≤3.5 s）。
 - 未做长时间运行/大 Project（数千条目）、弱网、限流风暴等压力场景验证。
-- 未做无障碍（屏幕阅读器）实测；颜色/副标题等按规范实现，未做真机辅助技术测试。
+- 未做无障碍（屏幕阅读器）实测。
 
 ---
 
@@ -1607,9 +1703,11 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 - **只处理 Issue，不处理 PR 详情**：PR/Draft 条目只能跳转 GitHub。
 - **单 Project**：一个工作区同时只绑定一个 Project。
 - **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
-- **会话副标题依赖宿主私有头部 DOM**：出厂头部没有 subtitle slot，插件用受控 portal 在
-  `header[data-window-drag]` 内插入并守卫副标题行；宿主结构变化时功能会**降级为不显示**（不报错、
-  不影响会话），需要随 DSH 升级复核。
+- **会话副标题依赖宿主私有 DOM（两处）**：出厂头部没有 subtitle slot，插件用受控 portal 在
+  `header[data-window-drag]` 内插入并守卫副标题行；左侧栏同样没有 subtitle slot，插件用受控
+  DOM decorator（`[data-row-key^="session:"]` 行锚点 + `:has()` 行高覆盖 + `MutationObserver`
+  扫描/轮询兜底）注入第二行。宿主结构变化时两者都会**降级为不显示**（不报错、不影响会话），
+  需要随 DSH 升级复核。
 - **Agent 工具只作用于当前会话**：没有目标会话参数，不能给其它会话绑定/解绑；工具写入后客户端靠
   本地轮询在 ≤4s 内反映，不是实时推送。
 - **内置浏览器**：卡片/行点击通过 DSH 右侧栏 browser tab 打开 GitHub；宿主没有该能力时回退
@@ -1695,6 +1793,7 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 ```text
 GET  /plugin/github-projects/health
 GET  /plugin/github-projects/config?sessionId=&workspaceId=
+GET  /plugin/github-projects/bindings
 GET  /plugin/github-projects/projects?refresh=1
 GET  /plugin/github-projects/items?owner=&number=&refresh=1
 GET  /plugin/github-projects/issue?repo=owner/name&number=N&refresh=1

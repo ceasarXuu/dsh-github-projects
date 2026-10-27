@@ -213,6 +213,11 @@ async function handle(req, res, config) {
   if (req.method === 'GET' && route === '/config') {
     return send(res, 200, configFor(sessionId, workspaceId))
   }
+  if (req.method === 'GET' && route === '/bindings') {
+    const sessions = {}
+    for (const [id, binding] of sessionBindings.entries()) sessions[id] = binding.issue
+    return send(res, 200, { sessions, updatedAt: new Date().toISOString() })
+  }
   if (req.method === 'GET' && route === '/projects') {
     await delay(180)
     return send(res, 200, {
