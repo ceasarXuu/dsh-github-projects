@@ -338,6 +338,8 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
   出现横向滚动），不是页面宽度上限。页面内边距为 `24px 32px 28px`（窄于 760px 时降为 `16px`），
   空态说明文字等 copy 元素保留自身的可读宽度（如 470px），但页面容器本身不再限宽。
   0.2.0 的 1000px 居中列是回归缺陷；e2e `projects-wide`（2200×1300）断言页面宽度 ≥ 可用 body 宽度的 85%。
+  注意：**DSH 自身的输入框（composer）仍遵循宿主 shell 的居中宽度**——本次修复只让插件页面铺满
+  会话主体，不会也不应该改变宿主既有布局。
 - **只读**：不支持拖拽卡片改状态、不支持自定义排序，也不会写回 GitHub。
 - 卡片内容：标题（最多 2 行，超出省略）、`repo#number`、labels（最多 2 个，其余 `+N`）、
   milestone chip；当前会话已绑定的 Issue 带「已绑定」徽章。
@@ -1144,7 +1146,7 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 | A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：fixture 8 行 / 5 组，real 195 行 / 4 组；截图 `05-projects-list.png` |
 | A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real 选项 `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
 | A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；#240 由泳道卡片绑定并完整加载 |
-| A10 | 安装进本机 Desktop profile 并现场验证 | ✅ 通过（沿用安装验证） | 2026-10-28 已安装并在真实会话验证；0.2.1 为纯布局 CSS 修复，安装方式/宿主面未变；`10-desktop-tabs.png` 为 Desktop 手动截图（非 harness） |
+| A10 | 安装进本机 Desktop profile 并现场验证（0.2.1 冻结代码） | ✅ 通过 | 0.2.1 重装进真实 `desktop` profile；`/health` → `gh 2.96.0 / ceasarXuu`；真实会话头部四页签；`10-desktop-tabs.png` 重拍（2560×1370，sha256 `2dd32a77…5c42`，手动 Desktop 截图） |
 | A11 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
 | A12 | **全宽自适应（v1.1.1 修复）**：2200×1300 窗口下 `projects` 页面铺满主体宽度，无居中限宽列，五列均分 | ✅ 通过 | e2e `projects-wide`：页面 1905px = 窗口 86.6%（旧 1000px 上限仅 45.5%），左偏移 280px=12.7%，五列各 361.8px（spread 0），列宽和占 board 98.3%；截图 `11-projects-wide.png` |
 
@@ -1216,7 +1218,7 @@ v1.1.1 阶段（契约 §5）与截图的对应关系：
 | `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | 从项目选择、粘贴框与提示 |
 | `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 吸顶头部、meta、labels、Markdown 正文 |
 | `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 吸顶头部仍在、作者/相对时间/GitHub 链接 |
-| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动 | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签 |
+| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动（v0.2.1 重装后） | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签；2560×1370，sha256 `2dd32a77ec800497c0472ac3f2454445db5e9abfdb49089542db22e9469b5c42` |
 | `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | **全宽布局（v1.1.1）** | 2200×1300 宽窗口：`projects` 页面铺满会话区域（1905px = 窗口 86.6%，旧版 1000px 居中限宽回归已修复）；五列各 361.8px 均分 |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
@@ -1231,23 +1233,30 @@ v1.1.1 阶段（契约 §5）与截图的对应关系：
 ![Desktop 安装后的会话头部（真实应用）](../artifacts/screenshots/10-desktop-tabs.png)
 ![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
 
-> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出）；01–09 为 harness 的
-> 1280×800 产出；`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出（v1.1.1 全宽回归证据，
-> 页面 86.6% 窗口宽 vs 旧版上限 45.5%）。
+> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，v0.2.1 重装后刷新）；
+> 01–09 为 harness 的 1280×800 产出，`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出
+> （v1.1.1 全宽回归证据：页面 86.6% 窗口宽 vs 旧版上限 45.5%）。
 
 ### 8.5 安装验证（本机 Desktop profile）
 
-2026-10-28 已在真实 Desktop 环境完成安装与现场验证（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
-profile `desktop`）：安装命令、profile 变化、HMR 重载、`/health` 与回滚方式见 7.2 / 7.5。
-v1.1.1（0.2.1）只改布局 CSS，不改变包结构、宿主半与安装机制，因此安装验证沿用该记录；
-`10-desktop-tabs.png` 是该环境的会话头部手动截图（非 harness 输出）。
+2026-10-28 以 **v0.2.1 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
+profile `desktop`）：
+
+| 步骤 | 命令 / 结果 |
+|---|---|
+| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects` |
+| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启（窗口回到工作区首页属正常重组） |
+| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `{"ok":true,"gh":{"available":true,"version":"gh version 2.96.0 (2026-07-02)","account":"ceasarXuu","error":null}}` |
+| 现场验证 | 真实会话头部出现 `对话 / 轨迹 / projects / issue` → `10-desktop-tabs.png`（2560×1370，sha256 `2dd32a77…5c42`，v0.2.1 重装后重拍，手动 Desktop 截图） |
+| 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（删除依赖与 bundle 条目，见 7.5） |
 
 ### 8.6 历史基线与未验证项
 
 **v1.1.1（0.2.1）结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client
 `4f41dc9d…`；run dirs `2026-10-27T21-15-18-395Z` / `2026-10-27T21-15-31-437Z`）；`projects-wide`
-在 2200×1300 下证明页面占窗口 86.6%（旧版上限仅 45.5%），五列均分且无居中限宽；11 张官方截图齐全
-（01–09 + 11 harness，10 手动 Desktop）。
+在 2200×1300 下证明页面占窗口 86.6%（旧版上限仅 45.5%，页面左偏移 12.7%，五列各 361.8px、
+spread 0，列宽和占 board 98.3%），无居中限宽；11 张官方截图齐全（01–09 + 11 harness，10 为 v0.2.1
+重装后的手动 Desktop 截图）；真实 profile 安装 + `/health` 已复核。
 
 **v1.1（0.2.0）验收基线（2026-10-28）**：宿主单元测试 69/69；e2e fixture 与 real 模式均 PASS
 （frozen client `309f63ac…`；run dirs `2026-10-27T20-56-22-460Z` / `2026-10-27T20-56-33-844Z`）；
@@ -1279,7 +1288,10 @@ v1.1.1（0.2.1）只改布局 CSS，不改变包结构、宿主半与安装机�
 - **单 Project**：一个工作区同时只绑定一个 Project。
 - **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
 - **泳道只读**：不支持拖拽卡片改 Status、不支持自定义排序；未知自定义状态只做只读展示（右侧扩展列）。
-- **列宽与横向滚动**：泳道列最小宽度 176px；宽屏下五列均分可用宽度，窗口窄于约 960px 时整个看板横向滚动。页面本身没有宽度上限（v1.1.1 起）。
+- **列宽与横向滚动**：泳道列最小宽度 176px；宽屏下五列均分可用宽度，窗口窄于约 960px 时整个看板横向滚动。
+  页面本身没有宽度上限（v1.1.1 起）。
+- **宿主布局边界**：DSH 的会话输入框（composer）保持宿主 shell 的居中宽度，不随插件全宽而改变；
+  侧边栏、页签栏等宿主框架也不在本插件的布局控制范围内。
 - **milestone 过滤受读取上限约束**：选项与计数只统计已加载条目；超过 `maxProjectItems` 的条目不会出现在
   下拉里，也不会被过滤到。
 - **视图偏好是本地偏好**：来回切换「泳道 / 列表」只影响当前客户端，不写入 profile 绑定文件。
