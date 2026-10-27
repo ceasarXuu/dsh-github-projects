@@ -1,0 +1,85 @@
+{
+ "projects": [
+  {
+   "closed": false,
+   "fields": {
+    "totalCount": 13
+   },
+   "id": "PVT_kwHOAwDbXM4Bocj3",
+   "items": {
+    "totalCount": 195
+   },
+   "number": 9,
+   "owner": {
+    "login": "acme",
+    "type": "User"
+   },
+   "public": false,
+   "readme": "# Web roadmap\n\nTracks the issues that belong to a release milestone, grouped by the project's Status field.\n\n- Backlog: no milestone yet.\n- Current: the milestone being worked on.\n- Next: proposed, not scheduled.\n",
+   "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+   "title": "web-issues",
+   "url": "https://github.com/users/acme/projects/9"
+  },
+  {
+   "closed": false,
+   "fields": {
+    "totalCount": 13
+   },
+   "id": "PVT_kwHOAwDbXM4BnwQu",
+   "items": {
+    "totalCount": 9
+   },
+   "number": 8,
+   "owner": {
+    "login": "acme",
+    "type": "User"
+   },
+   "public": false,
+   "readme": "",
+   "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+   "title": "api-issues",
+   "url": "https://github.com/users/acme/projects/8"
+  },
+  {
+   "closed": false,
+   "fields": {
+    "totalCount": 13
+   },
+   "id": "PVT_kwHOAwDbXM4Bno8j",
+   "items": {
+    "totalCount": 1
+   },
+   "number": 6,
+   "owner": {
+    "login": "acme",
+    "type": "User"
+   },
+   "public": false,
+   "readme": "# Web roadmap\n\nTracks the issues that belong to a release milestone, grouped by the project's Status field.\n\n- Backlog: no milestone yet.\n- Current: the milestone being worked on.\n- Next: proposed, not scheduled.\n",
+   "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+   "title": "milesprint-issues",
+   "url": "https://github.com/users/acme/projects/6"
+  },
+  {
+   "closed": false,
+   "fields": {
+    "totalCount": 13
+   },
+   "id": "PVT_kwHOAwDbXM4BnaTD",
+   "items": {
+    "totalCount": 412
+   },
+   "number": 5,
+   "owner": {
+    "login": "acme",
+    "type": "User"
+   },
+   "public": false,
+   "readme": "",
+   "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+   "title": "docs-issues",
+   "url": "https://github.com/users/acme/projects/5"
+  }
+ ],
+ "totalCount": 8
+}

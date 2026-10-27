@@ -1,0 +1,68 @@
+{
+ "items": [
+  {
+   "content": {
+    "body": "## Background\n\nFound while checking the first-run flow.\n\n## Scope\n\n- Leave the public interface alone; this is internal only.\n- Reproduce the case and write it down before changing anything.\n- Keep the existing behaviour for everything that is not listed here.\n",
+    "number": 240,
+    "repository": "acme/web",
+    "title": "[v1.2.0][UI] Tidy label picker (91)",
+    "type": "Issue",
+    "url": "https://github.com/acme/web/issues/240"
+   },
+   "id": "PVTI_lAHOAwDbXM4Bocj3zhDFfBs",
+   "labels": [
+    "enhancement",
+    "todo"
+   ],
+   "milestone": {
+    "description": "Release milestone: issues assigned to this version.",
+    "dueOn": "",
+    "title": "v1.2.0"
+   },
+   "repository": "https://github.com/acme/web",
+   "status": "In Progress",
+   "title": "[v1.2.0][UI] Tidy label picker (91)"
+  },
+  {
+   "content": {
+    "body": "## Background\n\nNoticed while comparing the two layouts side by side.\n\n## Scope\n\n- Add a regression test that fails on the current build.\n- Update the docs next to the code it describes.\n- Check the empty state and the loading state both still read correctly.\n",
+    "number": 91,
+    "repository": "acme/web",
+    "title": "[v1.2.0] Refactor notification grouping (17)",
+    "type": "Issue",
+    "url": "https://github.com/acme/web/issues/91"
+   },
+   "id": "PVTI_lAHOAwDbXM4Bocj3zhDFgtI",
+   "labels": [
+    "enhancement"
+   ],
+   "milestone": {
+    "description": "Release milestone: issues assigned to this version.",
+    "dueOn": "",
+    "title": "v1.2.0"
+   },
+   "repository": "https://github.com/acme/web",
+   "status": "In Review",
+   "title": "[v1.2.0] Refactor notification grouping (17)"
+  },
+  {
+   "content": {
+    "body": "## Background\n\nTurned up in a review of the previous change.\n\n## Scope\n\n- Leave the public interface alone; this is internal only.\n- Reproduce the case and write it down before changing anything.\n- Keep the existing behaviour for everything that is not listed here.\n",
+    "number": 246,
+    "repository": "acme/web",
+    "title": "[vNext] Refactor export format (40)",
+    "type": "Issue",
+    "url": "https://github.com/acme/web/issues/246"
+   },
+   "id": "PVTI_lAHOAwDbXM4Bocj3zhDFe-U",
+   "labels": [
+    "bug",
+    "todo"
+   ],
+   "repository": "https://github.com/acme/web",
+   "status": "TODO",
+   "title": "[vNext] Refactor export format (40)"
+  }
+ ],
+ "totalCount": 195
+}
