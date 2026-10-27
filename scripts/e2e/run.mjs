@@ -372,9 +372,24 @@ async function main() {
         await waitForText(resources.cdp, '刷新', { timeoutMs: emitTimeout(20_000) })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project board loading finished')
         const board = await waitForBoard(resources.cdp, emitTimeout(30_000))
+        // v0.3.0 hidden-lane rule: fixture data has a No-status item (5 lanes);
+        // real Project #9 has none (4 lanes, data-ghp-hidden-lanes="no-status").
+        const expectation = expectedLaneKeysForMode(options.mode, board.laneCheck.hidden)
+        assert(expectation.ok, expectation.message)
+        assert(
+          JSON.stringify(board.laneCheck.laneKeys) === JSON.stringify(expectation.expected),
+          `board lane keys ${JSON.stringify(board.laneCheck.laneKeys)} != expected ${JSON.stringify(expectation.expected)} for mode ${options.mode} (hidden: ${JSON.stringify(board.laneCheck.hidden)})`,
+        )
         await settle(400)
         const screenshot = await shot('04-projects-board.png')
-        return { screenshot, mode: board.mode, columns: board.columns, cardCount: board.cardCount }
+        return {
+          screenshot,
+          mode: board.mode,
+          hiddenLanes: board.laneCheck.hidden,
+          laneKeys: board.laneCheck.laneKeys,
+          columns: board.columns,
+          cardCount: board.cardCount,
+        }
       })
       if (projectsBoardOk === false) throw new Error('projects-board stage failed')
     }
@@ -473,11 +488,17 @@ async function main() {
           `projects page is centred/fixed at ${WIDTH}px: .ghp-page left=${wide.pageLeft}px (${leftPct.toFixed(1)}% of window). ` +
           'No centred max-width column is allowed.',
         )
-        const expectedColumns = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
+        // Hidden-lane rule applies at the wide viewport too.
+        const wideBoard = await resources.cdp.evaluate(BOARD_SNAPSHOT)
+        const laneCheck = laneRuleProblems(wideBoard)
+        assert(laneCheck.problems.length === 0, `wide board violates the v0.3.0 lane rules: ${JSON.stringify(laneCheck.problems)}`)
+        const expectation = expectedLaneKeysForMode(options.mode, laneCheck.hidden)
+        assert(expectation.ok, expectation.message)
         assert(
-          expectedColumns.every((key, index) => wide.laneKeys[index] === key),
-          `wide board lane order is wrong: ${JSON.stringify(wide.laneKeys)}`,
+          JSON.stringify(laneCheck.laneKeys) === JSON.stringify(expectation.expected),
+          `wide board lane keys ${JSON.stringify(laneCheck.laneKeys)} != expected ${JSON.stringify(expectation.expected)} for mode ${options.mode} (hidden: ${JSON.stringify(laneCheck.hidden)})`,
         )
+        assert(wide.laneKeys.length === laneCheck.laneKeys.length, `wide geometry lanes ${JSON.stringify(wide.laneKeys)} != snapshot lanes ${JSON.stringify(laneCheck.laneKeys)}`)
         assert(wide.cardCount >= 1, 'wide board renders no cards')
         assert(
           wide.laneWidthSum >= wide.boardWidth * 0.85,
@@ -511,7 +532,8 @@ async function main() {
           pageWidthPct: Number(pagePct.toFixed(1)),
           pageLeftPct: Number(leftPct.toFixed(1)),
           boardWidth: wide.boardWidth,
-          laneKeys: wide.laneKeys,
+          hiddenLanes: laneCheck.hidden,
+          laneKeys: laneCheck.laneKeys,
           laneWidths: wide.laneWidths,
           laneWidthSum: wide.laneWidthSum,
           laneSpread,
@@ -757,6 +779,7 @@ const BOARD_SNAPSHOT = `(() => {
   return {
     mode: viewRoot === null ? null : viewRoot.getAttribute('data-ghp-view-mode'),
     hasBoard: board !== null,
+    hiddenLanes: board === null ? null : board.getAttribute('data-ghp-hidden-lanes'),
     columns: columns.map(column => ({ key: column.key, count: Number(column.countAttr), cardCount: column.cardCount })),
     cardCount: cards.length,
     countSum,
@@ -795,9 +818,96 @@ const MILESTONE_OPTIONS = `(() => {
   }))
 })()`
 
-/** Wait until the board reaches a coherent state (mode, column order, counters). */
+// Canonical lane order and the v0.3.0 hidden-lane rule (CONTRACT §4.2).
+const CANONICAL_LANES = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
+const ALWAYS_RENDERED_LANES = CANONICAL_LANES.filter(key => key !== 'no-status')
+
+/** `data-ghp-hidden-lanes` is a comma-separated list; empty string = nothing hidden. */
+function parseHiddenLanes(value) {
+  if (value === null || value === undefined) return []
+  return String(value).split(',').map(entry => entry.trim()).filter(entry => entry.length > 0)
+}
+
+/**
+ * Validate CONTRACT §4.2 v0.3.0 lane rules against a board snapshot:
+ * canonical lanes are a subsequence in fixed order, `no-status` renders iff not
+ * declared hidden (and hidden iff its filtered count is 0), unknown `other:*`
+ * lanes render only when non-empty and trail the canonical lanes, and every
+ * lane's `data-ghp-count` agrees with the cards rendered in it.
+ * @returns {{problems: string[], hidden: string[], laneKeys: string[], others: string[]}}
+ */
+function laneRuleProblems(board) {
+  const problems = []
+  const laneKeys = board.columns.map(column => column.key)
+  const hidden = parseHiddenLanes(board.hiddenLanes)
+  const others = laneKeys.filter(key => key.startsWith('other:'))
+  const canonicalVisible = laneKeys.filter(key => CANONICAL_LANES.includes(key))
+
+  for (const key of hidden) {
+    if (!CANONICAL_LANES.includes(key)) problems.push(`hidden lane ${JSON.stringify(key)} is not a canonical lane`)
+    else if (key !== 'no-status') problems.push(`only no-status may be hidden, got ${JSON.stringify(key)}`)
+  }
+
+  // The four non-No-status canonical lanes always render exactly once and in order.
+  const expectedVisible = CANONICAL_LANES.filter(key => !hidden.includes(key))
+  if (JSON.stringify(canonicalVisible) !== JSON.stringify(expectedVisible)) {
+    problems.push(`rendered canonical lanes ${JSON.stringify(canonicalVisible)} != expected ${JSON.stringify(expectedVisible)} (hidden: ${JSON.stringify(hidden)})`)
+  }
+  for (const key of ALWAYS_RENDERED_LANES) {
+    const count = laneKeys.filter(entry => entry === key).length
+    if (count !== 1) problems.push(`canonical lane ${key} must render exactly once, got ${count}`)
+  }
+
+  // No status: present iff not declared hidden; when present its count is non-zero.
+  const noStatusVisible = laneKeys.includes('no-status')
+  const noStatusHidden = hidden.includes('no-status')
+  if (noStatusVisible === noStatusHidden) {
+    problems.push(`no-status visibility inconsistent with data-ghp-hidden-lanes=${JSON.stringify(board.hiddenLanes)} (present=${noStatusVisible})`)
+  }
+  if (noStatusVisible) {
+    const column = board.columns.find(entry => entry.key === 'no-status')
+    if (!(column !== undefined && column.count > 0)) problems.push(`no-status is rendered but its filtered count is ${column?.count}`)
+  }
+
+  // Unknown lanes only when non-empty, trailing the canonical lanes.
+  const firstOther = laneKeys.findIndex(key => key.startsWith('other:'))
+  if (firstOther !== -1) {
+    if (laneKeys.slice(firstOther).some(key => !key.startsWith('other:'))) problems.push('other:* lanes must trail the canonical lanes')
+    for (const key of others) {
+      const column = board.columns.find(entry => entry.key === key)
+      if (!(column !== undefined && column.count > 0)) problems.push(`unknown lane ${JSON.stringify(key)} renders with count ${column?.count}`)
+    }
+  }
+
+  // Counters agree with rendered cards, per lane and in total.
+  for (const column of board.columns) {
+    if (column.count !== column.cardCount) problems.push(`lane ${column.key}: data-ghp-count=${column.count} but ${column.cardCount} cards rendered`)
+  }
+  if (board.cardCount !== board.countSum) problems.push(`board cards=${board.cardCount} != sum(data-ghp-count)=${board.countSum}`)
+
+  return { problems, hidden, laneKeys, others }
+}
+
+/**
+ * Mode-specific lane expectation (CONTRACT §5): fixture data contains a
+ * no-status item (5 lanes, nothing hidden); real Project #9 has none
+ * (`data-ghp-hidden-lanes="no-status"`, exactly the four remaining lanes).
+ */
+function expectedLaneKeysForMode(mode, hidden) {
+  if (mode === 'fixture') {
+    if (hidden.length !== 0) {
+      return { ok: false, expected: CANONICAL_LANES, message: `fixture board must not hide lanes, got data-ghp-hidden-lanes=${JSON.stringify(hidden)}` }
+    }
+    return { ok: true, expected: CANONICAL_LANES }
+  }
+  if (hidden.length !== 1 || hidden[0] !== 'no-status') {
+    return { ok: false, expected: ALWAYS_RENDERED_LANES, message: `real Project #9 board must hide exactly no-status, got data-ghp-hidden-lanes=${JSON.stringify(hidden)}` }
+  }
+  return { ok: true, expected: ALWAYS_RENDERED_LANES }
+}
+
+/** Wait until the board reaches a coherent state (mode, v0.3.0 lane rules, counters). */
 async function waitForBoard(cdp, timeoutMs, { expectedLessThan } = {}) {
-  const expectedColumns = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
   const deadline = Date.now() + timeoutMs
   let last = null
   let lastProblem = 'not evaluated'
@@ -809,13 +919,14 @@ async function waitForBoard(cdp, timeoutMs, { expectedLessThan } = {}) {
       await sleep(200)
       continue
     }
-    const keys = last.columns.map(column => column.key)
-    const columnsOk = expectedColumns.every((key, index) => keys[index] === key)
+    const laneCheck = laneRuleProblems(last)
     const cardsOk = last.cardCount >= 1
-    const consistencyOk = last.cardCount === last.countSum
     const shrinkOk = expectedLessThan === undefined || last.countSum < expectedLessThan
-    if (last.mode === 'board' && last.hasBoard && columnsOk && cardsOk && consistencyOk && shrinkOk) return last
-    lastProblem = `mode=${JSON.stringify(last.mode)} hasBoard=${last.hasBoard} columns=${JSON.stringify(keys)} cards=${last.cardCount} countSum=${last.countSum}`
+    if (last.mode === 'board' && last.hasBoard && laneCheck.problems.length === 0 && cardsOk && shrinkOk) {
+      return { ...last, laneCheck }
+    }
+    const keys = last.columns.map(column => column.key)
+    lastProblem = `mode=${JSON.stringify(last.mode)} hasBoard=${last.hasBoard} hidden=${JSON.stringify(last.hiddenLanes)} columns=${JSON.stringify(keys)} cards=${last.cardCount} countSum=${last.countSum} problems=${JSON.stringify(laneCheck.problems)}`
     await sleep(200)
   }
   throw new Error(`board did not reach the expected state within ${timeoutMs}ms (${lastProblem})`)
@@ -944,6 +1055,7 @@ const WIDE_LAYOUT = `(() => {
     pageWidth: pageRect === null ? 0 : Math.round(pageRect.width * 10) / 10,
     pageLeft: pageRect === null ? -1 : Math.round(pageRect.left * 10) / 10,
     boardWidth: boardRect === null ? 0 : Math.round(boardRect.width * 10) / 10,
+    hiddenLanes: board === null ? null : board.getAttribute('data-ghp-hidden-lanes'),
     laneKeys: columns.map(el => el.getAttribute('data-ghp-column')),
     laneWidths,
     laneWidthSum: Math.round(laneWidths.reduce((sum, width) => sum + width, 0) * 10) / 10,

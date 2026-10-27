@@ -570,30 +570,79 @@ window.__ModuleLoader__.load({
       const buckets = new Map()
       for (const column of BOARD_COLUMNS) buckets.set(column.key, [])
       const extraKeys = []
-      for (const item of allItems) {
-        const key = boardColumnKeyOf(item)
-        if (!KNOWN_BOARD_COLUMNS.has(key) && !extraKeys.includes(key)) extraKeys.push(key)
-      }
-      for (const key of extraKeys) buckets.set(key, [])
       for (const item of filteredItems) {
         const key = boardColumnKeyOf(item)
         const bucket = buckets.get(key)
         if (bucket === undefined) {
+          if (!extraKeys.includes(key)) extraKeys.push(key)
           buckets.set(key, [item])
-          extraKeys.push(key)
         } else {
           bucket.push(item)
         }
       }
-      const columns = BOARD_COLUMNS.map((column) => ({
-        key: column.key,
-        label: column.label,
-        items: buckets.get(column.key) ?? [],
-      }))
+      const hiddenLanes = []
+      const columns = []
+      for (const column of BOARD_COLUMNS) {
+        const items = buckets.get(column.key) ?? []
+        // v0.3.0: an empty No status lane is hidden; the other canonical lanes
+        // always render (empty lanes read 无条目). Unknown lanes are never empty.
+        if (column.key === 'no-status' && items.length === 0) {
+          hiddenLanes.push('no-status')
+          continue
+        }
+        columns.push({ key: column.key, label: column.label, items })
+      }
       for (const key of extraKeys) {
         columns.push({ key, label: key.replace(/^other:/u, ''), items: buckets.get(key) ?? [] })
       }
-      return columns
+      return { columns, hiddenLanes }
+    }
+
+    /** v0.3.0 status accents (contract §4.2.0). Tints are derived in CSS with
+     *  color-mix so both DSH light and dark themes resolve correctly. */
+    const LANE_ACCENTS = {
+      'no-status': 'var(--dsw-alias-label-tertiary, #8a8a8a)',
+      todo: 'var(--dsw-static-blue-500, #3b82f6)',
+      'in-progress': 'var(--dsw-static-amber-500, #f59e0b)',
+      'in-review': '#8b5cf6',
+      done: 'var(--dsw-alias-state-success-primary, #3fb950)',
+    }
+    const OTHER_LANE_ACCENT = '#06b6d4'
+
+    function laneAccentOf(laneKey) {
+      if (typeof laneKey !== 'string') return LANE_ACCENTS['no-status']
+      if (laneKey.startsWith('other:')) return OTHER_LANE_ACCENT
+      return LANE_ACCENTS[laneKey] ?? LANE_ACCENTS['no-status']
+    }
+
+    /** Accent for a list-mode section key (raw status text or NO_STATUS). */
+    function sectionAccentOf(statusKey) {
+      if (statusKey === NO_STATUS) return LANE_ACCENTS['no-status']
+      return laneAccentOf(boardColumnKeyOf({ status: statusKey }))
+    }
+
+    const LABEL_DOT_PALETTE = [
+      'var(--dsw-static-blue-500, #3b82f6)',
+      '#8b5cf6',
+      '#06b6d4',
+      'var(--dsw-alias-state-success-primary, #3fb950)',
+      'var(--dsw-static-amber-500, #f59e0b)',
+      '#ec4899',
+    ]
+
+    /** Deterministic label/initials hash color (decorative dot / avatar only). */
+    function hashColorOf(value) {
+      const text = textOf(value)
+      let hash = 0
+      for (let index = 0; index < text.length; index += 1) {
+        hash = (hash * 31 + text.charCodeAt(index)) >>> 0
+      }
+      return LABEL_DOT_PALETTE[hash % LABEL_DOT_PALETTE.length]
+    }
+
+    function initialsOf(name) {
+      const text = textOf(name).trim()
+      return text === '' ? '?' : text.slice(0, 1).toUpperCase()
     }
 
     const VIEW_MODE_STORAGE_KEY = 'dsh-github-projects:view-mode'
@@ -1008,7 +1057,13 @@ window.__ModuleLoader__.load({
     }
 
     function LabelPill({ name }) {
-      return h('span', { className: 'ghp-label' }, name)
+      return h('span', { className: 'ghp-label' },
+        h('span', {
+          className: 'ghp-label-dot',
+          style: { background: hashColorOf(name) },
+          'aria-hidden': true,
+        }),
+        h('span', { className: 'ghp-label-name' }, name))
     }
 
     function ConfirmAction({ t, label, confirmLabel, onConfirm, busy = false, className = 'ghp-btn ghp-btn-ghost', disabled = false }) {
@@ -1062,7 +1117,7 @@ window.__ModuleLoader__.load({
           code === null ? null : h('div', { className: 'ghp-errorcard-code' }, t('error.codeLabel', { code }))),
         onRetry === undefined || onRetry === null
           ? null
-          : h(Button, { variant: 'secondary', size: 'sm', onClick: onRetry }, t('common.retry')))
+          : h(Button, { variant: 'primary', size: 'sm', onClick: onRetry }, t('common.retry')))
     }
 
     function SearchInput({ value, onChange, placeholder, ariaLabel, inputRef }) {
@@ -1562,6 +1617,11 @@ window.__ModuleLoader__.load({
       const children = [
         h('span', { key: 'title', className: 'ghp-board-card-title' }, textOf(item.title)),
         h('span', { key: 'meta', className: 'ghp-board-card-meta' },
+          h('span', {
+            key: 'type-dot',
+            className: `ghp-type-dot ghp-type-dot-${type}`,
+            'aria-hidden': true,
+          }),
           typeLabel === null ? null : h('span', { key: 'type', className: 'ghp-board-card-type' }, typeLabel),
           repoNode,
           isBound ? h('span', { key: 'bound', className: 'ghp-badge ghp-badge-bound' }, t('common.bound')) : null,
@@ -1610,18 +1670,24 @@ window.__ModuleLoader__.load({
       return h('div', sharedProps, ...children)
     }
 
-    function BoardView({ t, columns, sessionIssue, bindingId, onBind }) {
-      return h('div', { className: 'ghp-board', 'data-ghp-board': '' },
-        columns.map((column) => h('section', {
-          key: column.key,
-          className: 'ghp-board-column',
-          'data-ghp-column': column.key,
-          'data-ghp-count': String(column.items.length),
-          'aria-label': `${column.label} (${column.items.length})`,
-        },
-        h('header', { className: 'ghp-board-column-head' },
-          h('span', { className: 'ghp-board-column-title' }, column.label),
-          h('span', { className: 'ghp-section-count' }, String(column.items.length))),
+    function BoardView({ t, columns, hiddenLanes, sessionIssue, bindingId, onBind }) {
+      return h('div', {
+        className: 'ghp-board',
+        'data-ghp-board': '',
+        'data-ghp-hidden-lanes': asArray(hiddenLanes).join(','),
+      },
+      columns.map((column) => h('section', {
+        key: column.key,
+        className: 'ghp-board-column',
+        style: { '--ghp-lane-accent': laneAccentOf(column.key) },
+        'data-ghp-column': column.key,
+        'data-ghp-count': String(column.items.length),
+        'aria-label': `${column.label} (${column.items.length})`,
+      },
+      h('header', { className: 'ghp-board-column-head' },
+        h('span', { className: 'ghp-lane-dot', 'aria-hidden': true }),
+        h('span', { className: 'ghp-board-column-title' }, column.label),
+        h('span', { className: 'ghp-lane-count' }, String(column.items.length))),
         h('div', { className: 'ghp-board-column-body' },
           column.items.length === 0
             ? h('div', { className: 'ghp-board-empty' }, t('projects.board.emptyColumn'))
@@ -1640,7 +1706,7 @@ window.__ModuleLoader__.load({
       const meta = []
       meta.push(h('span', { key: 'owner', className: 'ghp-repochip' }, `${textOf(project.owner)} / #${project.number}`))
       meta.push(h('span', { key: 'dot', className: 'ghp-dot', 'aria-hidden': true }, '·'))
-      meta.push(h('span', { key: 'count' }, isPositiveInteger(itemCount) || itemCount === 0 ? t('common.items', { count: itemCount }) : t('common.itemsUnknown')))
+      meta.push(h('span', { key: 'count', className: 'ghp-count-pill' }, isPositiveInteger(itemCount) || itemCount === 0 ? t('common.items', { count: itemCount }) : t('common.itemsUnknown')))
       if (project.closed === true) {
         meta.push(h('span', { key: 'closed', className: 'ghp-badge ghp-badge-closed' }, t('common.closed')))
       }
@@ -1684,7 +1750,7 @@ window.__ModuleLoader__.load({
             confirmLabel: t('common.confirmUnbind'),
             onConfirm: onUnbind,
             busy: unbinding,
-            className: 'ghp-btn ghp-btn-ghost ghp-btn-sm',
+            className: 'ghp-btn ghp-btn-ghost ghp-btn-sm ghp-btn-unbind',
           })))
     }
 
@@ -1781,7 +1847,7 @@ window.__ModuleLoader__.load({
             ? (isBound
               ? h('span', { className: 'ghp-item-boundlabel' }, h(IconCheck, { size: 13 }), t('common.bound'))
               : h(Button, {
-                variant: 'secondary',
+                variant: 'accent',
                 size: 'sm',
                 disabled: binding,
                 onClick: () => onBind(item),
@@ -1803,7 +1869,7 @@ window.__ModuleLoader__.load({
       const title = textOf(workspace === null || workspace === undefined ? '' : workspace.title)
       const path = textOf(workspace === null || workspace === undefined ? '' : workspace.path)
       return h('div', { className: 'ghp-empty' },
-        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconProject, { size: 26 })),
+        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconProject, { size: 24 })),
         h('h2', { className: 'ghp-empty-title' }, t('projects.unboundTitle')),
         h('p', { className: 'ghp-empty-text' }, t('projects.unboundText')),
         h('div', { className: 'ghp-empty-actions' },
@@ -1817,7 +1883,7 @@ window.__ModuleLoader__.load({
 
     function ProjectsNoWorkspace({ t }) {
       return h('div', { className: 'ghp-empty' },
-        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconProject, { size: 26 })),
+        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconProject, { size: 24 })),
         h('h2', { className: 'ghp-empty-title' }, t('projects.noWorkspaceTitle')),
         h('p', { className: 'ghp-empty-text' }, t('projects.noWorkspaceText')))
     }
@@ -2119,7 +2185,9 @@ window.__ModuleLoader__.load({
       const listFilteredItems = filterItems(milestoneScopedItems, query, effectiveStatusFilter)
       const groups = groupItems(listFilteredItems, statuses)
       const boardFilteredItems = filterItems(milestoneScopedItems, query, ALL_STATUS)
-      const boardColumns = buildBoardColumns(allItems, boardFilteredItems)
+      const boardLayout = buildBoardColumns(allItems, boardFilteredItems)
+      const boardColumns = boardLayout.columns
+      const hiddenLanes = boardLayout.hiddenLanes
       const matchedCount = isBoardMode ? boardFilteredItems.length : listFilteredItems.length
       const refreshing = itemsState.status === 'refreshing'
       const itemsProject = isPlainObject(itemsState.data) && isPlainObject(itemsState.data.project) ? itemsState.data.project : null
@@ -2163,6 +2231,7 @@ window.__ModuleLoader__.load({
         body = h(BoardView, {
           t,
           columns: boardColumns,
+          hiddenLanes,
           sessionIssue,
           bindingId: typeof bindingItemId === 'string' ? bindingItemId : null,
           onBind: bindIssue,
@@ -2173,11 +2242,13 @@ window.__ModuleLoader__.load({
           return h('section', {
             key: group.key,
             className: 'ghp-section',
+            style: { '--ghp-lane-accent': sectionAccentOf(group.key) },
             'aria-label': `${sectionLabel} (${group.items.length})`,
           },
           h('div', { className: 'ghp-section-head' },
+            h('span', { className: 'ghp-lane-dot', 'aria-hidden': true }),
             h('h3', { className: 'ghp-section-title' }, sectionLabel),
-            h('span', { className: 'ghp-section-count' }, String(group.items.length))),
+            h('span', { className: 'ghp-lane-count' }, String(group.items.length))),
           h('div', { className: 'ghp-list' },
             group.items.map((item) => h(ProjectItemRow, {
               key: itemIdentity(item),
@@ -2302,7 +2373,11 @@ window.__ModuleLoader__.load({
         comments.length === 0 ? h('div', { className: 'ghp-muted ghp-comments-empty' }, t('issue.noComments')) : null,
         comments.map((comment) => h('article', { key: textOf(comment.id) || `${comment.author}-${comment.createdAt}`, className: 'ghp-comment' },
           h('header', { className: 'ghp-comment-head' },
-            h('span', { className: 'ghp-comment-icon', 'aria-hidden': true }, h(IconComment, { size: 13 })),
+            h('span', {
+              className: 'ghp-comment-avatar',
+              style: { '--ghp-avatar-color': hashColorOf(textOf(comment.author) || t('issue.ghost')) },
+              'aria-hidden': true,
+            }, initialsOf(textOf(comment.author) || t('issue.ghost'))),
             h('span', { className: 'ghp-comment-author' }, textOf(comment.author) || t('issue.ghost')),
             h('span', { className: 'ghp-dot', 'aria-hidden': true }, '·'),
             h('time', { className: 'ghp-comment-time', dateTime: textOf(comment.createdAt) }, relativeTime(t, comment.createdAt)),
@@ -2327,7 +2402,7 @@ window.__ModuleLoader__.load({
     function IssueEmpty({ t, gh, input, onInputChange, onSubmit, busy, error, onChoose, workspaceId }) {
       const canChoose = workspaceId !== null && workspaceId !== ''
       return h('div', { className: 'ghp-empty' },
-        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconIssue, { size: 26 })),
+        h('div', { className: 'ghp-empty-icon', 'aria-hidden': true }, h(IconIssue, { size: 24 })),
         h('h2', { className: 'ghp-empty-title' }, t('issue.unboundTitle')),
         h('p', { className: 'ghp-empty-text' }, t('issue.unboundText')),
         h('div', { className: 'ghp-empty-actions' },
@@ -2584,7 +2659,7 @@ window.__ModuleLoader__.load({
               confirmLabel: t('common.confirmUnbind'),
               onConfirm: unbindIssue,
               busy: unbinding,
-              className: 'ghp-btn ghp-btn-ghost ghp-btn-sm',
+              className: 'ghp-btn ghp-btn-ghost ghp-btn-sm ghp-btn-unbind',
             }),
             h(LinkButton, {
               href: url,
@@ -2650,7 +2725,44 @@ window.__ModuleLoader__.load({
     /* 10. Stylesheet — one <style data-plugin="github-projects"> tag.     */
     /* ------------------------------------------------------------------ */
 
-    const CSS = `
+    const CSS = `/* ==========================================================================
+   v0.3.0 visual system (contract §4.2.0).
+   Color = state, not decoration: only status lanes/sections, type glyphs,
+   bound/active accents, actions and error/success states are colored. Titles,
+   meta, labels and body text use neutral label tokens. Accents are
+   theme-independent; every tint is derived with color-mix from the active
+   DSH theme tokens, so light and dark both resolve correctly.
+   ========================================================================== */
+.ghp-root, .ghp-overlay {
+  --ghp-accent-no-status: var(--dsw-alias-label-tertiary, #8a8a8a);
+  --ghp-accent-todo: var(--dsw-static-blue-500, #3b82f6);
+  --ghp-accent-in-progress: var(--dsw-static-amber-500, #f59e0b);
+  --ghp-accent-in-review: #8b5cf6;
+  --ghp-accent-done: var(--dsw-alias-state-success-primary, #3fb950);
+  --ghp-accent-other: #06b6d4;
+  --ghp-accent-issue: var(--dsw-alias-state-success-primary, #3fb950);
+  --ghp-accent-pr: #8b5cf6;
+  --ghp-accent-draft: var(--dsw-alias-label-tertiary, #8a8a8a);
+  --ghp-accent-brand: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, #4f7cff));
+  --ghp-accent-error: var(--dsw-alias-state-error-primary, #f85149);
+  --ghp-accent-success: var(--dsw-alias-state-success-primary, #3fb950);
+  --ghp-accent-warn: var(--dsw-alias-state-warn-primary, #d97706);
+  --ghp-surface-sunken: var(--dsw-alias-bg-layer-1, #1a1a1a);
+  --ghp-surface-raised: var(--dsw-alias-bg-layer-2, #222);
+  --ghp-surface-hover: var(--dsw-alias-bg-layer-3, #2a2a2a);
+  --ghp-border: var(--dsw-alias-border-l1, #333);
+  --ghp-border-strong: var(--dsw-alias-border-l2, #3a3a3a);
+  --ghp-border-hover: var(--dsw-alias-border-l3, #4a4a4a);
+  --ghp-text-primary: var(--dsw-alias-label-primary, #e6e6e6);
+  --ghp-text-secondary: var(--dsw-alias-label-secondary, #a3a3a3);
+  --ghp-text-tertiary: var(--dsw-alias-label-tertiary, #8a8a8a);
+  --ghp-radius-sm: var(--dsw-radius-sm, 8px);
+  --ghp-radius-md: var(--dsw-radius-md, 10px);
+  --ghp-radius-lg: var(--dsw-radius-lg, 14px);
+  --ghp-motion: 120ms ease;
+}
+
+
 .ghp-root {
   position: relative;
   box-sizing: border-box;
@@ -2705,10 +2817,10 @@ window.__ModuleLoader__.load({
   box-sizing: border-box;
   min-height: 30px;
   padding: 3px 12px;
-  border: 1px solid var(--dsw-alias-border-l2, #3a3a3a);
-  border-radius: var(--dsw-radius-sm, 8px);
-  background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, .06));
-  color: var(--dsw-alias-label-primary, #e6e6e6);
+  border: 1px solid var(--ghp-border-strong);
+  border-radius: var(--ghp-radius-sm);
+  background: var(--dsw-alias-button-elevated-fill, var(--dsw-alias-fill-l2, rgba(255, 255, 255, .06)));
+  color: var(--ghp-text-primary);
   font: inherit;
   font-size: 13px;
   font-weight: 500;
@@ -2716,16 +2828,33 @@ window.__ModuleLoader__.load({
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
-  transition: background .12s ease, border-color .12s ease, color .12s ease;
+  transition: background-color var(--ghp-motion), border-color var(--ghp-motion), color var(--ghp-motion);
 }
 .ghp-btn:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .09));
-  border-color: var(--dsw-alias-border-l3, #4a4a4a);
+  border-color: var(--ghp-border-hover);
 }
 .ghp-btn:disabled { opacity: .5; cursor: default; }
 .ghp-btn-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .ghp-btn-icon svg { display: block; }
 .ghp-btn-sm { min-height: 26px; padding: 2px 9px; font-size: 12px; line-height: 16px; border-radius: var(--dsw-radius-xs, 6px); }
+/* Accent-outline action (list "绑定"): color only to mark the actionable state. */
+.ghp-btn-accent {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 45%, transparent);
+  background: transparent;
+  color: var(--ghp-accent-brand);
+}
+.ghp-btn-accent:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 68%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 12%, transparent);
+  color: var(--ghp-accent-brand);
+}
+/* Unbind stays neutral until hover, then only the error tint marks the risk. */
+.ghp-btn-unbind:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ghp-accent-error) 12%, transparent);
+  color: var(--ghp-accent-error);
+}
 .ghp-btn-primary {
   border-color: transparent;
   background: var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary, #4f7cff));
@@ -2746,13 +2875,13 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary, #e6e6e6);
 }
 .ghp-btn-danger {
-  border-color: var(--dsw-alias-state-error-secondary, rgba(248, 81, 73, .4));
-  background: rgba(248, 81, 73, .1);
-  color: var(--dsw-alias-state-error-primary, #f85149);
+  border-color: color-mix(in srgb, var(--ghp-accent-error) 40%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-error) 10%, transparent);
+  color: var(--ghp-accent-error);
 }
 .ghp-btn-danger:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-danger, rgba(248, 81, 73, .16));
-  border-color: var(--dsw-alias-state-error-primary, #f85149);
+  background: color-mix(in srgb, var(--ghp-accent-error) 16%, transparent);
+  border-color: var(--ghp-accent-error);
 }
 .ghp-iconbtn {
   display: inline-flex;
@@ -2774,7 +2903,7 @@ window.__ModuleLoader__.load({
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--dsw-alias-link, #6ea8fe);
+  color: var(--ghp-accent-brand);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -2812,7 +2941,7 @@ window.__ModuleLoader__.load({
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .06), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ghp-text-primary) 7%, transparent), transparent);
   animation: ghp-shimmer 1.4s infinite;
 }
 @keyframes ghp-shimmer { 100% { transform: translateX(100%); } }
@@ -2838,19 +2967,21 @@ window.__ModuleLoader__.load({
   line-height: 18px;
 }
 .ghp-banner-warn {
-  border-color: var(--dsw-alias-state-warn-secondary, rgba(217, 119, 6, .4));
-  background: rgba(217, 119, 6, .08);
-  color: var(--dsw-alias-state-warn-label, #e8a33d);
+  border-color: color-mix(in srgb, var(--ghp-accent-warn) 32%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-warn) 9%, transparent);
+  color: var(--ghp-text-secondary);
 }
+.ghp-banner-warn .ghp-banner-icon { color: var(--dsw-alias-state-warn-label, var(--ghp-accent-warn)); }
 .ghp-banner-error {
-  border-color: var(--dsw-alias-state-error-secondary, rgba(248, 81, 73, .4));
-  background: rgba(248, 81, 73, .08);
-  color: var(--dsw-alias-state-error-primary, #f85149);
+  border-color: color-mix(in srgb, var(--ghp-accent-error) 32%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-error) 9%, transparent);
+  color: var(--ghp-text-secondary);
 }
+.ghp-banner-error .ghp-banner-icon { color: var(--ghp-accent-error); }
 .ghp-banner-icon { display: flex; flex: none; margin-top: 2px; }
 .ghp-banner-body { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-.ghp-banner-title { font-weight: 600; }
-.ghp-banner-hint { color: var(--dsw-alias-label-secondary, #a3a3a3); overflow-wrap: anywhere; }
+.ghp-banner-title { color: var(--ghp-text-primary); font-weight: 600; }
+.ghp-banner-hint { color: var(--ghp-text-secondary); overflow-wrap: anywhere; }
 .ghp-banner-close { margin-left: auto; width: 22px; height: 22px; }
 .ghp-notice {
   display: flex;
@@ -2885,15 +3016,14 @@ window.__ModuleLoader__.load({
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 62px;
-  height: 62px;
-  border: 1px solid var(--dsw-alias-border-l1, #333);
-  border-radius: 20px;
-  background: var(--dsw-alias-bg-layer-2, #222);
-  color: var(--dsw-alias-label-secondary, #a3a3a3);
-  box-shadow: var(--dsw-elevation-soft, none);
+  width: 48px;
+  height: 48px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 26%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ghp-accent-brand) 13%, transparent);
+  color: var(--ghp-accent-brand);
 }
-.ghp-empty-title { margin: 6px 0 0; color: var(--dsw-alias-label-primary, #e6e6e6); font-size: 18px; line-height: 26px; font-weight: 600; }
+.ghp-empty-title { margin: 6px 0 0; color: var(--ghp-text-primary); font-size: 16px; line-height: 24px; font-weight: 600; }
 .ghp-empty-title-sm { margin: 4px 0 0; color: var(--dsw-alias-label-primary, #e6e6e6); font-size: 15px; line-height: 22px; font-weight: 600; }
 .ghp-empty-text { max-width: 470px; margin: 0; color: var(--dsw-alias-label-secondary, #a3a3a3); font-size: 13px; line-height: 20px; }
 .ghp-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
@@ -2907,15 +3037,30 @@ window.__ModuleLoader__.load({
   max-width: 640px;
   margin: 0 auto;
   padding: 14px 16px;
-  border: 1px solid var(--dsw-alias-state-error-secondary, rgba(248, 81, 73, .35));
-  border-radius: var(--dsw-radius-lg, 14px);
-  background: var(--dsw-alias-bg-layer-2, #222);
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-error) 32%, transparent);
+  border-radius: var(--ghp-radius-lg);
+  background: var(--ghp-surface-raised);
   text-align: left;
 }
 .ghp-errorcard-compact { padding: 12px; }
-.ghp-errorcard-icon { display: flex; flex: none; margin-top: 1px; color: var(--dsw-alias-state-error-primary, #f85149); }
+.ghp-errorcard-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-error) 26%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ghp-accent-error) 12%, transparent);
+  color: var(--ghp-accent-error);
+}
+.ghp-errorcard-icon svg { width: 22px; height: 22px; }
+.ghp-errorcard-compact .ghp-errorcard-icon { width: 32px; height: 32px; border-radius: 10px; }
+.ghp-errorcard-compact .ghp-errorcard-icon svg { width: 16px; height: 16px; }
 .ghp-errorcard-body { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
-.ghp-errorcard-title { color: var(--dsw-alias-label-primary, #e6e6e6); font-size: 13px; font-weight: 600; }
+.ghp-errorcard-title { color: var(--ghp-text-primary); font-size: 16px; line-height: 22px; font-weight: 600; }
+.ghp-errorcard-compact .ghp-errorcard-title { font-size: 13px; line-height: 18px; }
 .ghp-errorcard-hint { color: var(--dsw-alias-label-secondary, #a3a3a3); font-size: 12px; line-height: 18px; }
 .ghp-errorcard-message { color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .ghp-errorcard-code { color: var(--dsw-alias-label-quaternary, #6e6e6e); font-family: var(--dsw-font-markdown-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11px; }
@@ -2959,17 +3104,18 @@ window.__ModuleLoader__.load({
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 38px;
-  height: 38px;
-  border-radius: 11px;
-  background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .07));
-  color: var(--dsw-alias-brand-primary, #4f7cff);
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 26%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 14%, transparent);
+  color: var(--ghp-accent-brand);
 }
 .ghp-toolbar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.ghp-toolbar-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dsw-alias-label-primary, #e6e6e6); font-size: 16px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
+.ghp-toolbar-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ghp-text-primary); font-size: 15px; line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
 .ghp-toolbar-title a { display: inline-flex; align-items: center; gap: 6px; color: inherit; text-decoration: none; }
-.ghp-toolbar-title a:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration: underline; }
-.ghp-toolbar-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 12px; line-height: 18px; }
+.ghp-toolbar-title a:hover { color: var(--ghp-accent-brand); text-decoration: underline; }
+.ghp-toolbar-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ghp-text-tertiary); font-size: 12px; line-height: 18px; }
 .ghp-toolbar-desc {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -2982,6 +3128,17 @@ window.__ModuleLoader__.load({
   overflow-wrap: anywhere;
 }
 .ghp-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; flex: none; }
+.ghp-count-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .07));
+  color: var(--ghp-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .ghp-toolbar-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 12px; }
 @media (max-width: 720px) {
   .ghp-toolbar { flex-direction: column; }
@@ -3012,18 +3169,47 @@ window.__ModuleLoader__.load({
 }
 .ghp-chip:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); color: var(--dsw-alias-label-primary, #e6e6e6); }
 .ghp-chip[aria-pressed="true"] {
-  border-color: var(--dsw-alias-brand-primary, #4f7cff);
-  background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .08));
-  color: var(--dsw-alias-label-primary, #e6e6e6);
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 55%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 12%, transparent);
+  color: var(--ghp-text-primary);
 }
+.ghp-chip[aria-pressed="true"] .ghp-chip-count { color: var(--ghp-text-secondary); }
 .ghp-chip[aria-pressed="true"] .ghp-chip-count { color: var(--dsw-alias-label-secondary, #a3a3a3); }
 .ghp-chip-count { color: var(--dsw-alias-label-tertiary, #8a8a8a); font-variant-numeric: tabular-nums; }
 
 /* Sections and rows --------------------------------------------------------- */
 .ghp-sections { display: flex; flex-direction: column; gap: 18px; }
 .ghp-section { display: flex; flex-direction: column; gap: 8px; }
-.ghp-section-head { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
-.ghp-section-title { margin: 0; color: var(--dsw-alias-label-secondary, #a3a3a3); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.ghp-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 6px;
+  border-bottom: 2px solid color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-no-status)) 45%, transparent);
+}
+.ghp-section-title { margin: 0; color: var(--ghp-text-secondary); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.ghp-lane-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ghp-lane-accent, var(--ghp-accent-no-status));
+}
+.ghp-lane-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-no-status)) 24%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-no-status)) 16%, transparent);
+  color: var(--ghp-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
 .ghp-section-count {
   display: inline-flex;
   align-items: center;
@@ -3039,19 +3225,19 @@ window.__ModuleLoader__.load({
 }
 .ghp-list {
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l1, #333);
-  border-radius: var(--dsw-radius-lg, 14px);
-  background: var(--dsw-alias-bg-layer-2, #222);
+  border: 1px solid var(--ghp-border);
+  border-radius: var(--ghp-radius-lg);
+  background: var(--ghp-surface-raised);
 }
 .ghp-list-skeleton { display: flex; flex-direction: column; gap: 1px; }
-.ghp-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--dsw-alias-border-l1, #333); transition: background .1s ease; }
+.ghp-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--ghp-border); transition: background-color var(--ghp-motion); }
 .ghp-item:first-child { border-top: none; }
 .ghp-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .04)); }
-.ghp-item-bound { background: rgba(63, 185, 80, .06); }
+.ghp-item-bound { background: color-mix(in srgb, var(--ghp-accent-brand) 8%, transparent); }
 .ghp-item-glyph { display: flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; color: var(--dsw-alias-label-tertiary, #8a8a8a); }
-.ghp-glyph-issue { color: var(--dsw-alias-state-success-primary, #3fb950); }
-.ghp-glyph-pr { color: var(--dsw-alias-state-business-primary, #a371f7); }
-.ghp-glyph-draft { color: var(--dsw-alias-label-tertiary, #8a8a8a); }
+.ghp-glyph-issue { color: var(--ghp-accent-issue); }
+.ghp-glyph-pr { color: var(--ghp-accent-pr); }
+.ghp-glyph-draft { color: var(--ghp-accent-draft); }
 .ghp-item-main { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .ghp-item-titleline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .ghp-item-title { color: var(--dsw-alias-label-primary, #e6e6e6); font-size: 13px; line-height: 20px; font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
@@ -3059,20 +3245,37 @@ a.ghp-item-title:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration:
 .ghp-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 12px; line-height: 18px; }
 .ghp-item-repo { color: var(--dsw-alias-label-secondary, #a3a3a3); font-family: var(--dsw-font-markdown-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; }
 .ghp-item-actions { display: flex; flex: none; align-items: center; gap: 4px; margin-left: 8px; }
-.ghp-item-boundlabel { display: inline-flex; align-items: center; gap: 4px; color: var(--dsw-alias-state-success-primary, #3fb950); font-size: 12px; }
+.ghp-item-boundlabel { display: inline-flex; align-items: center; gap: 4px; color: var(--ghp-accent-brand); font-size: 12px; }
 .ghp-label {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   height: 18px;
+  max-width: 100%;
   padding: 0 7px;
-  border: 1px solid var(--dsw-alias-border-l2, #3a3a3a);
+  border: 1px solid var(--ghp-border-strong);
   border-radius: 999px;
-  background: var(--dsw-alias-fill-l1, rgba(255, 255, 255, .04));
-  color: var(--dsw-alias-label-secondary, #a3a3a3);
+  background: var(--dsw-alias-fill-l1, transparent);
+  color: var(--ghp-text-secondary);
   font-size: 11px;
   line-height: 16px;
 }
-.ghp-milestone { display: inline-flex; align-items: center; gap: 4px; color: var(--dsw-alias-label-tertiary, #8a8a8a); }
+.ghp-label-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; }
+.ghp-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-milestone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-pr) 26%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ghp-accent-pr) 12%, transparent);
+  color: var(--ghp-text-secondary);
+  font-size: 11px;
+  line-height: 15px;
+}
+.ghp-milestone svg { width: 11px; height: 11px; flex: none; color: var(--ghp-accent-pr); }
 .ghp-dot { color: var(--dsw-alias-separator-primary, #5a5a5a); }
 .ghp-repochip {
   display: inline-flex;
@@ -3099,9 +3302,9 @@ a.ghp-item-title:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration:
   white-space: nowrap;
 }
 .ghp-badge-bound {
-  border: 1px solid rgba(63, 185, 80, .3);
-  background: rgba(63, 185, 80, .14);
-  color: var(--dsw-alias-state-success-primary, #3fb950);
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-brand) 32%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-brand) 14%, transparent);
+  color: var(--ghp-accent-brand);
 }
 .ghp-badge-closed {
   border: 1px solid var(--dsw-alias-border-l2, #3a3a3a);
@@ -3120,9 +3323,9 @@ a.ghp-item-title:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration:
   line-height: 18px;
   white-space: nowrap;
 }
-.ghp-state-open { border-color: rgba(63, 185, 80, .3); background: rgba(63, 185, 80, .12); color: var(--dsw-alias-state-success-primary, #3fb950); }
-.ghp-state-closed { border-color: rgba(248, 81, 73, .25); background: rgba(248, 81, 73, .1); color: var(--dsw-alias-state-error-primary, #f85149); }
-.ghp-state-merged { border-color: rgba(163, 113, 247, .3); background: rgba(163, 113, 247, .12); color: var(--dsw-alias-state-business-primary, #a371f7); }
+.ghp-state-open { border-color: color-mix(in srgb, var(--ghp-accent-success) 32%, transparent); background: color-mix(in srgb, var(--ghp-accent-success) 12%, transparent); color: var(--ghp-accent-success); }
+.ghp-state-closed { border-color: var(--ghp-border-strong); background: var(--dsw-alias-fill-l2, transparent); color: var(--ghp-text-secondary); }
+.ghp-state-merged { border-color: color-mix(in srgb, var(--ghp-accent-pr) 32%, transparent); background: color-mix(in srgb, var(--ghp-accent-pr) 12%, transparent); color: var(--ghp-accent-pr); }
 
 /* View-mode toggle + milestone dropdown ------------------------------------ */
 .ghp-seg {
@@ -3222,71 +3425,99 @@ a.ghp-item-title:hover { color: var(--dsw-alias-link, #6ea8fe); text-decoration:
   min-height: 0;
   max-height: 100%;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l1, #333);
-  border-radius: var(--dsw-radius-lg, 14px);
-  background: var(--dsw-alias-bg-layer-2, #222);
+  border: 1px solid var(--ghp-border);
+  border-radius: var(--ghp-radius-lg);
+  background: var(--ghp-surface-sunken);
 }
 .ghp-board-column-head {
   display: flex;
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1, #333);
+  padding: 10px 12px 9px;
+  border-bottom: 2px solid color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-no-status)) 45%, transparent);
 }
-.ghp-board-column-title { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-secondary, #a3a3a3); font-size: 12px; font-weight: 600; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-board-column-title { min-width: 0; overflow: hidden; color: var(--ghp-text-secondary); font-size: 12px; font-weight: 600; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .ghp-board-column-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px; }
 .ghp-board-column-body::-webkit-scrollbar { width: 8px; }
 .ghp-board-column-body::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l1, rgba(255, 255, 255, .14)); border-radius: 4px; }
-.ghp-board-empty { padding: 10px 4px; color: var(--dsw-alias-label-quaternary, #6e6e6e); font-size: 12px; line-height: 18px; text-align: center; }
+.ghp-board-empty { padding: 12px 4px; color: var(--ghp-text-tertiary); font-size: 12px; line-height: 18px; text-align: center; }
 .ghp-board-card {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   width: 100%;
   box-sizing: border-box;
-  padding: 9px 10px;
-  border: 1px solid var(--dsw-alias-border-l1, #333);
-  border-radius: var(--dsw-radius-md, 10px);
-  background: var(--dsw-alias-bg-layer-1, #1c1c1c);
-  color: var(--dsw-alias-label-primary, #e6e6e6);
+  padding: 10px 12px;
+  border: 1px solid var(--ghp-border);
+  border-radius: var(--ghp-radius-md);
+  background: var(--ghp-surface-raised);
+  color: var(--ghp-text-primary);
   font: inherit;
   text-align: left;
+  transition: background-color var(--ghp-motion), border-color var(--ghp-motion);
 }
 button.ghp-board-card, a.ghp-board-card { cursor: pointer; }
 button.ghp-board-card:hover, a.ghp-board-card:hover {
-  border-color: var(--dsw-alias-border-l3, #4a4a4a);
-  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .05));
+  border-color: var(--ghp-border-hover);
+  background: var(--ghp-surface-hover);
 }
 button.ghp-board-card:disabled { cursor: default; opacity: .7; }
 .ghp-board-card:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff)); outline-offset: 1px; }
 a.ghp-board-card { text-decoration: none; }
-.ghp-board-card-bound { border-color: rgba(63, 185, 80, .4); background: rgba(63, 185, 80, .06); }
+.ghp-board-card-bound {
+  border-color: color-mix(in srgb, var(--ghp-accent-brand) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ghp-accent-brand) 30%, transparent);
+}
 .ghp-board-card-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  color: var(--dsw-alias-label-primary, #e6e6e6);
-  font-size: 12.5px;
+  color: var(--ghp-text-primary);
+  font-size: 12px;
   font-weight: 500;
   line-height: 18px;
   overflow-wrap: anywhere;
 }
-.ghp-board-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 11px; line-height: 16px; }
-.ghp-board-card-type { padding: 0 5px; border: 1px solid var(--dsw-alias-border-l2, #3a3a3a); border-radius: 999px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10px; line-height: 14px; }
+.ghp-board-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--ghp-text-tertiary); font-size: 11px; line-height: 16px; }
+.ghp-type-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; }
+.ghp-type-dot-issue { background: var(--ghp-accent-issue); }
+.ghp-type-dot-pr { background: var(--ghp-accent-pr); }
+.ghp-type-dot-draft { background: var(--ghp-accent-draft); }
+.ghp-board-card-type {
+  padding: 0 5px;
+  border: 1px solid var(--ghp-border-strong);
+  border-radius: 999px;
+  color: var(--ghp-text-tertiary);
+  font-size: 10px;
+  line-height: 14px;
+}
 .ghp-board-card-repo { display: inline-flex; align-items: baseline; min-width: 0; max-width: 100%; overflow: hidden; color: var(--dsw-alias-label-secondary, #a3a3a3); font-family: var(--dsw-font-markdown-code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10.5px; }
 .ghp-board-card-repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ghp-board-card-repo-number { flex: none; white-space: nowrap; }
 .ghp-board-card-spinner { display: inline-flex; align-items: center; }
 .ghp-board-card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.ghp-board-card .ghp-label { height: 17px; max-width: 100%; padding: 0 6px; overflow: hidden; font-size: 10px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-board-card .ghp-label { height: 17px; max-width: 100%; padding: 0 6px; overflow: hidden; font-size: 10px; line-height: 15px; }
 .ghp-board-card-more { color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10.5px; }
-.ghp-board-card-milestone { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 10.5px; line-height: 16px; }
-.ghp-board-card-milestone svg { flex: none; }
+.ghp-board-card-milestone {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  height: 17px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--ghp-accent-pr) 26%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ghp-accent-pr) 12%, transparent);
+  color: var(--ghp-text-secondary);
+  font-size: 10px;
+  line-height: 15px;
+}
+.ghp-board-card-milestone svg { flex: none; color: var(--ghp-accent-pr); }
 .ghp-board-card-milestone-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ghp-notice-warn { border-color: var(--dsw-alias-state-warn-secondary, rgba(217, 119, 6, .4)); }
+.ghp-notice-warn { border-color: color-mix(in srgb, var(--ghp-accent-warn) 34%, transparent); }
 .ghp-notice-text { flex: 1; min-width: 0; }
 
 /* Issue view ---------------------------------------------------------------- */
@@ -3322,11 +3553,26 @@ a.ghp-board-card { text-decoration: none; }
 .ghp-comments-empty { padding: 4px 2px 2px; }
 .ghp-comment {
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l1, #333);
-  border-radius: var(--dsw-radius-md, 10px);
-  background: var(--dsw-alias-bg-layer-1, #1c1c1c);
+  border: 1px solid var(--ghp-border);
+  border-radius: var(--ghp-radius-md);
+  background: var(--ghp-surface-sunken);
 }
 .ghp-comment-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 12px; line-height: 18px; }
+.ghp-comment-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--ghp-avatar-color, var(--ghp-text-tertiary)) 32%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ghp-avatar-color, var(--ghp-text-tertiary)) 20%, transparent);
+  color: var(--ghp-text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
 .ghp-comment-icon { display: flex; }
 .ghp-comment-author { color: var(--dsw-alias-label-primary, #e6e6e6); font-weight: 500; }
 .ghp-comment-link { width: 22px; height: 22px; margin-left: auto; }
@@ -3346,7 +3592,7 @@ a.ghp-board-card { text-decoration: none; }
 .ghp-md-quote { margin: 0 0 12px; padding: 2px 0 2px 12px; border-left: 3px solid var(--dsw-alias-border-l3, #4a4a4a); color: var(--dsw-alias-label-tertiary, #8a8a8a); }
 .ghp-md-quote > :last-child { margin-bottom: 0; }
 .ghp-md-hr { margin: 14px 0; border: none; border-top: 1px solid var(--dsw-alias-border-l1, #333); }
-.ghp-md a { color: var(--dsw-alias-link, #6ea8fe); text-decoration: none; }
+.ghp-md a { color: var(--ghp-accent-brand); text-decoration: none; }
 .ghp-md a:hover { text-decoration: underline; }
 .ghp-md strong { color: var(--dsw-alias-label-primary, #e6e6e6); font-weight: 600; }
 .ghp-md-inlinecode, .ghp-md-codeblock {
@@ -3380,7 +3626,7 @@ a.ghp-board-card { text-decoration: none; }
   vertical-align: -2px;
   color: var(--dsw-alias-state-success-primary, #3fb950);
 }
-.ghp-md-check-on { border-color: var(--dsw-alias-state-success-primary, #3fb950); background: rgba(63, 185, 80, .12); }
+.ghp-md-check-on { border-color: var(--ghp-accent-success); background: color-mix(in srgb, var(--ghp-accent-success) 12%, transparent); }
 .ghp-md-check svg { width: 10px; height: 10px; }
 
 /* Picker modal -------------------------------------------------------------- */
@@ -3494,6 +3740,17 @@ a.ghp-board-card { text-decoration: none; }
 .ghp-manual .ghp-input { flex: 1 1 150px; }
 .ghp-manual .ghp-manual-number { flex: 0 1 88px; }
 .ghp-manual .ghp-btn { flex: none; }
+
+/* Motion & a11y (contract §4.2.0): 120ms color/border transitions only; every
+   colored dot is decorative with the text label always present; focus rings use
+   the shipped focus token. Non-essential motion is disabled on request. */
+@media (prefers-reduced-motion: reduce) {
+  .ghp-root *, .ghp-overlay * {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
 `
 
     /* ------------------------------------------------------------------ */

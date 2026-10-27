@@ -1,6 +1,6 @@
 # dsh-github-projects
 
-**v0.2.1** · the GitHub Project and Issue bound to your DSH session, one tab away.
+**v0.3.0** · the GitHub Project and Issue bound to your DSH session, one tab away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
@@ -33,6 +33,26 @@ and the header returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
+
+## What's new in 0.3.0 — status color system + smarter lanes
+
+- **A real status color system.** Lanes, list sections, type glyphs and the `issue` view now use a
+  deliberate palette: `No status` neutral, `TODO` blue, `In Progress` amber, `In Review` violet,
+  `Done` green, custom statuses cyan; Issues green, PRs violet, Drafts neutral; bound/selected uses
+  the brand accent. Tints are derived with `color-mix`, so both DSH light and dark themes work — no
+  hardcoded dark backgrounds.
+- **Color = state, not decoration.** Saturated color is reserved for status/type/bound/primary
+  actions; titles, meta, labels and body text stay neutral theme labels (no colored body text, and
+  no information conveyed by color alone — every colored dot sits next to its text label).
+- **Empty `No status` lane is hidden.** When the filtered `No status` count is 0 the lane no longer
+  takes a column; the other four canonical lanes always render (empty ones show “No items”), and a
+  custom-status lane only appears when it has items. The board exposes hidden canonical keys via
+  `data-ghp-hidden-lanes`.
+- **Light and dark both work.** Accent colors are theme-independent; every tint is derived with `color-mix` from the active DSH theme, so light mode keeps the same readable hierarchy (checked with a CDP probe against the light theme: tints/hairlines/dots stay readable with no dark-surface bleed; the probe shots are evidence only and not shipped — the automated harness runs dark only).
+- **Hierarchy pass.** Lane heads get a status hairline + tinted count pill, cards are raised surfaces
+  on sunken lanes, the toolbar gets a brand-tinted project tile, and empty/error states use a tinted
+  icon tile — motion is limited to 120ms color/border transitions and respects
+  `prefers-reduced-motion`.
 
 ## What's new in 0.2.1 (v1.1.1) — full-width layout
 
@@ -68,19 +88,19 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | ![projects tab, unbound](artifacts/screenshots/02-projects-empty.png) | ![project picker](artifacts/screenshots/03-projects-picker.png) |
 | Unbound workspace: pick a Project | Project picker: grouped by owner, filterable |
 | ![swimlane board](artifacts/screenshots/04-projects-board.png) | ![list view](artifacts/screenshots/05-projects-list.png) |
-| Default swimlane board (five status columns) | List view: grouped sections + status chips |
+| Real Project #9: status colors, and the empty `No status` lane hidden (4 lanes: TODO 27 / In Progress 1 / In Review 1 / Done 166 = 195) | List view: status-colored sections + chips |
 | ![milestone filter](artifacts/screenshots/06-projects-milestone.png) | ![issue empty state](artifacts/screenshots/07-issue-empty.png) |
-| Milestone filter (All / Backlog / milestones) | Unbound session: choose from a Project or paste a link |
+| Milestone `v1.2.0` filter active (195→19); `No status` stays hidden | Unbound session: choose from a Project or paste a link |
 | ![issue detail](artifacts/screenshots/08-issue-detail.png) | ![issue comments](artifacts/screenshots/09-issue-comments.png) |
-| Bound Issue: sticky header, body, labels | Comments with author, relative time and links |
+| Bound Issue: green Open badge, sticky header, body, labels | Comments with author, relative time and links |
 | ![wide layout](artifacts/screenshots/11-projects-wide.png) | |
-| 2200×1300 wide window: the projects page fills the session area (86.6% of the window; the old 1000px cap would have been 45.5%) | |
+| 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed); the four real lanes share the width equally at 454.3px each | |
 
 Screenshots 01–09 are captured by the isolated e2e harness in **real-host mode** against live `gh`
-(real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`). `11-projects-wide.png` is
-harness output at **2200×1300**, proving the full-width layout. `10-desktop-tabs.png` is different: it
-is a manual capture of the **real Desktop app** after reinstalling v0.2.1, showing the tabs on a live
-session:
+(real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`), refreshed for the v0.3.0
+color system. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width layout
+with the same status colors. `10-desktop-tabs.png` is different: it is a manual capture of the **real
+Desktop app**, showing the tabs on a live session:
 
 ![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -245,13 +265,13 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | 0.2.1 (v1.1.1: full-width adaptive layout; v1.1: swimlane board + milestone filter) |
+| Plugin version | 0.3.0 (status color system + hidden empty `No status` lane; 0.2.x: full-width layout, swimlane board, milestone filter) |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v1.1.1 (0.2.1) accepted 2026-10-28: 69/69 host tests; e2e PASS in fixture and real modes (frozen client `4f41dc9d…`); `projects-wide` at 2200×1300 shows the page filling 86.6% of the window (old 1000px cap = 45.5%); 11 screenshots incl. manual Desktop capture — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v0.3.0 accepted 2026-10-28: 69/69 host tests; e2e PASS in fixture and real modes (frozen client `813dae78…`); hidden `No status` lane verified (real #9 exposes `data-ghp-hidden-lanes="no-status"`, 4 lanes / 195 cards); visual system refreshed in all 11 screenshots; light theme manually checked — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 There is no formal `engines.dsh` gate yet: a DSH upgrade that changes the `conversation.view` slot
 or session standard props may require a plugin update.
@@ -260,6 +280,11 @@ or session standard props may require a plugin update.
 
 - **Read-only.** No writing to GitHub: no status changes, comments, issue creation or field edits.
 - **The board is read-only:** no drag-and-drop between columns, no manual card ordering.
+- **Lane visibility follows the filter:** the `No status` lane is hidden when its filtered count is 0
+  (the four other canonical lanes always show), and a custom-status lane only appears when it has
+  items — so the number of lanes changes with your milestone/text filters.
+- **Color is supplementary:** status/type colors are backed by text labels (dots are decorative);
+  body text and titles stay neutral, and no information is conveyed by color alone.
 - **Board layout:** since 0.2.1 the page has no width cap — board, list and issue pages fill the
   conversation body. Columns have a 176px minimum width, so windows narrower than ~960px scroll
   horizontally; wide windows spread the five lanes across the full width. A status the board doesn't
