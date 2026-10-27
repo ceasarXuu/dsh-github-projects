@@ -25,20 +25,24 @@ The run prints one JSON line per stage: `{"step": "<name>", "ok": true|false, "d
 | 4 | `tabs` | session header has exactly the shipped `对话`, `轨迹` **and** the plugin's `projects`, `issue` tabs | `01-tabs.png` |
 | 5 | `projects-empty` | `projects` tab renders the unbound empty state (`绑定 GitHub Project`, `选择 Project`) | `02-projects-empty.png` |
 | 6 | `projects-picker` | picker opens, renders project rows + manual binding row, loading finished | `03-projects-picker.png` |
-| 7 | `projects-bind` | selecting `Astropath-issues` (#9) binds the workspace project; toolbar + status chips + sections render (skeleton gone) | `04-projects-list.png` |
-| 8 | `issue-empty` | `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`, reference input) | `05-issue-empty.png` |
-| 9 | `issue-bind` | project row `绑定` action binds issue #240 and the client switches to the `issue` view (also verifies the ref-paste fallback if the row action is unavailable) | — |
-| 10 | `issue-detail` | detail is **fully loaded** (meta line `N 条评论`, markdown body, labels, comments) and rendered | `06-issue-detail.png` |
-| 11 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed) | — |
-| opt | `issue-comments` | only with `--extra-comments`: scrolls the issue view to the bottom and shoots the comments | `08-issue-comments.png` |
+| 7 | `projects-board` | binds `Astropath-issues` (#9) from the picker, then asserts the v1.1 swimlane board: `[data-ghp-view-mode="board"]`, `[data-ghp-board]`, the five columns in order `no-status,todo,in-progress,in-review,done` with `data-ghp-count`, ≥1 `[data-ghp-card]`, and column counters summing to the rendered cards | `04-projects-board.png` |
+| 8 | `projects-list` | `[data-ghp-action="view-list"]` switches to list mode: `[data-ghp-view-mode="list"]`, `[data-ghp-list]`, grouped status sections with rows | `05-projects-list.png` |
+| 9 | `projects-milestone` | back to board; `[data-ghp-action="milestone"]` opens the dropdown, options include `all` + `backlog` + a concrete milestone (`v1.2.0` when present), selecting it moves `data-active="true"`, shrinks card counts (and keeps counters consistent); captured with the dropdown open; then reset to `all`, counts restored, dropdown closed | `06-projects-milestone.png` |
+| 10 | `issue-empty` | `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`, reference input) | `07-issue-empty.png` |
+| 11 | `issue-detail` | binds #240 from the projects board card (`[data-ghp-card][data-issue="ceasarXuu/Astropath#240"]`, whole card is the action; ref-paste fallback kept) and asserts the fully loaded detail (meta line `N 条评论`, markdown body, labels, comments) | `08-issue-detail.png` |
+| 12 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed) | — |
+| opt | `issue-comments` | only with `--extra-comments`: scrolls the issue view to the bottom and shoots the comments | `09-issue-comments.png` |
 
 Screenshots are 1280×800 viewport PNGs written to
-[`artifacts/screenshots/`](../../artifacts/screenshots). Acceptance set: **01–06**.
-`07-desktop-tabs.png` is **not** produced by this harness: it is the manual
+[`artifacts/screenshots/`](../../artifacts/screenshots). Acceptance set:
+**01-tabs, 02-projects-empty, 03-projects-picker, 04-projects-board,
+05-projects-list, 06-projects-milestone, 07-issue-empty, 08-issue-detail**
+(plus opt-in `09-issue-comments.png` with `--extra-comments`).
+`10-desktop-tabs.png` is **not** produced by this harness: it is the manual
 evidence from the user's installed Desktop app (full-window screenshot of a real
-session header showing `对话 | 轨迹 | projects | issue`). `08-issue-comments.png`
-is opt-in (`--extra-comments`) and removed from the artifact directory by
-default runs so the acceptance set stays deterministic.
+session header showing `对话 | 轨迹 | projects | issue`). The harness deletes stale
+numbered shots from earlier runs (and `09` unless `--extra-comments`) so the
+artifact directory matches the current numbering.
 
 ## Options
 
@@ -46,9 +50,9 @@ default runs so the acceptance set stays deterministic.
 |---|---|
 | `--mode=fixture\|real` | host half under test. `fixture` mounts [`dev/mock-host.js`](../../dev/mock-host.js) (contract-shaped data from `test/fixtures/`, in-memory bindings, **no network, no gh**). `real` mounts [`index.js`](../../index.js) (real `gh`, read-only). Default `fixture`. |
 | `--keep` | keep the temp run directory (`home/`, `workspace/`, `documents/`, `logs/`, `chrome-profile/`). A failing run is kept even without this flag. |
-| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-bind`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-bind`, `issue-empty`, `issue-bind`, `issue-detail`, `issue-comments`, `console`. |
+| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-milestone`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-board`, `projects-list`, `projects-milestone`, `issue-empty`, `issue-detail`, `issue-comments`, `console`. |
 | `--headful` | run Chrome with a visible window (local debugging; default is `--headless=new`). |
-| `--extra-comments` | also capture `08-issue-comments.png`. |
+| `--extra-comments` | also capture `09-issue-comments.png`. |
 | `--timeout-scale=<n>` | multiply every stage timeout (slow machines: `1.5`). Default `1`. |
 | `-h`, `--help` | usage. |
 
@@ -154,32 +158,50 @@ Common failures:
 - `--mode real` performs only read calls, but rate limits / a temporary GitHub
   failure can still fail a stage; re-run or fall back to `--mode fixture`.
 - Screenshots are overwritten by the latest run; the artifact set is only
-  deterministic when runs are serialized. The harness deletes stale
-  `failure-*.png` (and `08-issue-comments.png` unless `--extra-comments`).
+  deterministic when runs are serialized. The harness deletes stale numbered
+  state shots from earlier revisions (`failure-*.png`, old `04-projects-list.png`,
+  `07-desktop-tabs.png`, …) and `09-issue-comments.png` unless `--extra-comments`;
+  `10-desktop-tabs.png` is preserved.
 - `02-projects-empty.png` includes the isolated temp workspace path by design
   (the empty state documents which workspace is being bound).
 
-## Current status (2026-10-28) — final acceptance, client.js frozen
+## Current status (2026-10-28) — v1.1 final acceptance, client.js frozen
 
-`client.js` frozen at sha256 `8c2e42216ead64f86d6212bcb788352329401425065a0afdaf60c0d3db6cebef`
-(mtime 2026-10-28 04:15; CSS-only last change, labels/selectors unchanged).
+`client.js` frozen at sha256 `309f63ac1009092dcb34c40000f50807427ac956872ca30c4801e03acd3500d1`
+(v1.1 swimlane board + milestone filter; the last edit only changed board-card meta
+rendering and mode-neutral truncation copy — no hook/DOM/state change).
 `index.js` ships `export const inject = ['webServer']`.
 
 | Mode | Command | Exit | Run dir | Result |
 |---|---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T20-16-09-236Z` | all stages ok; console 0 errors / 0 exceptions / 0 warnings; screenshots 01–06 |
-| real (`gh` 2.96.0, `ceasarXuu`) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T20-16-19-778Z` | `/health` `gh.available=true`; real Project #9 (`Astropath-issues`, 195 items) bound; issue #240 detail + comments; console 0 errors / 0 exceptions / 0 warnings; screenshots 01–06 + 08 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T20-56-22-460Z` | board `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1` (sum 8 == 8 cards), list rows 8 / groups 5, milestones `all 8 / backlog 4 / v1.2.0 4` with 8→4→8 and a single `data-active`, issue bound via board card; console 0 errors / 0 exceptions / 0 warnings; shots 01–08 |
+| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T20-56-33-844Z` | live counts `no-status 0 / todo 27 / in-progress 1 / in-review 1 / done 166` (sum 195 == 195 cards), list rows 195 / groups 4, milestones `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19` with 195→19→195, issue #240 bound from its board card + fully loaded detail; console 0 errors / 0 exceptions / 0 warnings; shots 01–08 + 09 |
 
-Both runs were made sequentially against the frozen client; the screenshot files in
-`artifacts/screenshots/` are the real-mode set from the authoritative run
-(`2026-10-27T20-16-19-778Z`). Final artifact set:
+Both runs were sequential against the frozen client; `artifacts/screenshots/` holds
+the authoritative **real-mode** set from `2026-10-27T20-56-33-844Z`.
+
+Final artifact set (`artifacts/screenshots/`):
 
 | File | Source |
 |---|---|
-| `01-tabs.png` … `06-issue-detail.png` | harness, real-host run (1280×800) |
-| `07-desktop-tabs.png` | **manual** Desktop-install evidence (Lead, 2560×1370), never written by the harness |
-| `08-issue-comments.png` | harness, real-host run with `--extra-comments` (1280×800) |
+| `01-tabs.png`, `02-projects-empty.png`, `03-projects-picker.png`, `04-projects-board.png`, `05-projects-list.png`, `06-projects-milestone.png`, `07-issue-empty.png`, `08-issue-detail.png` | harness, real-host run (1280×800) |
+| `09-issue-comments.png` | harness, real-host run with `--extra-comments` (1280×800) |
+| `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead, full app window), never written by the harness |
 
-Earlier runs (fixture 20:16:09 / real 20:16:19) are the authoritative pair for the
-frozen client; older temp run directories in `/tmp/dsh-github-projects-e2e/` are
-development history and may be deleted.
+Earlier v1.0 screenshot numbers (`04-projects-list.png`, `05-issue-empty.png`,
+`06-issue-detail.png`, `07-desktop-tabs.png`, `08-issue-comments.png`) are removed
+automatically as stale numbered state shots at the start of every run. Older temp
+run directories under `/tmp/dsh-github-projects-e2e/` are development history and
+may be deleted.
+
+## File map
+
+```
+scripts/e2e/
+  run.mjs              orchestrator: args, stages, JSON lines, screenshots, cleanup
+  lib/dsh.mjs          temp layout, overlay generation, `dsh web` spawn/URL/HTTP wait
+  lib/browser.mjs      headless Chrome launch, DevToolsActivePort, page target attach
+  lib/cdp.mjs          raw-WebSocket CDP client (evaluate/waitFor/screenshot, console capture)
+  lib/app.mjs          DSH UI helpers (app shell, dialogs, tabs, composer, buttons)
+  lib/mock-llm.mjs     local Anthropic-Messages SSE mock used to start an offline turn
+```

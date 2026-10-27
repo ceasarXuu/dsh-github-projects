@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-github-projects",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Bind a GitHub Project to a DSH workspace and an Issue to each session, shown as the `projects` and `issue` conversation tabs.",

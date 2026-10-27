@@ -15,8 +15,10 @@ more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
 - Two `conversation.view` slot entries, `scope: 'session'`, appended after the shipped views:
   - `id: 'github-projects'`, order `20`, label `projects`
   - `id: 'github-issue'`, order `21`, label `issue`
-- `projects` tab: shows the GitHub Project bound to the **workspace** of the current session, as a
-  status-grouped item list (Issues / PRs / drafts). Clicking an Issue binds it to the current
+- `projects` tab: shows the GitHub Project bound to the **workspace** of the current session. Default
+  view is a status swimlane board (`No status` / `TODO` / `In Progress` / `In Review` / `Done`,
+  left→right), with a toggle to the earlier grouped list; a milestone filter offers `全部`,
+  `Backlog` (no milestone) and every milestone present in the Project. Clicking an Issue binds it Clicking an Issue binds it to the current
   **session** and switches to the `issue` tab. Binding/replacing/unbinding the workspace Project is
   done from this tab.
 - `issue` tab: shows the Issue bound to the current **session** (header, body, labels, comments).
@@ -353,27 +355,61 @@ states with a retry button and a hint mapped from `code`:
 
 ### 4.2 `projects` view requirements
 
-States: loading skeleton → error (retry) → unbound empty state → bound list.
+States: loading skeleton → error (retry) → unbound empty state → bound board or list.
 
 - Unbound: centred empty state: icon, title `绑定 GitHub Project`, one-line explanation, primary
   button `选择 Project` opening the picker, and a muted hint that the binding is per workspace
-  (show workspace title/path). 
-- Picker: in-view overlay (absolutely positioned panel over the list, close on Esc/backdrop), list
-  from `GET /projects` grouped by owner, text filter, 30-row cap with internal scroll, each row shows
+  (show workspace title/path).
+- Picker: in-view overlay (portal modal scoped to the view rect, close on Esc/backdrop), list from
+  `GET /projects` grouped by owner, text filter, 30-row cap with internal scroll, each row shows
   title, owner/number, item count; selecting calls `POST /bind-workspace` then reloads config.
   Also a manual row: owner input + number input + `绑定` (for Projects the gh listing cannot see).
   Loading/error states inside the picker.
-- Bound toolbar: project title (link to GitHub), owner/number, total item count, `刷新`, `更换`,
-  `解绑` (确认后 unbound). On `解绑`: `POST /unbind-workspace` and show empty state.
-- Body: text filter over title/repo/number/labels; status chips (`全部` + distinct statuses, with
-  counts); then sections grouped by `status` in first-seen order, empty status → `未分类`. Each
-  section has a header with count. Rows: type glyph (issue/pr/draft), `repo#number`, title,
-  labels, milestone; an Issue row has a `绑定` action that binds it to the current session and calls
-  `openView('github-issue', 'bound')`; the currently bound issue (from `/config`) shows a `已绑定`
-  badge. PR/draft rows open their GitHub URL in a new tab instead of binding. Long lists scroll in
-  the view body; `truncated` shows a footer notice.
-- Refresh button sets `refresh=1`; the list keeps previous data while refreshing with a subtle
-  indicator.
+- Bound toolbar: project title (link to GitHub), owner/number, total item count, view-mode toggle
+  (`泳道` / `列表`), milestone filter, `刷新`, `更换`, `解绑` (确认后 unbound). On `解绑`:
+  `POST /unbind-workspace` and show empty state.
+- **View modes.** `board` (泳道视图) is the DEFAULT; `list` (列表视图) is the previous grouped
+  layout. The mode may persist per client (e.g. localStorage) but a first mount defaults to board.
+  - `board`: five fixed status columns, left→right: `No status`, `TODO`, `In Progress`,
+    `In Review`, `Done`. Items are assigned by case-insensitive status match
+    (`null`/blank → No status; `todo`; `in progress`; `in review`; `done`). Any other custom status
+    gets one extra column appended to the right carrying its raw name — never silently dropped.
+    Column header shows the label plus the count of the currently filtered items; each column body
+    scrolls vertically; cards render top-down. The board scrolls horizontally when the columns do
+    not fit (min column width ≈ 176px), and columns share the width on wide views. Read-only:
+    no drag-and-drop, no reordering writes.
+  - `list`: unchanged grouped sections (sections in first-seen status order, empty status →
+    `未分类`, each with a count) and status filter chips (`全部` + distinct statuses with counts).
+- **Milestone filter (both modes).** A toolbar dropdown: `全部` (all), `Backlog` (items with no
+  milestone), then each distinct milestone title present in the loaded items, sorted naturally
+  (e.g. `v1.1.0` < `v1.2.0` < `vNext`), each with a count. The selection applies together with the
+  text filter (and, in list mode, the status chips). Options derive from the unfiltered loaded item
+  set; if the selected milestone disappears after a refresh, fall back to `全部` and show a notice.
+- **Cards (board).** Title clamped to 2 lines, `repo#number`, labels (max 2 + `+N`), milestone chip.
+  The whole card is the action: Issue → bind to the current session and
+  `openView('github-issue', 'bound')` (same result as the list `绑定` action); PR/draft → open its
+  GitHub URL in a new tab. The currently bound issue shows a `已绑定` badge. Cards keep a
+  focus-visible outline and are keyboard-activatable (Enter/Space).
+- Text filter: title / repo / number / labels (same fields in both modes). Column counts and list
+  section counts reflect the filtered set.
+- Refresh button sets `refresh=1`; both modes keep previous data while refreshing with a subtle
+  indicator; `truncated` shows a footer notice.
+
+#### 4.2.1 Test hooks (stable selectors the e2e harness depends on)
+
+These are part of the contract, not incidental markup. Keep them on the named elements.
+
+| Attribute | Where | Meaning |
+|---|---|---|
+| `data-ghp-view-mode="board"\|"list"` | projects view root | currently active mode |
+| `[data-ghp-action="view-board"]` / `[data-ghp-action="view-list"]` | toolbar buttons | switch mode |
+| `[data-ghp-action="milestone"]` | toolbar toggle | opens the milestone dropdown |
+| `[data-ghp-milestone-option="all"\|"backlog"\|<title>"]` | dropdown options | select a filter; `data-active="true"` marks the current one |
+| `[data-ghp-board]` | board container | present in board mode |
+| `[data-ghp-column="no-status"\|"todo"\|"in-progress"\|"in-review"\|"done"]` (unknown: `other:<raw>`) | each column | column identity; `data-ghp-count` carries the filtered count |
+| `[data-ghp-card]` | each board card | card element; `data-issue="owner/repo#N"` on Issue cards |
+| `[data-ghp-card-action]` | card action | bind/open action (same element or a child button) |
+| `[data-ghp-list]` | list container | present in list mode |
 
 ### 4.3 `issue` view requirements
 
@@ -429,20 +465,39 @@ Isolated environment, never the user's `~/.dsh` profile or port:
 4. headless Chrome (`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`, v156) with
    `--headless=new --remote-debugging-port=0` + a temp `--user-data-dir`; drive CDP over a raw
    WebSocket (Node 24 global `WebSocket`); navigate to the tokenized URL;
-5. create/select a workspace + session through the real UI (dump DOM to find selectors), then assert
-   the `projects` / `issue` tabs exist, click them, assert empty/bound/detail states, and capture
-   `artifacts/screenshots/*.png` (1280×800 viewport) for: tabs in header, projects empty state,
-   project picker, bound project list, issue empty state, bound issue detail.
+5. create/select a workspace + session through the real UI (one mock-LLM turn so the view tabs
+   exist), then assert and screenshot the following (1280×800). Stage names are stable:
+   - `boot` — plugin `/health` answers (real mode: live `gh`);
+   - `app`, `session` — shell ready, one real turn completes;
+   - `tabs` — `["对话","轨迹","projects","issue"]`; `01-tabs.png`;
+   - `projects-empty` — unbound state; `02-projects-empty.png`;
+   - `projects-picker` — picker open, binds `Astropath-issues` #9; `03-projects-picker.png`;
+   - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, the five columns in
+     order `no-status,todo,in-progress,in-review,done`, ≥1 card; `04-projects-board.png`;
+   - `projects-list` — toggle to list: `[data-ghp-list]`, grouped sections; `05-projects-list.png`;
+   - `projects-milestone` — open the milestone dropdown: options include `全部` + `Backlog` + real
+     project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts
+     shrink and `data-active="true"` moves; `06-projects-milestone.png`; then reset to `全部`;
+   - `issue-empty` — unbound state; `07-issue-empty.png`;
+   - `issue-detail` — bind #240 from the projects view and assert the fully loaded detail;
+     `08-issue-detail.png`; optional `issue-comments` → `09-issue-comments.png`;
+   - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
+     failures;
+   - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
+     captured by the Lead after the final install.
 6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit
    nonzero on assertion failure. Must be re-runnable (`node scripts/e2e/run.mjs`).
 
 Keep the harness deterministic: run against the real `gh` CLI (already authenticated as `ceasarXuu`)
-but only read. Fixture mode (`dev/mock-host.js`) is the fallback when `gh` is unavailable.
+but only read. Fixture mode (`dev/mock-host.js`) is the fallback when `gh` is unavailable and must
+serve enough status/milestone variety (Todo / In Progress / In Review / Done / no status, backlog +
+at least one milestone) for the board and filter stages.
 
 ## 6. Definition of done
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
-- e2e harness exits 0 with the six screenshots above, in fixture mode and (once) real-host mode.
+- e2e harness exits 0 with screenshots 01–08 (and optional 09) in fixture mode and (once)
+  real-host mode, covering the board, list and milestone-filter stages.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence.

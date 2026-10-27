@@ -37,9 +37,10 @@ const STAGES = [
   'tabs',
   'projects-empty',
   'projects-picker',
-  'projects-bind',
+  'projects-board',
+  'projects-list',
+  'projects-milestone',
   'issue-empty',
-  'issue-bind',
   'issue-detail',
   'issue-comments',
   'console',
@@ -103,7 +104,7 @@ Options:
   --keep                keep the temp run directory (home, workspace, logs)
   --only=<stage>        stop after this stage: ${STAGES.join(', ')}
   --headful             run Chrome with a visible window (debugging)
-  --extra-comments      also capture the opt-in 08-issue-comments.png shot
+  --extra-comments      also capture the opt-in 09-issue-comments.png shot
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
@@ -147,12 +148,18 @@ async function main() {
   const emitTimeout = ms => Math.round(ms * scale)
 
   mkdirSync(SCREENSHOT_DIR, { recursive: true })
-  // Keep the acceptance artifact set deterministic: stale failure and opt-in
-  // screenshots from earlier runs must not linger next to the six shots.
-  // 07-desktop-tabs.png is manual Desktop-install evidence (Lead-owned), never
-  // written or removed by this harness.
+  // Keep the acceptance artifact set deterministic. The harness owns the
+  // numbered state shots; 10-desktop-tabs.png is manual Desktop-install
+  // evidence (Lead) and is never written or removed by this harness.
+  const EXPECTED_SHOTS = new Set([
+    '01-tabs.png', '02-projects-empty.png', '03-projects-picker.png',
+    '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
+    '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
+    '10-desktop-tabs.png',
+  ])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
-    if (name.startsWith('failure-') || name === '08-issue-comments.png') {
+    const numberedStateShot = /^\d\d-.*\.png$/u.test(name) && !EXPECTED_SHOTS.has(name)
+    if (name.startsWith('failure-') || numberedStateShot) {
       try { rmSync(join(SCREENSHOT_DIR, name), { force: true }) } catch { /* ignore */ }
     }
   }
@@ -352,24 +359,88 @@ async function main() {
       if (pickerOk === false) throw new Error('projects-picker stage failed')
     }
 
-    // ------------------------------------------------------ projects bind --
-    if (gated('projects-bind')) {
-      const projectsBindOk = await runStage('projects-bind', async () => {
+    // ----------------------------------------------------- projects board --
+    if (gated('projects-board')) {
+      const projectsBoardOk = await runStage('projects-board', async () => {
         const clicked = await clickTextRow(resources.cdp, 'Astropath-issues')
         assert(clicked, 'could not select the "Astropath-issues" row in the picker')
-        // Bound toolbar: project title, item count and the status-grouped list.
+        // Bound toolbar: project title, item count, view-mode toggle and filter.
         await waitForText(resources.cdp, 'Astropath-issues', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, '解绑', { timeoutMs: emitTimeout(20_000) })
         await waitForText(resources.cdp, '刷新', { timeoutMs: emitTimeout(20_000) })
-        await waitForText(resources.cdp, '全部', { timeoutMs: emitTimeout(20_000) })
-        await waitForPlugin(`document.querySelectorAll('[class*="ghp-item"]').length >= 1`, 'project item rows rendered')
-        await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project list loading finished')
-        await waitForPlugin(`document.querySelectorAll('[class*="ghp-section"]').length >= 1`, 'status sections rendered')
-        await settle(500)
-        const screenshot = await shot('04-projects-list.png')
-        return { screenshot }
+        await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project board loading finished')
+        const board = await waitForBoard(resources.cdp, emitTimeout(30_000))
+        await settle(400)
+        const screenshot = await shot('04-projects-board.png')
+        return { screenshot, mode: board.mode, columns: board.columns, cardCount: board.cardCount }
       })
-      if (projectsBindOk === false) throw new Error('projects-bind stage failed')
+      if (projectsBoardOk === false) throw new Error('projects-board stage failed')
+    }
+
+    // ------------------------------------------------------ projects list --
+    if (gated('projects-list')) {
+      const projectsListOk = await runStage('projects-list', async () => {
+        assert(await clickAction(resources.cdp, 'view-list'), 'could not click [data-ghp-action="view-list"]')
+        await waitForPlugin(`document.querySelector('[data-ghp-view-mode="list"]') !== null`, 'list view mode', emitTimeout(20_000))
+        await waitForPlugin(`document.querySelector('[data-ghp-list]') !== null`, 'list container', emitTimeout(20_000))
+        await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'list view loading finished')
+        const list = await resources.cdp.evaluate(LIST_SNAPSHOT)
+        assert(list.rows >= 1 || list.groups >= 1, `list view has neither rows nor grouped sections (rows=${list.rows}, groups=${list.groups})`)
+        assert(list.statusesInText.length >= 1, `list view shows no known status headers (text: ${JSON.stringify(list.statusesInText)})`)
+        await settle(400)
+        const screenshot = await shot('05-projects-list.png')
+        return { screenshot, rows: list.rows, groups: list.groups, statusesInText: list.statusesInText }
+      })
+      if (projectsListOk === false) throw new Error('projects-list stage failed')
+    }
+
+    // ------------------------------------------------- projects milestone --
+    if (gated('projects-milestone')) {
+      const milestoneOk = await runStage('projects-milestone', async () => {
+        // Back to board: the milestone screenshot is the filtered board with the
+        // dropdown open.
+        assert(await clickAction(resources.cdp, 'view-board'), 'could not click [data-ghp-action="view-board"]')
+        await waitForPlugin(`document.querySelector('[data-ghp-view-mode="board"]') !== null`, 'board view mode', emitTimeout(20_000))
+        const baseline = await waitForBoard(resources.cdp, emitTimeout(30_000))
+
+        assert(await clickMilestoneToggle(resources.cdp), 'could not click [data-ghp-action="milestone"]')
+        const options = await waitForMilestoneOptions(resources.cdp, emitTimeout(20_000))
+        const values = options.map(option => option.value)
+        for (const required of ['all', 'backlog']) {
+          assert(values.includes(required), `milestone filter is missing the "${required}" option (options: ${JSON.stringify(values)})`)
+        }
+        const milestone = values.includes('v1.2.0')
+          ? 'v1.2.0'
+          : values.find(value => value !== 'all' && value !== 'backlog')
+        assert(milestone !== undefined, `milestone filter has no concrete milestone option (options: ${JSON.stringify(values)})`)
+
+        assert(await selectMilestoneOption(resources.cdp, milestone), `could not select milestone option "${milestone}"`)
+        const filtered = await waitForBoard(resources.cdp, emitTimeout(30_000), { expectedLessThan: baseline.countSum })
+        assert(filtered.countSum < baseline.countSum, `milestone "${milestone}" did not shrink the board (${baseline.countSum} → ${filtered.countSum})`)
+        assert(filtered.countSum > 0, `milestone "${milestone}" filtered every card out`)
+        // Column counters must add up to the cards actually rendered.
+        assert(filtered.cardCount === filtered.countSum, `board counter mismatch after milestone filter: cards=${filtered.cardCount} counts=${filtered.countSum}`)
+
+        // Capture with the dropdown open so the selected (data-active) option is visible.
+        if (!(await isMilestoneDropdownOpen(resources.cdp))) {
+          assert(await clickMilestoneToggle(resources.cdp), 'could not reopen the milestone dropdown')
+        }
+        const active = await waitForMilestoneActive(resources.cdp, milestone, emitTimeout(10_000))
+        await settle(400)
+        const screenshot = await shot('06-projects-milestone.png')
+
+        // Reset to 全部 and leave the board in the unfiltered state for issue stages.
+        assert(await selectMilestoneOption(resources.cdp, 'all'), 'could not reset the milestone filter to "all"')
+        const reset = await waitForBoard(resources.cdp, emitTimeout(20_000))
+        assert(reset.countSum === baseline.countSum, `board did not return to the full set after reset (${reset.countSum} != ${baseline.countSum})`)
+        await closeMilestoneDropdown(resources.cdp)
+        return {
+          screenshot, milestones: values, selected: milestone, activeOption: active,
+          baselineCards: baseline.countSum, filteredCards: filtered.countSum, resetCards: reset.countSum,
+          columns: filtered.columns,
+        }
+      })
+      if (milestoneOk === false) throw new Error('projects-milestone stage failed')
     }
 
     // -------------------------------------------------------- issue empty --
@@ -378,26 +449,25 @@ async function main() {
         assert(await clickTab(resources.cdp, 'issue'), 'could not click the "issue" tab')
         await waitForText(resources.cdp, '为当前会话绑定 Issue', { timeoutMs: emitTimeout(30_000) })
         await settle(300)
-        const screenshot = await shot('05-issue-empty.png')
+        const screenshot = await shot('07-issue-empty.png')
         return { screenshot }
       })
       if (issueEmptyOk === false) throw new Error('issue-empty stage failed')
     }
 
-    // --------------------------------------------------------- issue bind --
-
+    // ------------------------------------------------------- issue detail --
     let boundIssuePath = null
-    if (gated('issue-bind')) {
-      const issueBindOk = await runStage('issue-bind', async () => {
-        // Preferred path: the "绑定" action of the issue #240 row in the bound
-        // project list (the plugin switches to the issue view itself).
+    if (gated('issue-detail')) {
+      const issueDetailOk = await runStage('issue-detail', async () => {
+        // Bind #240 from the projects board (the whole card is the action; the
+        // plugin switches to the issue view itself).
         assert(await clickTab(resources.cdp, 'projects'), 'could not go back to the "projects" tab')
-        await waitForText(resources.cdp, '#240', { timeoutMs: emitTimeout(30_000) })
-        const rowBound = await clickBindActionForRow(resources.cdp, '#240')
-        if (rowBound) {
-          boundIssuePath = 'projects-row-bind'
+        await waitForBoard(resources.cdp, emitTimeout(30_000))
+        const opened = await openIssueCard(resources.cdp, 'ceasarXuu/Astropath#240')
+        if (opened) {
+          boundIssuePath = 'projects-card'
         } else {
-          // Fallback: paste the issue reference into the issue view's empty state.
+          // Fallback: paste the issue reference into the issue empty state.
           assert(await clickTab(resources.cdp, 'issue'), 'could not return to the "issue" tab')
           const set = await setByPlaceholder(resources.cdp, '粘贴 Issue 链接或 owner/repo#123', 'ceasarXuu/Astropath#240')
           assert(set, 'issue empty state has no reference input')
@@ -405,31 +475,20 @@ async function main() {
           assert(bound, 'issue empty state has no "绑定" button')
           boundIssuePath = 'issue-ref-paste'
         }
-        return { path: boundIssuePath }
-      })
-      if (issueBindOk === false) throw new Error('issue-bind stage failed')
-    }
-
-    // ------------------------------------------------------- issue detail --
-    if (gated('issue-detail')) {
-      const issueDetailOk = await runStage('issue-detail', async () => {
-        // The plugin switches to the issue view after binding; if the fallback
-        // path was used the issue tab is already open.
+        // The issue view renders the binding summary immediately; wait for the
+        // bound detail header (the projects view also contains "#240" on a card).
+        await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header rendered')
         await waitForText(resources.cdp, '#240', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, 'ceasarXuu/Astropath', { timeoutMs: emitTimeout(20_000) })
         await waitForText(resources.cdp, '会话名称丰富化', { timeoutMs: emitTimeout(20_000) })
-        // The header renders immediately from the binding summary, so the text
-        // assertions above can pass before GET /issue resolves. Wait for
-        // detail-only markers (meta line, markdown body, labels, comments) so the
-        // screenshot never catches the loading skeleton.
-        await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue header rendered')
+        // Detail-only markers before shooting (never capture the loading skeleton).
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'issue detail loading finished')
         await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(20_000), label: 'issue meta line' })
         await waitForText(resources.cdp, '需求（用户', { timeoutMs: emitTimeout(20_000), label: 'issue body markdown' })
         await waitForText(resources.cdp, 'enhancement', { timeoutMs: emitTimeout(20_000), label: 'issue labels' })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-comment"]:not([class*="ghp-comments"])').length >= 1`, 'issue comments rendered')
         await settle(500)
-        const screenshot = await shot('06-issue-detail.png')
+        const screenshot = await shot('08-issue-detail.png')
         return { screenshot, bindPath: boundIssuePath }
       })
       if (issueDetailOk === false) throw new Error('issue-detail stage failed')
@@ -447,7 +506,7 @@ async function main() {
         assert(scrolled, 'issue view scrollport (.ghp-root) not found')
         await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(10_000) })
         await settle(500)
-        const screenshot = await shot('08-issue-comments.png')
+        const screenshot = await shot('09-issue-comments.png')
         return { screenshot }
       })
       if (commentsOk === false) throw new Error('issue-comments stage failed')
@@ -493,8 +552,8 @@ async function main() {
 
   // Artifact accounting: the harness writes 01–06 (and optionally 08); 07 is
   // manual Desktop-install evidence owned by the Lead and never touched here.
-  const desktopEvidence = join(SCREENSHOT_DIR, '07-desktop-tabs.png')
-  const manualEvidence = existsSync(desktopEvidence) ? { '07-desktop-tabs.png': desktopEvidence } : {}
+  const desktopEvidence = join(SCREENSHOT_DIR, '10-desktop-tabs.png')
+  const manualEvidence = existsSync(desktopEvidence) ? { '10-desktop-tabs.png': desktopEvidence } : {}
 
   // Persist a machine-readable record of the run next to its logs.
   const summary = {
@@ -511,7 +570,7 @@ async function main() {
   writeFileSync(join(root.logs, 'summary.json'), JSON.stringify(summary, null, 2), 'utf8')
 
   if (!options.extraComments) {
-    try { rmSync(join(SCREENSHOT_DIR, '08-issue-comments.png'), { force: true }) } catch { /* ignore */ }
+    try { rmSync(join(SCREENSHOT_DIR, '09-issue-comments.png'), { force: true }) } catch { /* ignore */ }
   }
   const keepRun = options.keep || failures.length > 0
   if (!keepRun) {
@@ -596,6 +655,185 @@ async function setByPlaceholder(cdp, placeholder, value) {
 function tailText(text, length = 2000) {
   const value = String(text ?? '')
   return value.length <= length ? value : `…${value.slice(-length)}`
+}
+
+// ------------------------------------------------------- plugin DOM helpers --
+// v1.1 stable test hooks (docs/CONTRACT.md §4.2.1): board/list modes, milestone
+// dropdown, board columns/cards. Kept as expressions so the same logic runs in
+// every stage and failure diagnostics can reuse it.
+
+const BOARD_SNAPSHOT = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const viewRoot = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis) ?? document.querySelector('[data-ghp-view-mode]')
+  const board = document.querySelector('[data-ghp-board]')
+  const columns = [...document.querySelectorAll('[data-ghp-column]')].map(el => ({
+    key: el.getAttribute('data-ghp-column'),
+    countAttr: el.getAttribute('data-ghp-count'),
+    cardCount: el.querySelectorAll('[data-ghp-card]').length,
+  }))
+  const cards = [...document.querySelectorAll('[data-ghp-card]')].filter(vis)
+  const countSum = columns.reduce((sum, column) => {
+    const value = Number(column.countAttr)
+    return sum + (Number.isFinite(value) ? value : 0)
+  }, 0)
+  return {
+    mode: viewRoot === null ? null : viewRoot.getAttribute('data-ghp-view-mode'),
+    hasBoard: board !== null,
+    columns: columns.map(column => ({ key: column.key, count: Number(column.countAttr), cardCount: column.cardCount })),
+    cardCount: cards.length,
+    countSum,
+  }
+})()`
+
+const LIST_SNAPSHOT = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const viewRoot = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis) ?? document.querySelector('[data-ghp-view-mode]')
+  const list = document.querySelector('[data-ghp-list]')
+  const statuses = ['No status', 'TODO', 'In Progress', 'In Review', 'Done', '未分类']
+  const text = list === null ? '' : (list.innerText || '')
+  const rowCandidates = list === null ? [] : [...list.querySelectorAll('.ghp-item, [data-ghp-card], [class*="ghp-item"]')].filter(vis)
+  const rows = new Set(rowCandidates.map(el => el.closest('.ghp-item') ?? el)).size
+  const groups = list === null ? 0 : (() => {
+    const exact = list.querySelectorAll('.ghp-section').length
+    if (exact > 0) return exact
+    return list.querySelectorAll('[class*="ghp-section"]:not([class*="ghp-section-head"]):not([class*="ghp-section-title"]):not([class*="ghp-section-count"])').length
+  })()
+  return {
+    mode: viewRoot === null ? null : viewRoot.getAttribute('data-ghp-view-mode'),
+    hasList: list !== null,
+    rows,
+    groups,
+    textLength: text.trim().length,
+    statusesInText: statuses.filter(status => text.includes(status)),
+  }
+})()`
+
+const MILESTONE_OPTIONS = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  return [...document.querySelectorAll('[data-ghp-milestone-option]')].filter(vis).map(el => ({
+    value: el.getAttribute('data-ghp-milestone-option'),
+    active: el.getAttribute('data-active') === 'true',
+    text: (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+  }))
+})()`
+
+/** Wait until the board reaches a coherent state (mode, column order, counters). */
+async function waitForBoard(cdp, timeoutMs, { expectedLessThan } = {}) {
+  const expectedColumns = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  let lastProblem = 'not evaluated'
+  while (Date.now() < deadline) {
+    try {
+      last = await cdp.evaluate(BOARD_SNAPSHOT)
+    } catch (error) {
+      lastProblem = `evaluate failed: ${error.message}`
+      await sleep(200)
+      continue
+    }
+    const keys = last.columns.map(column => column.key)
+    const columnsOk = expectedColumns.every((key, index) => keys[index] === key)
+    const cardsOk = last.cardCount >= 1
+    const consistencyOk = last.cardCount === last.countSum
+    const shrinkOk = expectedLessThan === undefined || last.countSum < expectedLessThan
+    if (last.mode === 'board' && last.hasBoard && columnsOk && cardsOk && consistencyOk && shrinkOk) return last
+    lastProblem = `mode=${JSON.stringify(last.mode)} hasBoard=${last.hasBoard} columns=${JSON.stringify(keys)} cards=${last.cardCount} countSum=${last.countSum}`
+    await sleep(200)
+  }
+  throw new Error(`board did not reach the expected state within ${timeoutMs}ms (${lastProblem})`)
+}
+
+/** Click one of the `data-ghp-action` toolbar hooks. */
+async function clickAction(cdp, action) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const selector = '[data-ghp-action="' + ${JSON.stringify(action)} + '"]'
+    const el = [...document.querySelectorAll(selector)].find(vis) ?? document.querySelector(selector)
+    if (el === undefined || el === null) return false
+    el.click()
+    return true
+  })()`)
+}
+
+const clickMilestoneToggle = cdp => clickAction(cdp, 'milestone')
+
+async function milestoneOptions(cdp) {
+  return cdp.evaluate(MILESTONE_OPTIONS).catch(() => [])
+}
+
+/** Wait for the milestone dropdown to expose its visible options. */
+async function waitForMilestoneOptions(cdp, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let last = []
+  while (Date.now() < deadline) {
+    last = await milestoneOptions(cdp)
+    if (last.length >= 2) return last
+    await sleep(150)
+  }
+  throw new Error(`milestone dropdown did not open (visible options: ${JSON.stringify(last.map(option => option.value))})`)
+}
+
+async function isMilestoneDropdownOpen(cdp) {
+  return (await milestoneOptions(cdp)).length >= 1
+}
+
+/** Select a milestone option by its `data-ghp-milestone-option` value. */
+async function selectMilestoneOption(cdp, value) {
+  if (!(await isMilestoneDropdownOpen(cdp))) {
+    if (!(await clickMilestoneToggle(cdp))) return false
+    await waitForMilestoneOptions(cdp, 10_000).catch(() => {})
+  }
+  const clicked = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const els = [...document.querySelectorAll('[data-ghp-milestone-option]')].filter(vis)
+    const target = els.find(el => el.getAttribute('data-ghp-milestone-option') === ${JSON.stringify(value)})
+    if (target === undefined) return false
+    target.click()
+    return true
+  })()`)
+  await sleep(250)
+  return clicked
+}
+
+/** Wait until exactly one milestone option is active and it is `value`. */
+async function waitForMilestoneActive(cdp, value, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let actives = []
+  while (Date.now() < deadline) {
+    const options = await milestoneOptions(cdp)
+    actives = options.filter(option => option.active).map(option => option.value)
+    if (actives.length === 1 && actives[0] === value) return options
+    await sleep(150)
+  }
+  throw new Error(`milestone option "${value}" is not the single active option (active: ${JSON.stringify(actives)})`)
+}
+
+async function pressEscape(cdp) {
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
+}
+
+async function closeMilestoneDropdown(cdp) {
+  if (!(await isMilestoneDropdownOpen(cdp))) return
+  await pressEscape(cdp)
+  await sleep(250)
+  if (await isMilestoneDropdownOpen(cdp)) {
+    await clickMilestoneToggle(cdp)
+    await sleep(250)
+  }
+}
+
+/** Click the bind/open action of the board card for `issueRef` (owner/repo#N). */
+async function openIssueCard(cdp, issueRef) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const card = [...document.querySelectorAll('[data-ghp-card]')]
+      .find(el => el.getAttribute('data-issue') === ${JSON.stringify(issueRef)} && vis(el))
+    if (card === undefined) return false
+    const action = card.querySelector('[data-ghp-card-action]')
+    ;(action ?? card).click()
+    return true
+  })()`)
 }
 
 await main()

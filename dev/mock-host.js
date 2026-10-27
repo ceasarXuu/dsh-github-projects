@@ -99,6 +99,38 @@ function issueOf(raw, comments) {
   }
 }
 
+/**
+ * Extra fixture-only items so the v1.1 board/filter stages have data in every
+ * swimlane and a real "Backlog" population. They never reach real mode.
+ */
+const syntheticItems = [
+  {
+    id: 'mock-item-todo-backlog', type: 'issue', number: 9001, repo: 'ceasarXuu/Astropath',
+    title: '[mock] 待定需求：未分配 milestone 的条目', url: 'https://github.com/ceasarXuu/Astropath/issues/9001',
+    state: 'OPEN', status: 'TODO', labels: ['todo', 'mock'], milestone: null,
+  },
+  {
+    id: 'mock-item-in-progress', type: 'issue', number: 9002, repo: 'ceasarXuu/Astropath',
+    title: '[mock] 进行中：验收 board 的 In Progress 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9002',
+    state: 'OPEN', status: 'In Progress', labels: ['enhancement'], milestone: 'v1.2.0',
+  },
+  {
+    id: 'mock-item-no-status', type: 'issue', number: 9003, repo: 'ceasarXuu/Astropath',
+    title: '[mock] 无状态条目：验证 No status 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9003',
+    state: 'OPEN', status: null, labels: ['bug'], milestone: null,
+  },
+  {
+    id: 'mock-item-done', type: 'issue', number: 9004, repo: 'ceasarXuu/Astropath',
+    title: '[mock] 已完成条目：验证 Done 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9004',
+    state: 'CLOSED', status: 'Done', labels: ['done'], milestone: 'v1.2.0',
+  },
+  {
+    id: 'mock-item-draft', type: 'draft', number: null, repo: null,
+    title: '[mock] Draft 条目：无编号、无仓库', url: null,
+    state: null, status: 'TODO', labels: [], milestone: null,
+  },
+]
+
 const projects = (projectList.projects ?? []).map(projectOf)
 const issue = issueOf(issueFixture, commentFixtures)
 
@@ -197,7 +229,7 @@ async function handle(req, res, config) {
     const project = projects.find(item => item.number === number && item.owner === owner) ?? projects[0]
     return send(res, 200, {
       project,
-      items: (itemList.items ?? []).map(itemOf),
+      items: [...(itemList.items ?? []).map(itemOf), ...syntheticItems],
       fetchedAt: new Date().toISOString(),
       truncated: (itemList.totalCount ?? 0) > (itemList.items ?? []).length,
     })
