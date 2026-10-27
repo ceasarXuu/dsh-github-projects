@@ -38,12 +38,15 @@ const STAGES = [
   'projects-empty',
   'projects-picker',
   'projects-board',
+  'projects-browser',
   'projects-list',
   'projects-milestone',
   'projects-wide',
   'issue-empty',
+  'issue-bind-subtitle',
   'issue-detail',
   'issue-comments',
+  'projects-warm',
   'console',
 ]
 
@@ -53,7 +56,12 @@ const STAGES = [
  * entry must be documented in scripts/e2e/README.md.
  * @type {{pattern: RegExp, why: string}[]}
  */
-const BENIGN_CONSOLE_ERRORS = []
+const BENIGN_CONSOLE_ERRORS = [
+  {
+    pattern: /Refused to display[^\n]*github\.com|X-Frame-Options[^\n]*(?:deny|DENY)/iu,
+    why: 'github.com serves X-Frame-Options: DENY. The Web build renders DSH\'s built-in browser tab as an iframe, so the remote page body is refused; the harness still asserts the browser tab, its address bar and the iframe src (the Desktop build uses an Electron webview and renders the page natively).',
+  },
+]
 
 const MODES = {
   fixture: {
@@ -109,7 +117,7 @@ Options:
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
-Artifacts: artifacts/screenshots/*.png (01-tabs … 06-issue-detail)
+Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-browser-open, 13-issue-subtitle)
 Temp root: /tmp/dsh-github-projects-e2e/<timestamp>/
 `
 
@@ -156,9 +164,10 @@ async function main() {
     '01-tabs.png', '02-projects-empty.png', '03-projects-picker.png',
     '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
-    '10-desktop-tabs.png', '11-projects-wide.png',
+    '10-desktop-tabs.png', '11-projects-wide.png', '12-browser-open.png',
+    '13-issue-subtitle.png',
   ])
-  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png'])
+  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-browser-open.png', '13-issue-subtitle.png'])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
     const numberedStateShot = /^\d\d-.*\.png$/u.test(name) && !EXPECTED_SHOTS.has(name)
     if (name.startsWith('failure-') || numberedStateShot || DERIVED_SHOTS.has(name)) {
@@ -264,6 +273,9 @@ async function main() {
         const port = await waitForDevToolsPort(resources.chrome.userDataDir, emitTimeout(30_000))
         resources.cdp = await connectPageTarget(port)
         await resources.cdp.enable({ width: 1280, height: 800 })
+        // v0.4.0 host contract: record every plugin API response (status + JSON)
+        // so the console stage can assert `stale` booleans and log host timings.
+        await resources.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PLUGIN_FETCH_INSTRUMENTATION })
 
         // First navigation: a reload retry covers a slow first paint of the SPA.
         let booted = false
@@ -362,8 +374,10 @@ async function main() {
     }
 
     // ----------------------------------------------------- projects board --
+    let coldBoardMs = null
     if (gated('projects-board')) {
       const projectsBoardOk = await runStage('projects-board', async () => {
+        const boardStarted = Date.now()
         const clicked = await clickTextRow(resources.cdp, 'Astropath-issues')
         assert(clicked, 'could not select the "Astropath-issues" row in the picker')
         // Bound toolbar: project title, item count, view-mode toggle and filter.
@@ -372,6 +386,12 @@ async function main() {
         await waitForText(resources.cdp, '刷新', { timeoutMs: emitTimeout(20_000) })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project board loading finished')
         const board = await waitForBoard(resources.cdp, emitTimeout(30_000))
+        coldBoardMs = Date.now() - boardStarted
+        // Before any bind, no session subtitle may exist (v0.4.0 baseline).
+        assert(
+          (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
+          'session subtitle exists before any issue was bound',
+        )
         // v0.3.0 hidden-lane rule: fixture data has a No-status item (5 lanes);
         // real Project #9 has none (4 lanes, data-ghp-hidden-lanes="no-status").
         const expectation = expectedLaneKeysForMode(options.mode, board.laneCheck.hidden)
@@ -389,9 +409,81 @@ async function main() {
           laneKeys: board.laneCheck.laneKeys,
           columns: board.columns,
           cardCount: board.cardCount,
+          coldBoardMs,
         }
       })
       if (projectsBoardOk === false) throw new Error('projects-board stage failed')
+    }
+
+    // --------------------------------------------------- projects browser --
+    // v0.4.0: clicking the card BODY opens DSH's built-in right sidebar browser
+    // and must NOT bind — binding is only the explicit bind action.
+    if (gated('projects-browser')) {
+      const projectsBrowserOk = await runStage('projects-browser', async () => {
+        await waitForBoard(resources.cdp, emitTimeout(20_000))
+        const issueRef = 'ceasarXuu/Astropath#240'
+        const bindActionPresent = await cardHasAction(resources.cdp, issueRef, 'bind')
+        assert(bindActionPresent, `card ${issueRef} has no explicit [data-ghp-card-action="bind"] button`)
+        const clicked = await clickCardAction(resources.cdp, issueRef, 'open')
+        assert(clicked, `could not click [data-ghp-card-action="open"] on card ${issueRef}`)
+        const browser = await waitForSidebarBrowser(resources.cdp, emitTimeout(20_000), issueRef)
+        assert(browser.dockkitTabs.length >= 1, 'built-in browser tab is missing from the right sidebar ([data-dockkit-tab])')
+        assert(
+          browser.addressValue !== null && browser.addressValue.includes('github.com/ceasarXuu/Astropath/issues/240'),
+          `built-in browser address bar does not show the issue URL (address: ${JSON.stringify(browser.addressValue)})`,
+        )
+        // Opening the browser must not create a binding or switch views.
+        assert(
+          (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
+          'opening the card body created a binding (session subtitle appeared)',
+        )
+        // Opening the right-sidebar browser narrows the conversation column; the
+        // shipped view-tab row then clamps extra tabs into the "更多会话视图" menu,
+        // so a visible selected tab may be absent. Assert the projects board is
+        // still the mounted view (and the issue view did not open) instead.
+        const viewState = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const modeRoot = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis)
+          const board = [...document.querySelectorAll('[data-ghp-board]')].find(vis)
+          const issueHead = [...document.querySelectorAll('[class*="ghp-issue-head"]')].find(vis)
+          const active = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
+          const more = [...document.querySelectorAll('button,[role="button"]')]
+            .find(el => (el.getAttribute('aria-label') || '').includes('更多会话视图'))
+          return {
+            mode: modeRoot === undefined ? null : modeRoot.getAttribute('data-ghp-view-mode'),
+            board: board !== undefined,
+            issueHead: issueHead !== undefined,
+            activeTab: active === undefined ? null : (active.innerText || '').trim(),
+            tabsClamped: more !== undefined,
+          }
+        })()`)
+        assert(viewState.board && viewState.mode === 'board', `card body open must not switch away from the projects board (state: ${JSON.stringify(viewState)})`)
+        assert(!viewState.issueHead, 'card body open bound the issue and opened the issue view (it must only open the browser)')
+        if (viewState.activeTab !== null) {
+          assert(viewState.activeTab === 'projects', `card body open must not switch views (active tab: ${JSON.stringify(viewState.activeTab)})`)
+        }
+        const activeTab = viewState.activeTab
+        await settle(700)
+        const screenshot = await shot('12-browser-open.png')
+        const closed = await closeSidebarBrowser(resources.cdp, emitTimeout(15_000))
+        assert(closed, 'could not close the built-in browser tab after 12-browser-open.png (dockkit tab context menu → 关闭)')
+        const sidebarCollapsed = await collapseRightSidebar(resources.cdp)
+        assert(sidebarCollapsed, 'right sidebar is still expanded after closing the built-in browser tab')
+        await settle(300)
+        return {
+          screenshot,
+          browserSrc: browser.src,
+          browserTag: browser.tag,
+          browserTabs: browser.dockkitTabs,
+          browserAddress: browser.addressValue,
+          activeTab,
+          tabsClamped: viewState.tabsClamped,
+          bindActionPresent,
+          closed,
+          sidebarCollapsed,
+        }
+      })
+      if (projectsBrowserOk === false) throw new Error('projects-browser stage failed')
     }
 
     // ------------------------------------------------------ projects list --
@@ -468,6 +560,10 @@ async function main() {
     // for the issue stages.
     if (gated('projects-wide')) {
       const projectsWideOk = await runStage('projects-wide', async () => {
+        // Baseline requirement: the right sidebar is collapsed (the wide page
+        // fills the conversation body, not a reduced column).
+        const sidebarCollapsed = await collapseRightSidebar(resources.cdp)
+        assert(sidebarCollapsed, 'right sidebar is expanded before projects-wide; the conversation body must be full width')
         const WIDTH = 2200
         const HEIGHT = 1300
         await setViewport(resources.cdp, WIDTH, HEIGHT)
@@ -555,28 +651,72 @@ async function main() {
       if (issueEmptyOk === false) throw new Error('issue-empty stage failed')
     }
 
-    // ------------------------------------------------------- issue detail --
-    let boundIssuePath = null
-    if (gated('issue-detail')) {
-      const issueDetailOk = await runStage('issue-detail', async () => {
-        // Bind #240 from the projects board (the whole card is the action; the
-        // plugin switches to the issue view itself).
+    // -------------------------------------------------- issue bind subtitle --
+    // v0.4.0: the explicit bind action binds and switches to the issue view; the
+    // session header then shows the issue subtitle row (§4.5).
+    if (gated('issue-bind-subtitle')) {
+      const bindSubtitleOk = await runStage('issue-bind-subtitle', async () => {
+        assert(
+          (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
+          'session subtitle exists before the first bind',
+        )
         assert(await clickTab(resources.cdp, 'projects'), 'could not go back to the "projects" tab')
         await waitForBoard(resources.cdp, emitTimeout(30_000))
-        const opened = await openIssueCard(resources.cdp, 'ceasarXuu/Astropath#240')
-        if (opened) {
-          boundIssuePath = 'projects-card'
-        } else {
-          // Fallback: paste the issue reference into the issue empty state.
-          assert(await clickTab(resources.cdp, 'issue'), 'could not return to the "issue" tab')
-          const set = await setByPlaceholder(resources.cdp, '粘贴 Issue 链接或 owner/repo#123', 'ceasarXuu/Astropath#240')
-          assert(set, 'issue empty state has no reference input')
-          const bound = await clickButton(resources.cdp, { text: '绑定' })
-          assert(bound, 'issue empty state has no "绑定" button')
-          boundIssuePath = 'issue-ref-paste'
-        }
-        // The issue view renders the binding summary immediately; wait for the
-        // bound detail header (the projects view also contains "#240" on a card).
+        const issueRef = 'ceasarXuu/Astropath#240'
+        const clicked = await clickCardAction(resources.cdp, issueRef, 'bind')
+        assert(clicked, `could not click [data-ghp-card-action="bind"] on card ${issueRef}`)
+        await settle(400)
+        assert(
+          (await resources.cdp.evaluate(`document.querySelector('[data-sidebar-browser-frame]') === null`)),
+          'the explicit bind action opened the built-in browser (it must only bind)',
+        )
+        await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header after bind', emitTimeout(30_000))
+        const activeTab = await activeViewTab(resources.cdp)
+        assert(activeTab === 'issue', `explicit bind must switch to the issue view (active tab: ${JSON.stringify(activeTab)})`)
+        const subtitle = await waitForSubtitle(resources.cdp, emitTimeout(20_000))
+        assert(subtitle.chipText.replace(/\s+/gu, '') === '#240', `subtitle chip text is ${JSON.stringify(subtitle.chipText)}, expected "#240"`)
+        assert(subtitle.titleText.length > 0, 'subtitle title text is empty')
+        assert(subtitle.titleAttr.length > 0, 'subtitle title attribute (full text) is empty')
+        assert(subtitle.titleAttr.includes('会话名称丰富化'), `subtitle title attribute does not carry the full issue title: ${JSON.stringify(subtitle.titleAttr.slice(0, 120))}`)
+        assert(subtitle.inHeader, 'subtitle row is not inside the session header (header[data-window-drag])')
+        // v0.4.0 placement: the subtitle must be its own header row ABOVE the
+        // conversation view-tab row (regression: it used to land inside the tab
+        // flex row), aligned with the session-title text start.
+        assert(subtitle.nextSiblingHasTabs, 'subtitle row is not directly above the view-tab row (next sibling does not contain [data-conversation-tabs])')
+        assert(
+          subtitle.tabsTop !== null && subtitle.rowBottom <= subtitle.tabsTop + 1,
+          `subtitle row is not a separate line above the view tabs (subtitle bottom=${subtitle.rowBottom}, tabs top=${subtitle.tabsTop})`,
+        )
+        assert(subtitle.sessionTitleLeft !== null, 'could not measure the session title start for subtitle alignment')
+        assert(
+          Math.abs(subtitle.rowLeft - subtitle.sessionTitleLeft) <= 2,
+          `subtitle row left (${subtitle.rowLeft}) is not aligned with the session title start (${subtitle.sessionTitleLeft})`,
+        )
+        assert(
+          subtitle.whiteSpace === 'nowrap' || subtitle.height <= 26,
+          `subtitle title is not single-line (whiteSpace=${subtitle.whiteSpace}, height=${subtitle.height})`,
+        )
+        assert(
+          subtitle.textOverflow === 'ellipsis' || subtitle.scrollWidth > subtitle.clientWidth,
+          `subtitle title is not truncated with an ellipsis (textOverflow=${subtitle.textOverflow}, scrollWidth=${subtitle.scrollWidth}, clientWidth=${subtitle.clientWidth})`,
+        )
+        // Polished evidence: let the issue detail finish loading so the shot shows
+        // the header subtitle over a rendered detail, not a loading skeleton.
+        await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'issue detail loaded before subtitle screenshot', emitTimeout(20_000))
+        await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(20_000), label: 'issue meta line' })
+        await settle(400)
+        const screenshot = await shot('13-issue-subtitle.png')
+        return { screenshot, subtitle, activeTab }
+      })
+      if (bindSubtitleOk === false) throw new Error('issue-bind-subtitle stage failed')
+    }
+
+    // ------------------------------------------------------- issue detail --
+    if (gated('issue-detail')) {
+      const issueDetailOk = await runStage('issue-detail', async () => {
+        // issue-bind-subtitle bound #240 via the explicit bind action and switched
+        // to this view; assert the fully loaded detail.
+        assert((await activeViewTab(resources.cdp)) === 'issue', 'issue view is not active after bind')
         await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header rendered')
         await waitForText(resources.cdp, '#240', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, 'ceasarXuu/Astropath', { timeoutMs: emitTimeout(20_000) })
@@ -589,7 +729,7 @@ async function main() {
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-comment"]:not([class*="ghp-comments"])').length >= 1`, 'issue comments rendered')
         await settle(500)
         const screenshot = await shot('08-issue-detail.png')
-        return { screenshot, bindPath: boundIssuePath }
+        return { screenshot, bindPath: 'issue-bind-subtitle' }
       })
       if (issueDetailOk === false) throw new Error('issue-detail stage failed')
     }
@@ -612,6 +752,57 @@ async function main() {
       if (commentsOk === false) throw new Error('issue-comments stage failed')
     }
 
+    // ------------------------------------------------------ projects warm --
+    // v0.4.0 §3.5: after the first load the projects view is served from the
+    // module-level SWR cache — switching back must render the board without a
+    // cold skeleton and within 1500ms.
+    if (gated('projects-warm')) {
+      const warmOk = await runStage('projects-warm', async () => {
+        assert(await clickTab(resources.cdp, '对话'), 'could not switch to the "对话" view for the warm-open measurement')
+        await settle(250)
+        const warmStarted = Date.now()
+        assert(await clickTab(resources.cdp, 'projects'), 'could not switch back to the "projects" view')
+        let warmMs = null
+        let skeletonSeen = false
+        let refreshIndicators = 0
+        let lastState = null
+        while (Date.now() - warmStarted < emitTimeout(6000)) {
+          lastState = await resources.cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const root = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis)
+            const board = [...document.querySelectorAll('[data-ghp-board]')].find(vis)
+            const skeletons = [...document.querySelectorAll('[class*="ghp-skeleton"]')].filter(vis).length
+            const spinners = [...document.querySelectorAll('[class*="ghp-spinner"]')].filter(vis).length
+            return {
+              mode: root === undefined ? null : root.getAttribute('data-ghp-view-mode'),
+              board: board !== undefined,
+              skeletons,
+              spinners,
+            }
+          })()`)
+          if (lastState.skeletons > 0) skeletonSeen = true
+          refreshIndicators = lastState.spinners
+          if (lastState.mode === 'board' && lastState.board && lastState.skeletons === 0) {
+            warmMs = Date.now() - warmStarted
+            break
+          }
+          await sleep(40)
+        }
+        assert(warmMs !== null, `cached projects view did not render a skeleton-free board within ${emitTimeout(6000)}ms (last: ${JSON.stringify(lastState)})`)
+        assert(warmMs <= 1500, `warm projects open took ${warmMs}ms (>1500ms) — CONTRACT §3.5 requires the cached board to render without a cold skeleton`)
+        assert(!skeletonSeen, 'warm projects open rendered a loading skeleton although cached data exists (SWR cache miss)')
+        // Host-side plugin request timings observed for the warm revalidation.
+        const pluginRequestTimings = resources.cdp.pluginRequests.slice(-12)
+        const pluginResponses = (await readPluginResponses(resources.cdp)).slice(-12).map(entry => ({
+          route: String(entry.url).replace(/^[^?]*\/plugin\/github-projects/iu, '').split('?')[0],
+          status: entry.status,
+          stale: entry.json?.stale ?? null,
+        }))
+        return { warmMs, coldBoardMs, skeletonSeen, refreshIndicators, pluginRequestTimings, pluginResponses }
+      })
+      if (warmOk === false) throw new Error('projects-warm stage failed')
+    }
+
     // ------------------------------------------------------------- console --
     await runStage('console', async () => {
       const { consoleErrors, consoleWarnings, exceptions } = resources.cdp.errors()
@@ -627,12 +818,44 @@ async function main() {
       assert(pluginHttpErrors.length === 0, `plugin HTTP error responses: ${JSON.stringify(pluginHttpErrors.slice(0, 5))}`)
       const pluginNetworkFailures = resources.cdp.networkFailures.filter(entry => String(entry.url ?? '').includes('/plugin/github-projects'))
       assert(pluginNetworkFailures.length === 0, `plugin network failures: ${JSON.stringify(pluginNetworkFailures.slice(0, 5))}`)
+
+      // v0.4.0 host contract: /projects, /items and /issue carry a boolean
+      // `stale` flag on every 2xx response (fixture always false; real may be
+      // true on a stale-but-served window — legal, logged, not failed).
+      const pluginResponses = await readPluginResponses(resources.cdp)
+      const dataRoutes = pluginResponses.filter(entry => entry.status >= 200 && entry.status < 300
+        && /\/plugin\/github-projects\/(projects|items|issue)(?:\?|$)/u.test(entry.url))
+      assert(dataRoutes.length >= 2, `expected /projects, /items and /issue responses to be observed, got ${dataRoutes.length}: ${JSON.stringify(pluginResponses.slice(0, 10))}`)
+      const missingStale = dataRoutes.filter(entry => typeof entry.json?.stale !== 'boolean')
+      assert(missingStale.length === 0, `plugin data responses without a boolean "stale" field: ${JSON.stringify(missingStale.slice(0, 5))}`)
+      const staleTrue = dataRoutes.filter(entry => entry.json?.stale === true)
+      const configResponses = pluginResponses.filter(entry => entry.status >= 200 && entry.status < 300
+        && /\/plugin\/github-projects\/config(?:\?|$)/u.test(entry.url))
+      const configPending = configResponses.filter(entry => entry.json?.gh?.error === 'pending' || entry.json?.gh?.available === false)
+      const routeSummary = pluginResponses.map(entry => ({
+        route: String(entry.url).replace(/^[^?]*\/plugin\/github-projects/iu, ''),
+        status: entry.status,
+        stale: entry.json?.stale ?? null,
+        ghError: entry.json?.gh?.error ?? null,
+        at: entry.at,
+      }))
       return {
         consoleErrors: 0,
         exceptions: 0,
         benign: benign.length,
         warnings: consoleWarnings.length,
         warningSamples: consoleWarnings.slice(0, 5).map(warning => clip(warning.text, 200)),
+        pluginRequests: resources.cdp.pluginRequests.filter(entry => !entry.url.includes('/health')).slice(-12),
+        pluginResponses: routeSummary.slice(-16),
+        stale: {
+          dataResponses: dataRoutes.length,
+          missingStale: missingStale.length,
+          staleTrue: staleTrue.length,
+        },
+        config: {
+          responses: configResponses.length,
+          ghPending: configPending.length,
+        },
       }
     })
   } catch (error) {
@@ -1090,6 +1313,233 @@ function pngDimensions(file) {
     throw new Error(`not a PNG file: ${file}`)
   }
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
+}
+
+// ---------------------------------------- v0.4.0 browser / subtitle helpers --
+
+/** The currently selected conversation view tab label (or null). */
+async function activeViewTab(cdp) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const el = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
+    return el === undefined ? null : (el.innerText || el.textContent || '').trim()
+  })()`)
+}
+
+/** Does the board card for `issueRef` expose the given `[data-ghp-card-action]`? */
+async function cardHasAction(cdp, issueRef, action) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const card = [...document.querySelectorAll('[data-ghp-card]')]
+      .find(el => el.getAttribute('data-issue') === ${JSON.stringify(issueRef)} && vis(el))
+    if (card === undefined) return false
+    if (card.getAttribute('data-ghp-card-action') === ${JSON.stringify(action)}) return true
+    return card.querySelector('[data-ghp-card-action="' + ${JSON.stringify(action)} + '"]') !== null
+  })()`)
+}
+
+/**
+ * Click a card's explicit action (`bind`/`open`). v0.4.0: the card body opens the
+ * built-in browser, the bind button binds — they are separate hooks.
+ */
+async function clickCardAction(cdp, issueRef, action) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const card = [...document.querySelectorAll('[data-ghp-card]')]
+      .find(el => el.getAttribute('data-issue') === ${JSON.stringify(issueRef)} && vis(el))
+    if (card === undefined) return false
+    const explicit = card.querySelector('[data-ghp-card-action="' + ${JSON.stringify(action)} + '"]')
+    let target = explicit
+    if (target === null && card.getAttribute('data-ghp-card-action') === ${JSON.stringify(action)}) target = card
+    if (target === null && ${JSON.stringify(action)} === 'open') target = card
+    if (target === null) return false
+    target.click()
+    return true
+  })()`)
+}
+
+/** Wait for DSH's built-in sidebar browser iframe showing the given issue URL. */
+async function waitForSidebarBrowser(cdp, timeoutMs, issueRef) {
+  const selector = `[data-sidebar-browser-frame]`
+  const [repo, number] = issueRef.split('#')
+  const expectedUrlPart = `github.com/${repo}/issues/${number}`
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await cdp.evaluate(`(() => {
+      const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+      const frame = [...document.querySelectorAll(${JSON.stringify(selector)})].find(vis)
+      if (frame === undefined) return null
+      const pane = frame.closest('[data-dockkit-pane]')
+      const tabs = (pane === null ? [...document.querySelectorAll('[data-dockkit-tab]')] : [...pane.querySelectorAll('[data-dockkit-tab]')]).filter(vis)
+      const addressValue = [...document.querySelectorAll('input')].filter(vis)
+        .map(el => el.value)
+        .find(value => typeof value === 'string' && value.includes('github.com/')) ?? null
+      return {
+        tag: frame.tagName.toLowerCase(),
+        src: frame.getAttribute('src') || (frame.src === undefined ? '' : frame.src),
+        dockkitTabs: tabs.map(el => (el.innerText || el.textContent || '').trim()).filter(Boolean),
+        addressValue,
+      }
+    })()`)
+    if (last !== null && last.src.includes(expectedUrlPart)) return last
+    await sleep(150)
+  }
+  throw new Error(`built-in browser did not open ${issueRef} within ${timeoutMs}ms (iframe: ${JSON.stringify(last)})`)
+}
+
+/**
+ * Close the built-in browser tab: open the dockkit tab context menu, click the
+ * "关闭" menu item, wait for the frame to disappear, then restore the sidebar
+ * baseline (collapsed) so later screenshots are unaffected.
+ * @returns {Promise<boolean>}
+ */
+async function closeSidebarBrowser(cdp, timeoutMs) {
+  const opened = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const frame = [...document.querySelectorAll('[data-sidebar-browser-frame]')].find(vis)
+    if (frame === undefined) return { ok: false, why: 'no browser frame' }
+    const pane = frame.closest('[data-dockkit-pane]')
+    const tabs = (pane === null ? [...document.querySelectorAll('[data-dockkit-tab]')] : [...pane.querySelectorAll('[data-dockkit-tab]')]).filter(vis)
+    let tab = tabs.find(el => el.getAttribute('aria-selected') === 'true')
+    if (tab === undefined) tab = tabs.find(el => (el.innerText || '').includes('GitHub'))
+    if (tab === undefined) tab = tabs[0]
+    if (tab === undefined) return { ok: false, why: 'no dockkit tab found' }
+    const rect = tab.getBoundingClientRect()
+    tab.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, button: 2,
+      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+    }))
+    return { ok: true }
+  })()`)
+  if (opened.ok !== true) return false
+  const menuReady = await cdp.waitFor(
+    `[...document.querySelectorAll('[data-dockkit-tab-menu] [data-dockkit-menu-close]')].some(el => el.getBoundingClientRect().width > 0)`,
+    { timeoutMs, intervalMs: 100, label: 'dockkit tab context menu' },
+  ).then(() => true).catch(() => false)
+  if (!menuReady) return false
+  const clicked = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const item = [...document.querySelectorAll('[data-dockkit-tab-menu] [data-dockkit-menu-close]')].find(vis)
+    if (item === undefined) return false
+    item.click()
+    return true
+  })()`)
+  if (!clicked) return false
+  const gone = await cdp.waitFor(`document.querySelector('[data-sidebar-browser-frame]') === null`, {
+    timeoutMs, intervalMs: 100, label: 'browser frame removed',
+  }).then(() => true).catch(() => false)
+  if (!gone) return false
+  await collapseRightSidebar(cdp)
+  return true
+}
+
+/** Restore the shipped baseline: right sidebar collapsed (idempotent, retried). */
+async function collapseRightSidebar(cdp) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const state = await cdp.evaluate(`(() => {
+      const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+      const expand = [...document.querySelectorAll('[data-sidebar-right-expand]')].find(vis)
+      if (expand !== undefined) return { state: 'collapsed' }
+      const toggle = [...document.querySelectorAll('[data-sidebar-right-toggle]')].find(vis)
+      if (toggle !== undefined) { toggle.click(); return { state: 'clicked-toggle' } }
+      const fallback = [...document.querySelectorAll('button,[role="button"]')]
+        .find(el => el.getAttribute('aria-label') === '收起右侧边栏' && vis(el))
+      if (fallback !== undefined) { fallback.click(); return { state: 'clicked-aria' } }
+      return { state: 'absent' }
+    })()`)
+    if (state.state === 'collapsed') return true
+    await sleep(400)
+  }
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    return [...document.querySelectorAll('[data-sidebar-right-expand]')].some(vis)
+  })()`)
+}
+
+// Session issue subtitle (§4.5): chip + truncated title + full title attribute.
+const SUBTITLE_SNAPSHOT = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const row = [...document.querySelectorAll('[data-ghp-session-subtitle]')].find(vis)
+  if (row === undefined) return null
+  const chip = row.querySelector('[data-ghp-subtitle-chip]')
+  const title = row.querySelector('[data-ghp-subtitle-title]')
+  const style = title === null ? null : getComputedStyle(title)
+  const rect = title === null ? null : title.getBoundingClientRect()
+  const rowRect = row.getBoundingClientRect()
+  const header = row.closest('header[data-window-drag]')
+  // v0.4.0 fixed placement: the subtitle is its own header row directly above
+  // the conversation view-tab row (not a flex child inside it).
+  const nextSibling = row.nextElementSibling
+  const tabsContainer = nextSibling === null ? null : nextSibling.querySelector('[data-conversation-tabs]')
+  const tabsRowRect = tabsContainer === null ? null : (nextSibling.getBoundingClientRect())
+  // Session title start: the shipped header renders it as an (innermost) crumb.
+  const crumbs = header === null ? [] : [...header.querySelectorAll('[class*="crumb"]')].filter(vis)
+  const titleEl = crumbs.sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0]
+  return {
+    chipText: chip === null ? '' : (chip.innerText || chip.textContent || '').trim(),
+    rowTop: Math.round(rowRect.top * 10) / 10,
+    rowBottom: Math.round(rowRect.bottom * 10) / 10,
+    rowLeft: Math.round(rowRect.left * 10) / 10,
+    tabsTop: tabsRowRect === null ? null : Math.round(tabsRowRect.top * 10) / 10,
+    nextSiblingHasTabs: tabsContainer !== null,
+    sessionTitleLeft: titleEl === undefined ? null : Math.round(titleEl.getBoundingClientRect().left * 10) / 10,
+    titleText: title === null ? '' : (title.innerText || title.textContent || '').trim(),
+    titleAttr: title === null ? '' : (title.getAttribute('title') || ''),
+    inHeader: row.closest('header[data-window-drag]') !== null,
+    whiteSpace: style === null ? null : style.whiteSpace,
+    textOverflow: style === null ? null : style.textOverflow,
+    height: rect === null ? null : Math.round(rect.height * 10) / 10,
+    scrollWidth: title === null ? null : title.scrollWidth,
+    clientWidth: title === null ? null : title.clientWidth,
+    rowText: (row.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 200),
+  }
+})()`
+
+/** Wait for the session issue subtitle to render with a chip and title. */
+async function waitForSubtitle(cdp, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await cdp.evaluate(SUBTITLE_SNAPSHOT)
+    if (last !== null && last.chipText.length > 0 && last.titleText.length > 0) return last
+    await sleep(150)
+  }
+  throw new Error(`session issue subtitle did not render within ${timeoutMs}ms (last: ${JSON.stringify(last)})`)
+}
+
+// --------------------------- plugin API response instrumentation (v0.4.0) --
+
+/**
+ * Installed into every new document before any page script runs: wraps
+ * `window.fetch` so the harness can read plugin API JSON (asserting contract
+ * fields such as `stale`) and log per-request status without network sniffing.
+ */
+const PLUGIN_FETCH_INSTRUMENTATION = `(() => {
+  if (window.__dshE2EPluginFetchInstalled === true) return
+  window.__dshE2EPluginFetchInstalled = true
+  window.__dshE2EPluginResponses = []
+  const original = window.fetch
+  window.fetch = async function (input, init) {
+    const response = await original.apply(this, arguments)
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      if (url.includes('/plugin/github-projects/')) {
+        const clone = response.clone()
+        const text = await clone.text()
+        let json = null
+        try { json = JSON.parse(text) } catch { /* non-JSON body */ }
+        window.__dshE2EPluginResponses.push({ url, status: response.status, at: Date.now(), json })
+        if (window.__dshE2EPluginResponses.length > 500) window.__dshE2EPluginResponses.splice(0, 250)
+      }
+    } catch { /* never break the app because of instrumentation */ }
+    return response
+  }
+})()`
+
+/** Read the plugin API responses recorded by the in-page instrumentation. */
+async function readPluginResponses(cdp) {
+  return cdp.evaluate(`window.__dshE2EPluginResponses === undefined ? [] : window.__dshE2EPluginResponses`).catch(() => [])
 }
 
 await main()

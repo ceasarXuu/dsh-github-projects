@@ -31,6 +31,9 @@ export const fixture = {
   items: loadFixture('item-list.json'),
   issue: loadFixture('issue.json'),
   comments: loadFixture('issue-comments.json'),
+  graphqlProjects: loadFixture('graphql-projects.json'),
+  graphqlItemsPage1: loadFixture('graphql-items-page1.json'),
+  graphqlItemsPage2: loadFixture('graphql-items-page2.json'),
 }
 
 /* ------------------------------------------------------------------ */
@@ -90,22 +93,32 @@ export async function fixtureRun(args) {
   if (command === 'api user --jq .login') return { stdout: `${PROJECT_OWNER}\n`, stderr: '' }
   if (command === 'api user/orgs --jq [.[].login]') return { stdout: '["XuyuTech","BeanDoor"]\n', stderr: '' }
 
-  if (args[0] === 'project' && args[1] === 'list') {
-    const owner = args[args.indexOf('--owner') + 1]
-    const payload = owner === PROJECT_OWNER ? fixture.projects : { projects: [], totalCount: 0 }
-    return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
-  }
-  if (args[0] === 'project' && args[1] === 'view') {
-    const number = Number(args[2])
-    const owner = args[args.indexOf('--owner') + 1]
-    const project = (fixture.projects.projects ?? []).find(entry => entry.number === number && entry.owner?.login === owner)
-    if (project === undefined) throw ghProjectNotFound(number)
-    return { stdout: `${JSON.stringify(project)}\n`, stderr: '' }
-  }
-  if (args[0] === 'project' && args[1] === 'item-list') {
-    const number = Number(args[2])
-    if (number !== 9) throw ghProjectNotFound(number)
-    return { stdout: `${JSON.stringify(fixture.items)}\n`, stderr: '' }
+  if (args[0] === 'api' && args[1] === 'graphql') {
+    const queryArg = args.find(arg => typeof arg === 'string' && arg.startsWith('query='))
+    const query = typeof queryArg === 'string' ? queryArg.slice('query='.length) : ''
+    const variables = {}
+    for (let index = 0; index < args.length; index += 1) {
+      const flag = args[index]
+      if ((flag === '-F' || flag === '-f') && typeof args[index + 1] === 'string') {
+        const separator = args[index + 1].indexOf('=')
+        if (separator > 0 && flag === '-F') {
+          const key = args[index + 1].slice(0, separator)
+          variables[key] = args[index + 1].slice(separator + 1)
+        }
+      }
+    }
+    if (/projectV2\(number/u.test(query)) {
+      if (variables.number !== '9' || variables.owner !== PROJECT_OWNER) {
+        // GraphQL answers 200 with a null project for a missing/unauthorized one.
+        return { stdout: `${JSON.stringify({ data: { repositoryOwner: { projectV2: null } } })}\n`, stderr: '' }
+      }
+      const page = variables.cursor === undefined ? fixture.graphqlItemsPage1 : fixture.graphqlItemsPage2
+      return { stdout: `${JSON.stringify(page)}\n`, stderr: '' }
+    }
+    if (/projectsV2/u.test(query)) {
+      return { stdout: `${JSON.stringify(fixture.graphqlProjects)}\n`, stderr: '' }
+    }
+    throw ghError(`unexpected graphql query: ${query.slice(0, 120)}`)
   }
 
   if (args[0] === 'api') {
@@ -150,6 +163,24 @@ function createFakeWebServer() {
   }
 }
 
+/** Fake `ctx.tools`: captures plain tool definitions and their disposers. */
+function createFakeTools() {
+  /** @type {Array<object>} */
+  const registered = []
+  return {
+    registered,
+    service: {
+      register(definition) {
+        registered.push(definition)
+        return () => {
+          const index = registered.indexOf(definition)
+          if (index !== -1) registered.splice(index, 1)
+        }
+      },
+    },
+  }
+}
+
 /**
  * Apply the plugin against a fake `webServer` and expose a request helper.
  *
@@ -161,12 +192,16 @@ function createFakeWebServer() {
 export function startApp(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ghp-test-'))
   const statePath = options.statePath ?? join(dir, 'state.json')
+  const cacheFile = options.cacheFile ?? join(dir, 'cache.json')
   const runner = options.runner ?? fixtureRunner()
   const fake = createFakeWebServer()
+  const fakeTools = createFakeTools()
   const disposers = []
   const ctx = {
     get(name) {
-      return name === 'webServer' ? fake.service : undefined
+      if (name === 'webServer') return fake.service
+      if (name === 'tools') return fakeTools.service
+      return undefined
     },
     effect(callback) {
       const dispose = callback()
@@ -176,6 +211,9 @@ export function startApp(options = {}) {
   }
   apply(ctx, {
     statePath,
+    cacheFile,
+    cacheTtlMs: 60_000,
+    staleTtlMs: 600_000,
     healthCacheTtlMs: 0,
     ...options.config,
     run: runner,
@@ -185,7 +223,9 @@ export function startApp(options = {}) {
   return {
     dir,
     statePath,
+    cacheFile,
     runner,
+    tools: fakeTools.registered,
     calls: runner.calls ?? [],
     commands: () => (typeof runner.commands === 'function' ? runner.commands() : runner.calls.map(args => args.join(' '))),
     routes: fake.routes,

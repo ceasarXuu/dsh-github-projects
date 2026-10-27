@@ -7,12 +7,12 @@
 | 项目 | 值 |
 |---|---|
 | 插件包名 | `@local/dsh-github-projects` |
-| 插件版本 | 0.3.0（视觉系统 + 空 No status 泳道隐藏；0.2.x：全宽布局 / 泳道看板 / milestone 过滤） |
+| 插件版本 | 0.4.0（会话 Issue 副标题 / Agent 工具 / 内置浏览器打开 / 更快读取；0.3.0：视觉系统 + 空 No status 泳道；0.2.x：全宽 / 泳道 / milestone） |
 | 目标宿主 | DeepSeek Harness 0.2.1-rc.3（Desktop 与 `dsh web` 同一套客户端） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
 | 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v0.3.0 视觉系统与验收证据见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v0.4.0 验收证据见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -155,6 +155,37 @@
 | 主题适配 | — | 主题无关 accent + `color-mix` 生成浅/深色 tint，不写死深色背景 |
 | 动效/无障碍 | 无额外动效 | 仅 120ms 颜色/边框过渡，尊重 `prefers-reduced-motion`；颜色不承载唯一信息 |
 
+### 1.9 v0.4.0 变更摘要
+
+插件 0.4.0 处理三组用户诉求，并首次向模型暴露 agent 工具：
+
+1. **会话 Issue 副标题**：已绑定 Issue 的会话，在会话标题下显示 `. #228 修复界面bug` 形式的副标题
+   （品牌色 `#N` chip + 单行省略标题，`title` 属性带全文；点击在 DSH 内置右侧浏览器打开）。
+   Agent 工具改变绑定后 ≤4s 内自动更新。
+2. **projects 点击语义**：点 Issue/PR 卡片或列表行 → 在 DSH **内置右侧栏浏览器**打开 GitHub 页面
+   （不再直接绑定会话）；绑定改为卡片/行上显式的「绑定」按钮，绑定后跳到 `issue` 页签。
+3. **读取性能**：`/projects` 合并为单次 GraphQL（约 1.4s，旧 ~3.1s）；`/items` 走分页 GraphQL
+   （冷启动约 3.4s，旧 ~4.6s；不再单独调用 `gh project view`）；宿主 SWR（fresh + stale 窗口）+
+   磁盘缓存跨重启；`/config` 不再等待 `gh`；客户端 SWR/并行加载让有缓存时**立即渲染**、无骨架。
+   warm 打开 projects 的宿主响应 <300ms，并有 `projects-warm` e2e 回归门禁。
+
+**新增 Agent 工具**（3 个，仅作用于当前会话，全程不写 GitHub）：
+
+| 工具 | 参数 | 语义 |
+|---|---|---|
+| `github_issue_bind` | `ref`（Issue URL 或 `owner/repo#123`） | 绑定到当前会话；已绑定则拒绝（改用 switch） |
+| `github_issue_switch` | `ref` | 替换当前会话绑定；未绑定时报 `not bound` |
+| `github_issue_unbind` | — | 解除当前会话绑定 |
+
+| 变化 | 0.3.0 | 0.4.0 |
+|---|---|---|
+| 卡片/行点击 | Issue 卡片整卡绑定会话；PR/Draft 打开 GitHub | **所有卡片/行点击都在内置右侧浏览器打开 GitHub**；绑定需显式点「绑定」 |
+| 会话头部 | 只有标题与页签 | 已绑定 Issue 时多一行副标题（chip + 标题） |
+| 模型能力 | 只能通过 UI 绑定 | 3 个 agent 工具可 bind/switch/unbind 当前会话 Issue |
+| 读路径 | `gh project list/item-list`，每 Project 一次 items + 一次 project view | 单次 GraphQL `/projects`；分页 GraphQL `/items`（含 project 元数据）；SWR + 磁盘缓存 |
+| 冷/热延迟 | `/projects` ~3.1s、`/items` ~4.6s | `/projects` ~1.4s、`/items` ~3.4s（冷）；warm 打开 <300ms 且无骨架 |
+| 配置 | 8 个键 | 新增 `staleTtlMs` / `diskCache` / `cacheFile`（共 11 个） |
+
 ---
 
 ## 2. 产品设计
@@ -191,6 +222,10 @@ flowchart LR
 
 ```text
 会话头部
+├─ 标题行：会话标题 · 标题右侧为功能入口
+├─ Issue 副标题（v0.4.0，仅已绑定 Issue 时显示；出厂头部无此 slot，插件通过受控 portal 行注入）
+│  ├─ #N chip（品牌 tint）+ Issue 标题（单行省略，title 属性带全文）
+│  └─ 点击 → 内置右侧浏览器打开 Issue 页面
 ├─ 对话（出厂）
 ├─ 轨迹（出厂）
 ├─ projects（插件，order 20）
@@ -208,10 +243,13 @@ flowchart LR
 │     │  │        （No status 空时隐藏；自定义状态仅非空时追加到右侧）
 │     │  │        每列：状态色点 · 名称 · 计数 pill · 色带
 │     │  └─ 卡片：标题（2 行截断）· repo#number · 标签（2 + +N）· milestone chip
-│     │            · 已绑定徽章 · 整卡操作（绑定 Issue / 打开 PR·Draft）
+│     │            · 已绑定徽章
+│     │            · 卡片主体点击 → 内置右侧浏览器打开 GitHub 页面
+│     │            · 显式「绑定」按钮 → 绑定到当前会话并跳 issue 页签
+│     │            （PR/Draft 无绑定按钮，点击打开 GitHub）
 │     └─ 列表视图（可切换）
 │        ├─ 组头：Status 名 + 计数
-│        ├─ 行：类型图标 · repo#number · 标题 · 标签 · milestone · 绑定/已绑定/外链
+│        ├─ 行：类型图标 · repo#number · 标题 · 标签 · milestone · 行点击→内置浏览器 · 显式「绑定」按钮
 │        └─ 状态 chips（全部 / 各 Status）
 └─ issue（插件，order 21）
    ├─ 未绑定空态
@@ -247,19 +285,23 @@ flowchart TD
 
 失败路径：`/projects` 全部 owner 都失败 → 选择器内显示错误与重试；部分 owner 失败 → 仍展示成功部分，并在选择器里提示哪个 owner 读取失败（`errors` 字段）。
 
-#### 2.4.2 从泳道卡片 / 列表行绑定 Issue 到当前会话
+#### 2.4.2 从泳道卡片 / 列表行绑定 Issue 到当前会话（显式绑定，v0.4.0）
 
 ```mermaid
 flowchart TD
     A["projects 页签已绑定视图"] --> B["找到 Issue（卡片或列表行，可先筛选）"]
-    B --> C{"条目类型"}
-    C -- "Issue" --> D["点卡片 / 列表行「绑定」"]
-    D --> E["POST /bind-issue<br/>{sessionId, workspaceId, issue}"]
+    B --> C{"点击哪里"}
+    C -- "卡片主体 / 列表行" --> D["sidebarRight.openTab('browser')<br/>内置右侧浏览器打开 GitHub 页面"]
+    C -- "卡片/行上的「绑定」按钮" --> E["POST /bind-issue<br/>{sessionId, workspaceId, issue}"]
     E --> F["state.json 记录会话绑定"]
-    F --> G["openView('github-issue', 'bound')"]
+    F --> G["openView('github-issue', 'bound') + 会话副标题出现"]
     G --> H["issue 页签读取 GET /issue，渲染详情"]
-    C -- "PR / Draft" --> I["点卡片 → 打开 GitHub 链接（新标签页；无链接的 Draft 不可点）"]
+    D -. "不创建绑定" .-> B
 ```
+
+v0.4.0 起「点击」与「绑定」分离：卡片/行点击只是查看（内置右侧浏览器，同一 iframe 浏览器 tab 承载
+GitHub 页面；`window.open` 作为兜底），不会改变会话绑定；只有显式的「绑定 / 已绑定」按钮才会写绑定并跳转。
+PR/Draft 没有绑定动作，点击同样打开内置浏览器。
 
 `/items` 返回的条目天然带 Projects v2 的 `status` 与 `milestone` 字段，泳道分列与 milestone 过滤都基于这两项在浏览器端完成；条目的开闭状态（open/closed）不在 `/items` 载荷里，因此卡片/行不展示它，真实状态以 `issue` 页签的 REST 读取为准。是否有「已绑定」徽章由 `/config` 的当前会话绑定决定。
 
@@ -288,7 +330,35 @@ flowchart TD
 | 更换 Project | `projects` 工具栏「更换」 | 打开选择器，选中后覆盖该工作区的绑定 | 该工作区所有会话 |
 | 解绑 Project | `projects` 工具栏「解绑」 | 二次确认后清除工作区绑定 | 该工作区所有会话回到空态；**已绑定的 Issue 不受影响**（Issue 绑定独立存在） |
 | 解绑 Issue | `issue` 工具栏「解绑」 | 清除当前会话的 Issue 绑定 | 仅当前会话回到空态 |
-| 刷新 | 两个页签的「刷新」 | 带 `refresh=1` 重新读取 GitHub，忽略 TTL 缓存 | 不改变绑定 |
+| 刷新 | 两个页签的「刷新」 | 带 `refresh=1` 重新读取 GitHub，走新鲜读取（`stale:false`） | 不改变绑定 |
+
+#### 2.4.5 Agent 工具改绑与界面同步
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as 模型
+    participant H as 宿主半（ctx.tools）
+    participant G as gh CLI
+    participant S as state.json
+    participant C as 浏览器半
+
+    M->>H: github_issue_bind / switch / unbind(ref)
+    H->>H: exec.agent.session.id → 仅当前会话
+    alt bind / switch
+        H->>G: 解析 ref 并读取 Issue（read-only）
+        G-->>H: IssueSummary
+        H->>S: 写会话绑定（原子）
+    else unbind
+        H->>S: 清除会话绑定
+    end
+    H-->>M: {bound|switched|unbound, issue, previous}
+    C->>C: 本地 /config 轮询（无 gh）+ 绑定事件
+    C-->>C: ≤4s 内更新会话副标题 + issue 页签
+```
+
+工具只改当前会话的绑定：不写 GitHub、不操作其他会话；改绑完成后界面在 ≤4s 内自动反映
+（副标题、`issue` 页签），无需手动刷新。
 
 ### 2.5 状态矩阵
 
@@ -304,13 +374,18 @@ flowchart TD
 | projects | milestone-fallback | 刷新后选中的 milestone 不再存在 | 自动回退「全部」并显示提示 | — |
 | projects | column-empty | 四个常驻规范列在当前过滤下没有条目 | 列头保留、计数显示 0、正文显示「无条目」（不隐藏列） | 继续浏览 |
 | projects | hidden-lane | `No status` 或未知状态列过滤后为空 | `No status` 隐藏并由 `data-ghp-hidden-lanes` 暴露；空的自定义状态列不渲染 | 继续浏览 |
-| projects | refreshing | 点刷新/更换后重新拉取 | 保留旧数据 + 轻量加载指示 | 继续浏览 |
+| projects | browsing | 点卡片主体或列表行 | DSH 内置右侧浏览器打开 GitHub 页面（不改变绑定） | 查看 / 关闭浏览器 tab |
+| projects | refreshing | 点刷新/更换后重新拉取 | 保留旧数据 + 轻量加载指示（有缓存时先渲染缓存） | 继续浏览 |
 | projects | truncated | 条目数超过 `maxProjectItems` | 列表/看板底部提示"仅显示前 shown 条（共 total 条）" | — |
 | issue | loading | 首次挂载 / 切到该页签 | 骨架占位 | — |
 | issue | error | 读取失败 | 错误卡片 + 中文提示 + 重试 | 重试 |
 | issue | unbound | 会话无绑定 | 标题「为当前会话绑定 Issue」+「从项目选择」+ 粘贴输入框 | 从项目选择 / 粘贴绑定 |
 | issue | bound | 有绑定 | 头部卡片 + 正文 + 评论 | 刷新/解绑/在 GitHub 打开 |
 | issue | refreshing | 点刷新 | 保留旧数据 + 轻量指示 | — |
+| 会话头部 | subtitle-visible | 会话已绑定 Issue（来自 UI 或 agent 工具） | 标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 全文）；≤4s 内自动出现/更新 | 点击 → 内置浏览器 |
+| 会话头部 | subtitle-hidden | 未绑定 Issue，或会话为空白（头部 chrome 隐藏） | 不显示副标题，不占位、不报错 | — |
+| Agent 工具 | tools-idle | 模型未调用 | — | — |
+| Agent 工具 | tool-bound / switched | 模型调用 bind / switch 且成功 | 当前会话绑定写入；副标题 + issue 页签在 ≤4s 内更新 | — |
 
 空态与错误态必须区分：**空态代表"还没绑定"（用户可操作）**，**错误态代表"读取失败"（先修环境）**。`gh` 缺失/未登录时，`/config` 仍可用（只读本地绑定），所以用户仍能看到已绑定 Project 的标题和已绑定 Issue 的摘要，只是列表/详情读不出来。
 
@@ -368,15 +443,20 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
 - **只读**：不支持拖拽卡片改状态、不支持自定义排序，也不会写回 GitHub。
 - 卡片内容：标题（最多 2 行，超出省略）、`repo#number`、labels（最多 2 个，其余 `+N`）、
   milestone chip；当前会话已绑定的 Issue 带「已绑定」徽章。
-- **整张卡片就是操作入口**：Issue 卡片 → 绑定到当前会话并 `openView('github-issue', 'bound')`
-  （与列表「绑定」等价）；PR/Draft 卡片 → 新标签页打开 GitHub。卡片可键盘操作（Enter/Space），
-  保留 `focus-visible` 轮廓。
+- **点击 = 查看，绑定 = 显式按钮（v0.4.0）**：点卡片主体（`[data-ghp-card-action="open"]`）在
+  DSH **内置右侧栏浏览器**打开该 Issue/PR 的 GitHub 页面（`sidebarRight.openTab('browser', …)`，
+  `window.open` 兜底），不会改变会话绑定；Issue 卡片另有显式「绑定」按钮
+  （`[data-ghp-card-action="bind"]`，已绑定时显示「已绑定」），点击才写入绑定并跳到 `issue` 页签。
+  PR/Draft 卡片没有绑定按钮，点击同样在浏览器中打开。卡片可键盘操作：Enter/Space = 浏览器打开，
+  绑定按钮保留独立的焦点与 `focus-visible` 轮廓。
 
 **列表视图（list）**
 
 - 保留 v1 的分组布局：按 Status 首次出现顺序分组，空状态归入「未分类」，组头带计数；
   行内容与 v1 一致（类型图标、`repo#number`、标题、labels 最多 3 个 + `+N`、milestone、「绑定」/「已绑定」/外链）。
 - 列表模式额外提供状态 chips（`全部` + 各状态计数），与文本筛选、milestone 过滤叠加生效。
+- 列表行同样遵循「点击=查看，绑定=按钮」：点行在**内置右侧浏览器**打开 GitHub 页面，行尾「绑定」
+  按钮才绑定到当前会话（PR/Draft 行只有查看动作）。
 
 **两种视图的共同行为**
 
@@ -509,6 +589,55 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
   milestone 标题本身不翻译；下拉的无障碍标签为「按里程碑过滤」/「Filter by milestone」。
 - 错误提示按错误码映射（见 3.7），不直接展示 `gh` stderr；技术细节保留在控制台/日志侧。
 - 时间使用相对时间（2.6.5），不依赖系统 locale 的绝对时间格式。
+
+### 2.9 会话 Issue 副标题（v0.4.0）
+
+已绑定 Issue 的会话，在会话标题下显示一行副标题，用来"一眼看到这个会话在跟哪个 Issue 干活"。
+
+- 布局：`<chip>#N</chip> <Issue 标题>`。chip 为品牌 tint 的小标签（11px/16px、圆角 6px、
+  tabular-nums）；标题 12px/18px `label-secondary`，单行 `text-overflow: ellipsis`，`title` 属性
+  携带完整的 `repo#N title`，悬浮可见全文。整行与标题文字左对齐、占满剩余头部宽度。
+- 显隐：未绑定 Issue 时不显示；会话为空白（出厂头部 chrome 隐藏）时也不显示；不占位、不影响布局。
+- 更新：本插件自己的绑定/解绑立即更新；**agent 工具**改绑后在 ≤4s 内自动更新（客户端做本地
+  `/config` 轮询，不调用 `gh`，无网络抖动）。副标题不会停留在旧绑定上。
+- 点击：在 **DSH 内置右侧栏浏览器**打开该 Issue 的 GitHub 页面（`window.open` 兜底），不改变绑定。
+- 实现（诚实说明）：出厂会话头部**没有 subtitle slot**，所以由客户端在 `header[data-window-drag]`
+  内、标题行之后插入一个插件自有的副标题行，并在宿主重新渲染后**重新确保**它存在（React portal
+  到该锚点）。找不到锚点或宿主结构变化时，功能降级为"不显示副标题"，绝不抛错、也不影响未绑定会话。
+  这是对宿主私有 DOM 的受控依赖，列为已知脆弱点（见第 9 章）。
+- 测试钩子（契约 §4.2.1）：`[data-ghp-session-subtitle]`、`[data-ghp-subtitle-chip]`、
+  `[data-ghp-subtitle-title]`（title 属性带全文）。
+
+### 2.10 Agent 工具：会话级 Issue 绑定（v0.4.0）
+
+宿主向 `ctx.tools` 注册 3 个工具，让模型在对话里直接管理**当前会话**的 Issue 绑定，而不必点 UI。
+工具只改绑定（本地数据），对 GitHub 全程只读；不写 Issue/评论/字段，不操作其它会话。
+
+| 工具 | 参数 | 行为 | 输出（JSON） |
+|---|---|---|---|
+| `github_issue_bind` | `ref: string`（Issue URL 或 `owner/repo#123`） | 把 Issue 绑定到当前会话；已绑定时拒绝（提示改用 switch） | `{"bound":true,"issue":IssueSummary,"previous":IssueSummary\|null}` |
+| `github_issue_switch` | `ref: string` | 替换当前会话的绑定；未绑定时返回 `not bound` 错误 | `{"switched":true,"issue":IssueSummary,"previous":IssueSummary}` |
+| `github_issue_unbind` | — | 清除当前会话绑定 | `{"unbound":true,"previous":IssueSummary\|null}` |
+
+规则与安全：
+
+- **只作用于当前会话**：会话 ID 来自 `exec.agent.session.id`；没有 owning agent 时返回
+  `no current session` 错误；不存在"给别的会话绑定"的参数。
+- **只读 GitHub**：工具内部用 `parseIssueRef` 校验引用、经 `gh` 读取 Issue 摘要，然后写本地绑定
+  存储；失败时透传契约错误码（`bad-request` / `issue-not-found` / `gh-auth` / …）。
+- **不复制敏感数据**：输出只有 `IssueSummary`（repo/number/title/url/state），不含 token 或正文。
+- **生命周期**：注册包在 `ctx.effect` 中，插件停用/卸载时工具随之消失；定义使用纯 JSON-Schema
+  （`parameters` / `output.schema` / `output.render`）。
+- **UI 副作用**：工具成功后，客户端在 ≤4s 内更新会话副标题与 `issue` 页签，无需手动刷新；
+  `output.render` 返回一行文本（如 `已绑定 #240（ceasarXuu/Astropath）`）供模型/用户确认。
+
+用法示例（可直接对模型说）：
+
+> 「把 https://github.com/acme/web/issues/228 绑定到当前会话」→ `github_issue_bind`
+>
+> 「当前会话换成 acme/web#240」→ `github_issue_switch`
+>
+> 「解除当前会话的 Issue 绑定」→ `github_issue_unbind`
 
 ---
 
@@ -652,14 +781,17 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
 | `POST /bind-issue` | 把 Issue 绑到会话（`issue` 摘要或 `ref` 二选一） | `{ok, session: {sessionId, issue, workspaceId}}` |
 | `POST /unbind-issue` | 清除会话绑定 | `{ok}` |
 
-`/config` 的行为需要说明白：它**只读本地绑定，不读 GitHub 数据**，响应里的 `gh` 字段来自一份
-短 TTL（`healthCacheTtlMs`，默认 5 s，上限 60 s）的健康快照。取得第一份快照时请求最多等待
-`healthFirstReadTimeoutMs`（默认 3 s）执行一次健康探测（`gh --version` + `gh api user`，并发执行）；
-超时则返回占位快照 `{available:false, error:"pending"}`，探测在后台继续。之后 `/config` 直接返回
-缓存快照并在后台刷新，不再阻塞。健康探测失败**不会让 `/config` 失败**——绑定数据照常返回，只是
-`gh.available=false`。`/health` 与 `/config` 共享同一份快照，`/health` 会等待一次完整探测。
+`/config` 的行为（v0.4.0 起）：它**只读本地绑定，永远不等待 `gh`**。响应里的 `gh` 字段是最近
+一次健康快照；冷启动时直接返回占位 `{available:false, version:null, account:null, error:"pending"}`，
+同时由**后台**执行一次探测（`gh --version` + `gh api user`）刷新快照。健康探测失败不会让 `/config`
+失败——绑定数据照常返回，只是 `gh.available=false`。`/health` 会等待一次完整探测，`/config` 不会。
+旧的 `healthFirstReadTimeoutMs` 配置键仍被接受但**已不再使用**（仅为兼容旧配置保留）。
 
 `/unbind-*` 都是幂等的：对从未绑定/已解绑的 id 调用同样返回 `{ok:true}`。
+
+三个数据端点（`/projects`、`/items`、`/issue`）的每个 2xx 响应都带 boolean `stale`：
+`false` 表示新鲜读取或 fresh 命中；`true` 表示返回的是 stale 窗口内的旧数据、后台正在刷新
+（客户端据此在约 1.2 s 后重试一次）。
 
 POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 
@@ -682,14 +814,34 @@ POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 **v1.1 的泳道/列表与 milestone 过滤不改变本 API。** 宿主仍然只返回 `/items` 的条目数组（含
 `status` 与 `milestone` 字段）；分列、列表切换、milestone 选项推导、计数与失效回退全部在浏览器半
 完成，不新增端点、不新增 `gh` 调用。v0.3.0 的视觉系统同样是纯前端 CSS/组件表现层改动，不涉及任何
-接口；空 `No status` 泳道隐藏也在客户端完成。e2e 依赖的稳定选择器
+接口；空 `No status` 泳道隐藏也在客户端完成。
+
+**v0.4.0 的接口变化只是"读得更省"，不新增端点**：`/projects` 与 `/items` 改由 GraphQL 供给
+（响应形状与契约类型不变），新增 `stale` 字段标记 SWR 过期返回；绑定相关的 POST 端点不变。Agent
+工具走 Cordis 的 `ctx.tools`，**不经过 HTTP**（见 3.4.1）。e2e 依赖的稳定选择器
 （`data-ghp-view-mode`、`data-ghp-action="view-board|view-list"`、`data-ghp-board`、
-`data-ghp-hidden-lanes`、`data-ghp-column`、`data-ghp-card`、`data-ghp-milestone-option` 等）
-由契约 §4.2.1 固定。
+`data-ghp-hidden-lanes`、`data-ghp-column`、`data-ghp-card`、`data-ghp-card-action="open|bind"`、
+`data-ghp-milestone-option`、`data-ghp-session-subtitle`、`data-ghp-subtitle-chip`、
+`data-ghp-subtitle-title` 等）由契约 §4.2.1 固定。
+
+#### 3.4.1 Agent 工具注册（v0.4.0）
+
+宿主在 `apply()` 内通过 `ctx.tools` 注册三个工具（注册本身包在 `ctx.effect` 中，插件停用时一并移除）：
+
+- 定义使用纯 JSON-Schema：`parameters`、`output.schema`、`output.render`（一行文本，如
+  `已绑定 #240 [v1.2.0]…`），不引入额外依赖。
+- `execute` 的输入只来自当前执行上下文：`exec.agent.session.id`；没有 owning agent 时返回
+  `no current session`。**不存在目标 session 参数**，因此工具无法操作其它会话。
+- `bind`/`switch` 的 `ref` 先用 `parseIssueRef` 校验，再经 `gh` 读取 Issue 摘要（只读），最后用
+  `state.js` 写本地绑定；`unbind` 只清绑定。所有 GitHub 失败按契约错误码透传。
+- 工具与 UI 共用同一份 `state.js` 存储，所以工具写完后客户端只需要重新读 `/config` 就能看到新绑定；
+  反方向（UI 绑定）也一样，不存在两套状态。
+- 测试：宿主单测用 fake `ctx.tools` 捕获注册结果 + fake `exec.agent.session` 驱动 execute，不需要
+  真实模型或网络。
 
 ### 3.5 数据流
 
-#### 3.5.1 读取项目条目（典型只读链路）
+#### 3.5.1 读取项目条目（v0.4.0：SWR + GraphQL）
 
 ```mermaid
 sequenceDiagram
@@ -697,35 +849,44 @@ sequenceDiagram
     participant U as 用户
     participant V as projects 视图
     participant H as 宿主 /plugin/github-projects
-    participant C as 内存 TTL 缓存
+    participant C as SWR 缓存（内存 + 磁盘）
     participant G as gh CLI
-    participant X as GitHub
+    participant X as GitHub GraphQL
 
     U->>V: 切到 projects 页签
-    V->>H: GET /config?sessionId&workspaceId
-    H-->>V: 绑定状态（纯本地，不发 GitHub 请求）
-    alt 工作区未绑定
-        V->>H: GET /projects
-        H->>C: 查 projects 缓存
-        alt 缓存命中（TTL 内）
-            C-->>V: 返回缓存结果
-        else 未命中
-            H->>G: gh api user、user/orgs，再逐 owner project list
-            G->>X: GraphQL
-            X-->>G: 数据
-            G-->>H: JSON
-            H->>C: 写入 TTL 缓存
-            H-->>V: owners + projects + errors
-        end
-    else 已绑定 Project
-        V->>H: GET /items?owner&number
-        H->>C: 查 items 缓存
-        H->>G: gh project item-list N --owner owner --format json --limit 200
-        G-->>H: JSON（含条目 content 摘要）
-        H-->>V: 规范化后的 items + truncated
+    V->>H: GET /config（纯本地，不等 gh）
+    H-->>V: 绑定状态 + 缓存健康快照
+    V->>H: GET /projects、GET /items 并行
+    H->>C: 查缓存
+    alt 缓存 fresh（cacheTtlMs 内）
+        C-->>V: 立即返回数据，无骨架
+    else 缓存 stale（staleTtlMs 内）
+        C-->>V: 立即返回旧数据 + stale:true
+        H->>G: 后台刷新一次（单飞）
+        G->>X: gh api graphql（viewer projects / 分页 items）
+        X-->>G: 数据
+        G-->>H: JSON
+        H->>C: 写回内存 + 磁盘缓存
+        V->>H: ~1.2s 后重试一次（拿到新数据）
+    else 无缓存（冷启动）
+        V-->>U: 骨架
+        H->>G: gh api graphql
+        G->>X: 数据
+        H-->>V: 返回并写入缓存
     end
-    V-->>U: 渲染分组列表 / 空态 / 错误态
 ```
+
+要点：
+
+- `/config` 永不等待 `gh`：`gh` 字段是最近一次健康快照或冷启动的 `pending` 占位（见 3.4）。
+- `/projects` 只发一次 `gh api graphql`：viewer 的 Projects + viewer 组织下的 Projects 合并；
+  只保留未关闭（`closed === false`）的项目；单个 owner 读取失败仍进 `errors` 数组，不拖垮整体。
+- `/items` 用 `gh api graphql` 分页（100 nodes/页），顺序取页直到 `totalCount` 或
+  `maxProjectItems`；Project 元数据来自同一份 payload，**不再单独调用 `gh project view`**；
+  `truncated` 反映 `maxProjectItems` 上限。
+- 客户端为 `projects`/`items`/`issue` 维护模块级 SWR 缓存：有缓存立即渲染，再后台 revalidate；
+  收到 `stale:true` 后 ~1.2s 重试一次；`config` 与 `items` 并行加载（记住 workspace→Project 映射，
+  省掉一次串行往返）；绑定 Issue 的详情在 config 之后预取；**只有完全无缓存时才显示骨架**。
 
 #### 3.5.2 绑定 Issue 的写链路
 
@@ -751,7 +912,8 @@ sequenceDiagram
 
 #### 3.5.3 规范化层
 
-`gh` 的 JSON 输出是 GitHub 的原始结构，插件在 `github.js` 里统一规范化成契约类型：
+v0.4.0 起 `/projects` 与 `/items` 的数据来自 GraphQL payload（Issue 详情仍走 REST），`github.js`
+负责把两套原始结构统一规范化成契约类型：
 
 - 项目列表：`owner.type` 的 `User`/`Organization` 小写；`items.totalCount` → `itemCount`；
   `shortDescription` 截断到 500 字符 → `description`。
@@ -763,24 +925,51 @@ sequenceDiagram
 - 引用解析：`parseIssueRef` 接受 `https://github.com/o/r/issues/n`（含 `http`、尾斜杠、query）、
   `github.com/o/r/issues/n`、`o/r#n`、`o/r n`，返回 `{repo, number}` 或 `null`。
 
-### 3.6 缓存、单飞与上限
+### 3.6 缓存、SWR、磁盘缓存与延迟（v0.4.0）
 
-| 机制 | 实现 | 目的 |
+**宿主内存读缓存（SWR）**
+
+| key | 内容 | fresh 窗口 | stale 窗口 |
+|---|---|---|---|
+| `projects` | 可访问的 Project 列表（含 owners/errors） | `cacheTtlMs`（默认 60 s） | `staleTtlMs`（默认 600 000 ms = 10 min） |
+| `items:<owner>/<number>` | 单个 Project 的条目（分页聚合） | 同上 | 同上 |
+| `issue:<repo>#<number>` | Issue 详情 + 评论 | 同上 | 同上 |
+
+- **fresh**：命中 `cacheTtlMs` 时直接返回，不触 GitHub。
+- **stale**：命中 `staleTtlMs` 时**立即返回旧数据**并带 `stale: true`，同时后台做**一次**刷新
+  （相同 key 单飞，避免并发重复请求）；客户端收到 `stale` 后约 1.2 s 重试一次拿新数据。
+- `refresh=1`：跳过缓存，等待一次新鲜读取（返回 `stale:false`）；冷 key 同样等待。
+- 健康快照单独缓存（`healthCacheTtlMs`）：`/config`、`/health` 共用，且**永不等待 `gh`**。
+- 上限：`maxProjectItems`（默认 200）限制分页读取的条目数、`maxComments` 限制评论页大小；
+  超长 Issue 正文仍由宿主截断到 100 000 字符。
+
+**磁盘缓存（跨重启）**
+
+- 成功的读取结果还会 best-effort 持久化到 `cacheFile`（默认
+  `$DSH_HOME/plugin-data/github-projects/cache.json`，有界、原子写），插件启动时加载，
+  这样 DSH 重启后第一次打开也能先用上次的数据渲染，再后台刷新。
+- `diskCache: false` 可关闭磁盘缓存；删除 `cache.json` 是安全的（下一次读取会重建）。
+- 缓存内容只是 GitHub 的读取结果（Project/条目/Issue 详情与评论），**不含 token 或凭据**；
+  但它是磁盘上的业务数据，共享机器/备份场景需自行评估（见第 9 章）。
+- 实测：`cache.json` 落盘后包含 `items:ceasarXuu/9` 与 `projects` 等 key，DSH 重启后直接用磁盘
+  缓存响应（~4 ms），随后再后台刷新。
+
+**读取路径与延迟**
+
+| 指标 | v0.3.x（旧路径） | v0.4.0 |
 |---|---|---|
-| TTL 缓存 | 宿主内存，按 key：`projects`、`items:<owner>/<number>`、`issue:<repo>#<number>`；TTL `cacheTtlMs`（默认 60 s） | 反复切页签/再渲染不重复打 GitHub |
-| 手动绕过 | 请求带 `refresh=1` 时跳过读缓存 | 用户点「刷新」能拿到最新数据 |
-| 单飞（single-flight） | 相同 key 的并发读取共享同一次 `gh` 调用 | 避免"两个视图同时挂载"打两份 GraphQL |
-| 条目上限 | `maxProjectItems`（默认 200）传给 `gh project item-list --limit` | 控制单次响应体积与 GraphQL 开销 |
-| 评论上限 | `maxComments`（默认 30）传给 comments `per_page` | 同上；超出由 `commentsTruncated` 标记 |
-| 正文上限 | 宿主截断到 100 000 字符 | 防止超大 issue 正文拖垮界面 |
-| 健康快照 | `gh` 版本/登录探测结果，TTL `healthCacheTtlMs`（默认 5 s） | 让 `/config` 与 `/health` 不反复探测；失败不影响绑定读取 |
-| 请求超时 | 每次 `gh` 调用 `requestTimeoutMs`（默认 20 s） | 不无限挂起；超时映射 `timeout` |
+| `/projects` 冷启动（宿主 GraphQL） | ~2.8–3.1 s（逐 owner `gh project list`） | ~**1.05–1.7 s**（**一次 GraphQL**） |
+| `/items` 冷启动（195 条目 Project，宿主 GraphQL） | ~5.3–5.4 s（`item-list` + 一次 `project view`） | ~**3.1–3.7 s**（**分页 GraphQL**，Project 元数据同 payload，无额外调用） |
+| warm 打开 projects（宿主响应） | — | **<300 ms** |
+| warm 首屏渲染 | 骨架 | **直接用缓存渲染，无骨架**；`projects-warm` 门禁要求切走再切回后 ≤1500 ms 内渲染出缓存看板 |
+| 冷启动首次看板（195 条目） | 记录耗时 | 记录耗时，目标 ≤3.5 s |
+| 实测（2026-10-28 e2e，fixture → real） | — | cold board 317 ms → **3699 ms**；warm re-open 27 ms → **72 ms**（均无 skeleton）；宿主 `/config` 0–15 ms、warm `/items` 6–17 ms、cold `/issue` ≈1.22 s |
 
-缓存只存在于进程内存：DSH 退出即清空；没有磁盘缓存、没有 stale-while-revalidate 之外的自动后台刷新。
-前端在"刷新中"保留上一份数据，只是视觉上的旧数据保留，不改变缓存语义。
+客户端还做了两件降低等待的事：`config` 与 `items` **并行**加载（并记住 workspace→Project 映射），
+绑定 Issue 的详情在 config 之后预取；收到 `stale:true` 后再约 1.2 s 重试一次。
 
-v1.1 的泳道分列、列表与 milestone 过滤都复用同一份 `/items` 响应：切换视图、筛选 milestone、
-改文本筛选都不会触发新的网络请求（只改前端派生状态）。
+**回归门禁**：e2e 的 `projects-warm` 阶段在没有骨架的情况下测量缓存看板渲染时间（≤1500 ms）并打印；
+冷启动耗时在 `projects-board` 阶段记录。
 
 ### 3.7 错误分类与呈现
 
@@ -818,11 +1007,14 @@ v1.1 的泳道分列、列表与 milestone 过滤都复用同一份 `/items` 响
 |---|---|---|---|
 | `ghCommand` | string | `gh` | `gh` 可执行文件。终端与 Desktop 的 `PATH` 可能不同，建议写绝对路径 |
 | `requestTimeoutMs` | number | `20000` | 单次 `gh` 调用超时（毫秒） |
-| `cacheTtlMs` | number | `60000` | 宿主内存缓存 TTL（毫秒）；`refresh=1` 可绕过 |
+| `cacheTtlMs` | number | `60000` | 宿主内存缓存 **fresh** 窗口（毫秒）；`refresh=1` 可绕过 |
+| `staleTtlMs` | number | `600000` | **stale-serve** 窗口（毫秒）：过期条目在此期间立即返回旧值 + `stale:true` 并后台刷新 |
+| `diskCache` | boolean | `true` | 是否把成功读取结果持久化到 `cacheFile`，供重启后快速首屏 |
+| `cacheFile` | string \| null | `null` | 磁盘缓存文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/cache.json` |
 | `maxProjectItems` | number | `200` | 单次读取 Project 条目上限 |
 | `maxComments` | number | `30` | 单次读取 Issue 评论上限 |
 | `healthCacheTtlMs` | number | `5000` | `gh` 健康快照 TTL（0–60 s，`/health`、`/config` 共享） |
-| `healthFirstReadTimeoutMs` | number | `3000` | 首次读取 `/config` 时等待健康探测的上限（0–60 s）；超时先返回 `pending` 占位，后台继续探测 |
+| `healthFirstReadTimeoutMs` | number | `3000` | **legacy，已不再使用**（v0.4.0 起 `/config` 永不等待探测）；仅为兼容旧配置保留 |
 | `statePath` | string \| null | `null` | 绑定存储文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/state.json` |
 
 profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
@@ -834,6 +1026,9 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
     cacheTtlMs: 120000
+    staleTtlMs: 600000
+    diskCache: true
+    cacheFile: null
     maxProjectItems: 200
     maxComments: 30
     healthCacheTtlMs: 5000
@@ -845,10 +1040,10 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 | 文件 | 作用 |
 |---|---|
-| `index.js` | Cordis 宿主插件入口：`resolveConfig`、路由注册、8 个端点、请求门禁、缓存/单飞编排 |
-| `github.js` | `gh` 适配器：`execFile` 封装与错误分类、Projects/Issues 查询、规范化器、`parseIssueRef` |
+| `index.js` | Cordis 宿主插件入口：`resolveConfig`、路由注册、9 个端点、请求门禁、SWR/磁盘缓存与单飞编排、3 个 agent 工具注册 |
+| `github.js` | `gh` 适配器：`execFile` 封装与错误分类、GraphQL 查询（Projects、分页 items）、Issue REST 查询、规范化器、`parseIssueRef` |
 | `state.js` | 绑定存储：原子 JSON 写入、串行队列、损坏文件容错、`bind*/unbind*/get*` |
-| `client.js` | 浏览器半：两个视图、slot 注册、locale 字典、CSS、fetch 封装、安全 Markdown 渲染 |
+| `client.js` | 浏览器半：两个视图、slot 注册、locale 字典、CSS、fetch 封装、SWR 缓存、安全 Markdown 渲染、会话副标题 portal、内置浏览器打开 |
 | `cordis.patch.yml` | bundle 补丁（宿主行 + 默认配置） |
 | `package.json` | 包声明：`dsh.bundle.patch`、`dsh.client`、脚本 |
 | `icon.svg` | 插件图标（继承 `currentColor`，随主题着色） |
@@ -945,6 +1140,16 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
   用链接解析（`ref`）绑定时需要 `gh` 读取一次 Issue 摘要。
 - 存储不含对话内容、Issue 正文、评论正文或任何凭据；删除该文件等价于"重置全部绑定"。
 
+### 4.4 磁盘缓存文件（v0.4.0）
+
+- 路径：`config.cacheFile ?? $DSH_HOME/plugin-data/github-projects/cache.json`
+  （默认 `~/.dsh/plugin-data/github-projects/cache.json`）。
+- 内容：宿主读缓存的快照（`projects`、`items:<owner>/<number>`、`issue:<repo>#<number>` 的成功返回值），
+  用于 DSH 重启后先渲染上次数据；**不含 token/凭据**，但包含 GitHub 读取到的业务数据（Project/条目/
+  Issue 详情与评论文本）。
+- 写入：best-effort、有界、原子写；`diskCache: false` 可完全关闭；删除该文件安全（下次读取重建）。
+- 加载：插件启动时读取，损坏/版本不符按空缓存处理，不影响绑定与正常读取。
+
 ---
 
 ## 5. GitHub 集成
@@ -953,24 +1158,26 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 | 用途 | 命令（`execFile`，参数数组传递） | 产出 |
 |---|---|---|
-| 当前账号 | `gh api user --jq .login` | `GhHealth.account` |
-| 版本 | `gh --version` | `GhHealth.version`（首行） |
-| 组织列表 | `gh api user/orgs --jq '[.[].login]'` | owner 列表（`owners`） |
-| 单 owner 的 Projects | `gh project list --owner <owner> --format json --limit 100` | Project 列表 |
-| 单 Project 的元数据 | `gh project view <number> --owner <owner> --format json` | `/items` 响应里的 `project` |
-| 单 Project 的条目 | `gh project item-list <number> --owner <owner> --format json --limit <maxProjectItems>` | 条目列表 + `totalCount` |
+| 当前账号 / 版本 | `gh api user --jq .login`、`gh --version` | `GhHealth.account` / `GhHealth.version` |
+| 可访问的 Projects（v0.4.0） | `gh api graphql`：一次查询 viewer 的 Projects + viewer 组织下可见 Projects | `owners` / `projects` / 每 owner 的 `errors` |
+| 单 Project 的条目（v0.4.0） | `gh api graphql`：对 Project items 按 100 节点/页分页，直到 `totalCount` 或 `maxProjectItems` | 条目列表 + Project 元数据 + `totalCount` |
 | Issue 详情 | `gh api repos/<owner>/<repo>/issues/<number>` | REST Issue JSON |
 | Issue 评论 | `gh api "repos/<owner>/<repo>/issues/<number>/comments?per_page=<maxComments>"` | 评论数组 |
 | 健康检查 | `gh --version` + `gh api user --jq .login` 并发执行 | `GhHealth`（永不抛错） |
 
-`gh project item-list` 不返回 Project 自身的标题/链接，因此 `/items` 同时用 `gh project view` 取回 Project
-摘要；两者并发，任一失败按 `project-not-found` 处理。
+v0.4.0 起不再逐 owner 调用 `gh project list`、不再调用 `gh project item-list`，也不再单独调用
+`gh project view`（Project 元数据随 items 的 GraphQL payload 返回）。GraphQL 查询由 `github.js`
+的查询构造器生成，参数（owner、number、分页大小）全部通过变量传入，不拼接进查询字符串。
 
-`child_process.execFile` 使用参数数组而不是 shell 字符串：repo/owner/number 等值不会进入 shell 解释，避免命令注入；
-`env` 继承宿主环境（token 由 `gh` 从系统钥匙串/配置读取），插件不触碰环境里的凭据。`maxBuffer` 为 32 MiB，
-超限归类 `gh-failed`。
+`child_process.execFile` 使用参数数组而不是 shell 字符串：repo/owner/number 等值不会进入 shell
+解释，避免命令注入；`env` 继承宿主环境（token 由 `gh` 从系统钥匙串/配置读取），插件不触碰环境
+里的凭据。`maxBuffer` 为 32 MiB，超限归类 `gh-failed`。
 
 ### 5.2 Projects v2 字段映射
+
+> v0.4.0 起 Projects/条目数据来自 GraphQL payload（字段名与 REST/旧 CLI JSON 不同），下表描述
+> **规范化后的契约字段**及其来源语义；具体 GraphQL 字段 → 契约字段的映射以 `github.js` 规范化器为准，
+> 契约层面的类型（`Project` / `ProjectItem`）不变。
 
 | `gh` 原始字段 | 插件字段 | 说明 |
 |---|---|---|
@@ -1117,6 +1324,8 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 - **错误消息**只保留 `gh` stderr 的最后 500 字符，足以诊断（"auth login"、"ENOENT" 等），
   不会把 stdout 里的数据带进 HTTP 响应。
 - **本地存储最小化**：`state.json` 只含 Project/Issue 的标题、链接、编号、状态摘要；删掉即重置。
+- **磁盘缓存**：`cache.json` 保存 GitHub 读取结果（用于重启后快速首屏，含 Issue 详情/评论文本），
+  不含 token/凭据；可用 `diskCache: false` 关闭或随时删除。
 - **无外链资源**：不加载头像/图片；所有链接都是用户主动点击才打开。
 
 ### 6.5 渲染安全
@@ -1211,28 +1420,32 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> 以下为 v0.3.0 的最终验收，基于冻结代码 `client.js` sha256
-> `813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`（2026-10-28 05:28）。
-> v1.1.1（0.2.1）、v1.1（0.2.0）与 v1（0.1.0）的验收记录作为历史基线保留在 8.6。
+> 以下为 v0.4.0 的最终验收，冻结输入为：`client.js` sha256
+> `7fa1ef01f4a86969eb6660c8f474f53cdb0ce4cc73fcf1fac878814359102885`、`index.js`
+> `4e025542…d130f`、`github.js` `a4d279f9…75a5d`、`state.js` `484af66b…75304`（2026-10-28）。
+> v0.3.0、v1.1.1、v1.1、v1 的验收记录作为历史基线保留在 8.6。
 
 ### 8.1 验收清单
 
 | # | 验收项 | 状态 | 证据 |
 |---|---|---|---|
-| A1 | 宿主单元测试通过（v0.3.0 未改宿主半） | ✅ 通过 | `node --test test/host/*.test.mjs` → 69/69，exit 0 |
-| A2 | e2e fixture 模式 PASS | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T21-29-15-300Z` |
-| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T21-29-27-351Z` |
-| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式均 0 errors / 0 exceptions / 0 warnings、0 插件 HTTP ≥400 |
-| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`（v0.3.0 tint 图标块与层级）；绑定 real Project #9 |
-| A6 | **泳道为默认视图**：规范列顺序、卡片计数、未知状态列规则 | ✅ 通过 | e2e `projects-board`：fixture 5 列 `1/3/2/1/1`=8、`hidden=""`；real 4 列 `27/1/1/166`=195、`hidden="no-status"`；列计数和 == 卡片数；截图 `04-projects-board.png` |
-| A7 | 「泳道 / 列表」切换后分组列表与状态 chips 正常 | ✅ 通过 | e2e `projects-list`：fixture 8 行 / 5 组，real 195 行 / 4 组；状态色分组段；截图 `05-projects-list.png` |
-| A8 | **milestone 过滤**：全部 / Backlog / 里程碑选项、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：fixture `all 8 / backlog 4 / v1.2.0 4`（8→4→8）；real `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`（195→19→195）；过滤 v1.2.0 时 No-status 保持隐藏；截图 `06-projects-milestone.png` |
-| A9 | `issue` 空态 / 详情 / 评论 | ✅ 通过 | 截图 `07-issue-empty` / `08-issue-detail` / `09-issue-comments`；绿色 tint `Open` 徽章、#240 由泳道卡片绑定并完整加载 |
-| A10 | 安装进本机 Desktop profile 并现场验证（0.3.0 冻结代码） | ✅ 通过 | v0.3.0 重装进真实 `desktop` profile，`/health` → `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 为 Desktop 手动截图（2560×1370，sha256 `2dd32a77…5c42`；页签/头部不随 v0.3.0 改变，视图样式由 harness 截图证明） |
-| A11 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
-| A12 | 全宽自适应（v1.1.1 回归）：2200×1300 页面铺满主体、无居中限宽 | ✅ 通过 | e2e `projects-wide`：页面 86.6% 窗口宽；fixture 5 列各 361.8px、real 4 列各 454.3px，spread 0；截图 `11-projects-wide.png` |
-| A13 | **空 `No status` 泳道隐藏规则**：过滤后计数为 0 时隐藏，四个规范列常驻，`data-ghp-hidden-lanes` 正确暴露 | ✅ 通过 | fixture：`hidden=""`、5 列（No-status 1 条）；过滤 v1.2.0 后 No-status 隐藏、4 列（8→4→8）。real #9：`data-ghp-hidden-lanes="no-status"`、恰好 4 列 195 卡 |
-| A14 | **视觉系统（v0.3.0）**：状态调色板 / 类型色 / 层级在真实截图中可辨认，正文与元信息保持中性 | ✅ 通过 | 01–09/11 real 截图全部按新视觉刷新；浅色主题由 verifier 用 CDP probe 检查（board/list/picker/issue，tint/hairline/dot 可读、无深色面渗漏、0 console errors；probe 文件不随包发布） |
+| A1 | 宿主单元测试通过（含 agent 工具与 GraphQL/SWR 新测试） | ✅ 通过 | `node --test test/host/*.test.mjs`（87 用例）→ **87/87 pass，0 fail** |
+| A2 | e2e fixture 模式 PASS（含新阶段） | ✅ 通过 | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0；run dir `2026-10-27T22-30-06-883Z` |
+| A3 | e2e real 模式 PASS（真实 `gh`） | ✅ 通过 | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0；run dir `2026-10-27T22-30-20-913Z` |
+| A4 | 两个页签存在、零控制台错误 | ✅ 通过 | 截图 `01-tabs.png`；两个模式 console **0 errors / 0 exceptions / 0 warnings** |
+| A5 | `projects` 空态 / 选择器 / 绑定流程 | ✅ 通过 | 截图 `02-projects-empty` / `03-projects-picker`；绑定真实 Project #9 |
+| A6 | **泳道为默认视图**：规范列顺序、隐藏空 No-status、计数一致 | ✅ 通过 | fixture 5 列 `1/3/2/1/1`=8；real 4 列 `27/1/1/166`=195（`data-ghp-hidden-lanes="no-status"`）；截图 `04-projects-board.png` |
+| A7 | **点卡片打开内置右侧浏览器且不产生绑定** | ✅ 通过 | e2e `projects-browser`：地址栏与 `[data-sidebar-browser-frame]` iframe src 均为 `https://github.com/ceasarXuu/Astropath/issues/240`，dockkit tab `github.com`，未创建绑定（无副标题、看板仍在），随后关闭 tab；截图 `12-browser-open.png` |
+| A8 | 「泳道 / 列表」切换、列表行点击=浏览器、行内绑定按钮 | ✅ 通过 | e2e `projects-list`：列表模式渲染与行内「绑定」按钮；截图 `05-projects-list.png` |
+| A9 | **milestone 过滤**：全部 / Backlog / 里程碑、计数收缩、失效回退 | ✅ 通过 | e2e `projects-milestone`：real `all 195 / backlog 172 / v1.1.0 4 / v1.2.0 19`，195→19→195；截图 `06-projects-milestone.png` |
+| A10 | `issue` 空态 | ✅ 通过 | 截图 `07-issue-empty.png` |
+| A11 | **显式绑定 → 会话副标题**：`[data-ghp-session-subtitle]` 出现，chip 为 `#240`，标题非空且 `title` 属性带全文 | ✅ 通过 | e2e `issue-bind-subtitle`：chip `#240`、`title` 属性带完整 `repo#N title`、`nowrap+ellipsis`；副标题自成一行且位于 tabs 之上（bottom 61 ≤ tabs top 71）、与标题左对齐（x 300 == 300）；截图 `13-issue-subtitle.png` |
+| A12 | `issue` 详情 / 评论 | ✅ 通过 | 截图 `08-issue-detail` / `09-issue-comments`；#240 详情完整加载 |
+| A13 | 全宽自适应（v1.1.1 回归）：2200×1300 铺满主体、隐藏泳道规则仍成立 | ✅ 通过 | e2e `projects-wide`：页面 86.6% 窗口宽；fixture 5 列、real 4 列均分；截图 `11-projects-wide.png` |
+| A14 | **warm 打开无骨架**：缓存看板 ≤1500 ms 渲染且无 skeleton，冷/热耗时均记录 | ✅ 通过 | e2e `projects-warm` / `projects-board`：**cold board 317 ms（fixture）→ 3699 ms（real）**，**warm re-open 27 ms → 72 ms**，两模式 `skeletonSeen:false`（模块级 SWR 命中，允许一次轻量后台刷新指示）；real 冷启动 3.70 s 略高于契约 ≤3.5 s 期望，按记录不判失败。宿主 GraphQL 冷启动 `/projects` ~1.05–1.7 s、`/items`（195 卡）~3.1–3.7 s（旧 ~2.8–3.1 / ~5.3–5.4 s）；磁盘缓存跨重启后用缓存响应 ~4 ms |
+| A15 | **Agent 工具**：3 个工具的注册、参数校验、仅当前会话、输出与错误语义 | ✅ 通过 | 宿主单测（87 用例中的 tools/GraphQL/SWR 部分，fake `ctx.tools` + fake `exec.agent.session`）；**并在真实 Desktop 应用里实测**：bind #240 → switch #91 → unbind 三次工具调用返回预期文本，`state.json` 中绑定出现/消失，Desktop 头部在绑定期间显示 `#240 …` 副标题（截图 10） |
+| A16 | 安装进本机 Desktop profile 并现场验证（0.4.0 冻结代码） | ✅ 通过 | v0.4.0 重装进真实 `desktop` profile，`/health` → `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 在重装后刷新（1313×790 裁剪，sha256 `1f375330…6e38`，agent 工具绑定期间拍摄，随后解绑） |
+| A17 | README 安装/使用步骤可复现 | ✅ 通过 | README 的 `dsh plugin ... add link:…` / `remove` 命令与实测一致 |
 
 ### 8.2 单元测试
 
@@ -1241,8 +1454,11 @@ cd /Volumes/inwolf-4T/projects/dsh-github-projects
 node --test test/host/*.test.mjs
 ```
 
-**结果（2026-10-28，Node v24.18.0）：`tests 69 / pass 69 / fail 0`，exit 0。** v0.3.0 只改浏览器半的
-视觉/渲染层，宿主半与测试未变（state 9 / github 25 / plugin 35），全部离线运行。
+**结果（2026-10-28，Node v24.18.0）：`tests 87 / pass 87 / fail 0`，exit 0。** v0.4.0 新增的用例覆盖：
+GraphQL 规范化（Projects/items）、SWR（fresh/stale/refresh=1/单飞）、磁盘缓存（持久化、
+`diskCache:false`）、3 个 agent 工具的注册与 bind/switch/unbind 语义。三个文件用例数：
+`state.test.mjs` 9、`github.test.mjs` 31、`plugin.test.mjs` 47；全部离线运行（GraphQL/REST fixtures +
+fake `ctx.tools`/`exec.agent.session`，不联网）。
 
 ### 8.3 e2e
 
@@ -1251,61 +1467,63 @@ node scripts/e2e/run.mjs --mode fixture --keep
 node scripts/e2e/run.mjs --mode real --keep --extra-comments
 ```
 
-v0.3.0 阶段（契约 §5）与截图的对应关系：
+v0.4.0 阶段（契约 §5）与截图的对应关系：
 
 | # | 阶段 | 断言 | 截图 |
 |---|---|---|---|
-| 1–3 | `boot` / `app` / `session` | 隔离环境启动、`/health` 应答（real 模式要求可用 `gh`）、一轮 mock 对话让会话非空 | — |
+| 1–3 | `boot` / `app` / `session` | 隔离环境启动、`/health` 应答、一轮 mock 对话让会话非空 | — |
 | 4 | `tabs` | 四页签 `["对话","轨迹","projects","issue"]` | `01-tabs.png` |
-| 5 | `projects-empty` | `projects` 未绑定空态（含 v0.3.0 空态的 tint 图标/层级） | `02-projects-empty.png` |
+| 5 | `projects-empty` | `projects` 未绑定空态 | `02-projects-empty.png` |
 | 6 | `projects-picker` | 选择器打开并绑定 `Astropath-issues` #9 | `03-projects-picker.png` |
-| 7 | `projects-board` | 默认泳道：渲染列键为规范列的子序列 + 尾部 `other:*`；`No status` 当且仅当不在 `data-ghp-hidden-lanes` 中时出现且计数>0 时可见；四个非 No-status 规范列常驻；≥1 卡片、列计数和 == 卡片数 | `04-projects-board.png` |
-| 8 | `projects-list` | 切换列表：`[data-ghp-view-mode="list"]`、`[data-ghp-list]`、分组段与状态色 | `05-projects-list.png` |
-| 9 | `projects-milestone` | milestone 下拉含 `all` + `backlog` + 具体 milestone；选中后计数收缩、`data-active` 迁移；重置恢复 | `06-projects-milestone.png` |
-| 10 | `projects-wide` | 2200×1300：`.ghp-page` ≥ body 85%，无居中限宽，规范列均分宽度；测完恢复 1280×800（visual system 在宽屏下同样成立） | `11-projects-wide.png` |
-| 11 | `issue-empty` | `issue` 未绑定空态 | `07-issue-empty.png` |
-| 12 | `issue-detail` | 从泳道卡片整卡绑定 #240，详情完整加载 | `08-issue-detail.png` |
-| — | `issue-comments`（官方集包含，用 `--extra-comments` 产出） | 滚动到底部截取评论区 | `09-issue-comments.png` |
-| 13 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
+| 7 | `projects-board` | 默认泳道、隐藏空 No-status、列计数和 == 卡片数；记录冷启动耗时 | `04-projects-board.png` |
+| 8 | `projects-browser` | 点 Issue 卡片主体 `[data-ghp-card-action="open"]`：DSH 内置右侧浏览器打开（`[data-sidebar-browser-frame]` iframe src 含 `github.com/<repo>/issues/<N>`），且**未创建绑定**；随后关闭浏览器 tab | `12-browser-open.png` |
+| 9 | `projects-list` | 切换列表：`[data-ghp-list]`、分组段渲染；行点击同样走内置浏览器 | `05-projects-list.png` |
+| 10 | `projects-milestone` | milestone 下拉、选中后计数收缩、`data-active` 迁移、重置恢复 | `06-projects-milestone.png` |
+| 11 | `projects-wide` | 2200×1300：页面 ≥ body 85%、无居中限宽、隐藏泳道规则与均分宽度 | `11-projects-wide.png` |
+| 12 | `issue-empty` | `issue` 未绑定空态 | `07-issue-empty.png` |
+| 13 | `issue-bind-subtitle` | 在列表/卡片上点「绑定」#240 → 切到 issue 视图 + 会话副标题出现（chip `#240`、标题非空、`title` 属性带全文） | `13-issue-subtitle.png` |
+| 14 | `issue-detail` | 详情完整加载（meta/正文/labels/评论） | `08-issue-detail.png` |
+| — | `issue-comments`（官方集包含，用 `--extra-comments` 产出） | 滚动到评论区截图 | `09-issue-comments.png` |
+| 15 | `projects-warm` | 切到对话再切回 `projects`：**缓存看板无骨架、≤1500 ms 内渲染**，并记录实测耗时 | — |
+| 16 | `console` | 0 console errors / 0 exceptions / 0 插件 HTTP ≥400 / 0 网络失败 | — |
 
-> 阶段顺序：`boot, app, session, tabs, projects-empty, projects-picker, projects-board, projects-list,
-> projects-milestone, projects-wide, issue-empty, issue-detail, [issue-comments], console`。
+> 阶段顺序（契约 §5）：`boot, app, session, tabs, projects-empty, projects-picker, projects-board,
+> projects-browser, projects-list, projects-milestone, projects-wide, issue-empty, issue-bind-subtitle,
+> issue-detail, [issue-comments], projects-warm, console`；**两个模式均 17/17 阶段通过**
+> （`issue-comments` 截图仅由 real 的 `--extra-comments` 产出，不影响阶段通过数）。
 
-**最终验收（v0.3.0，2026-10-28；`client.js` 冻结于 sha256
-`813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`，两次运行间未改动）：**
+**最终验收（v0.4.0，2026-10-28，冻结输入见 §8 开头）：**
 
 | 模式 | 命令 / exit | 运行目录 | 结果 |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-15-300Z` | 13 阶段 ok；隐藏规则基线 `hidden=""`、5 列 `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1`=8；过滤 v1.2.0 后 No-status 隐藏（4 列），8→4→8；wide 5 列各 361.8px、页面 86.6%；console 0/0/0；截图 01–08 + 11 |
-| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-27-351Z` | 14 阶段 ok；**`data-ghp-hidden-lanes="no-status"`、恰好 4 列 `todo 27 / in-progress 1 / in-review 1 / done 166`=195**；milestone 195→19→195（No-status 保持隐藏）；wide 4 列各 454.3px、页面 86.6%；#240 由泳道卡片绑定并完整加载；console 0/0/0；截图 01–09 + 11 |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-06-883Z` | **17/17 阶段全 ok**；隐藏规则基线 `hidden=""` 5 列 `1/3/2/1/1`=8；内置浏览器打开 #240 且未绑定；副标题断言通过；**cold board 317 ms、warm re-open 27 ms、无 skeleton**；wide 5 列 361.8px/86.6%；console 0/0/0；截图 01–08 + 11–13 |
+| real（`gh` 2.96.0，账号 `ceasarXuu`，Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-20-913Z` | **17/17 阶段全 ok**；real 4 列 `27/1/1/166`=195（`data-ghp-hidden-lanes="no-status"`）；内置浏览器 URL/iframe 正确且未绑定；副标题 chip `#240`、title 全文、位置/对齐断言通过；**cold board 3699 ms（冷启动目标 ≤3.5 s，实测略高、记录不判失败）、warm re-open 72 ms、无 skeleton**；宿主 `/config` 0–15 ms、warm `/items` 6–17 ms、cold `/issue` ≈1.22 s；wide 86.6%；#240 详情完整；console 0/0/0；截图 01–09 + 11–13 |
 
-`artifacts/screenshots/` 中 01–09 与 11 来自上表 real 运行（authoritative v0.3.0 set，全部为**真实 gh 数据**）；
-`10-desktop-tabs.png` 为 Desktop 手动截图。`09-issue-comments.png` 由 `--extra-comments` 产出；
-`11-projects-wide.png` 是 2200×1300 宽窗口 + 隐藏泳道的回归证据。
-
-补充：**浅色主题**另由 verifier 用 CDP probe 检查（board / list / picker / issue detail / issue empty /
-comments，落在 `/tmp/theme-probe/light-*.png`，**不随包发布**；`color-mix` tint 自适应、可读、无深色面
-渗漏、0 console errors）。e2e harness 只跑 DSH 默认深色主题。
+`artifacts/screenshots/` 中 01–09、11–13 来自 real 运行；`10-desktop-tabs.png` 为 Desktop 手动截图。
+`09-issue-comments.png` 由 `--extra-comments` 产出；`11-projects-wide.png` 为 2200×1300 宽窗口证据；
+`12-browser-open.png` 证明内置浏览器打开；`13-issue-subtitle.png` 证明会话副标题。
 
 ### 8.4 截图
 
-最终截图集共 11 张（v0.3.0 视觉系统刷新）：`01`–`09` 由 e2e harness 产出（1280×800），
-`10-desktop-tabs.png` 为真实 Desktop 应用手动截图，`11-projects-wide.png` 为 harness 在 2200×1300
-下的宽窗口截图。
+最终截图集共 13 张：`01`–`09` 由 e2e harness 产出（1280×800），`10-desktop-tabs.png` 为真实 Desktop
+应用手动截图，`11-projects-wide.png` 为 2200×1300 宽窗口截图，`12-browser-open.png` 与
+`13-issue-subtitle.png` 为 1280×800 的新功能证据。
 
 | 截图 | 来源 | 内容 | 可核对点 |
 |---|---|---|---|
 | `artifacts/screenshots/01-tabs.png` | harness @1280 | 会话头部四页签 | 标签小写字面量、位于出厂页签之后 |
-| `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | 48px tint 图标块、16px/600 标题、单一主操作 |
+| `artifacts/screenshots/02-projects-empty.png` | harness @1280 | `projects` 未绑定空态 | tint 图标块、单一主操作 |
 | `artifacts/screenshots/03-projects-picker.png` | harness @1280 | Project 选择器 | 覆盖层、owner 分组、筛选、手动绑定行 |
-| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板（v0.3.0 配色，真实数据）** | `No status` 无条目时自动隐藏，其余四条泳道始终显示；真实 #9 为 4 条泳道（TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195）；状态色点/色带、计数 pill、raised 卡片、类型色点 |
-| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段的状态色/计数、状态 chips、中性标题与彩色状态点分层 |
-| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 选中 `v1.2.0` 生效（195→19），No-status 保持隐藏；下拉选项与计数、选中态 |
-| `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | tint 图标块、从项目选择、粘贴框与提示 |
-| `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 绿色 tint `Open` 徽章、吸顶头部、meta、labels、Markdown 正文 |
-| `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 吸顶头部仍在、评论作者/相对时间/GitHub 链接 |
-| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动 | 真实安装后的会话头部 | 真实会话上 `对话 \| 轨迹 \| projects \| issue` 四页签 |
-| `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | **全宽布局 + 视觉系统** | 2200×1300 宽窗口：页面铺满会话区域（旧 1000px 居中限宽已修复）；real 数据下 4 列各 454.3px 均分 |
+| `artifacts/screenshots/04-projects-board.png` | harness @1280 | **默认泳道看板** | 状态色、隐藏空 No-status、真实 #9 四泳道 195 卡 |
+| `artifacts/screenshots/05-projects-list.png` | harness @1280 | **列表视图** | 分组段、状态 chips、行内「绑定」按钮 |
+| `artifacts/screenshots/06-projects-milestone.png` | harness @1280 | **milestone 过滤** | 下拉选项、选中态、过滤后计数 |
+| `artifacts/screenshots/07-issue-empty.png` | harness @1280 | `issue` 未绑定空态 | 从项目选择、粘贴框 |
+| `artifacts/screenshots/08-issue-detail.png` | harness @1280 | 已绑定 Issue 详情 | 吸顶头部、labels、Markdown 正文 |
+| `artifacts/screenshots/09-issue-comments.png` | harness @1280 | Issue 评论 | 作者/相对时间/GitHub 链接 |
+| `artifacts/screenshots/10-desktop-tabs.png` | Desktop 手动（v0.4.0 重装后） | 真实 Desktop 会话头部 | 1313×790 裁剪；会话标题 + `#240 …` Issue 副标题行 + `对话 \| 轨迹 \| projects \| issue` 页签；sha256 `1f375330d953f1ba671e0e346b4f76ca116d9027dedf3239893bc5ff4ef36e38`；在 agent 工具绑定期间拍摄（随后解绑） |
+| `artifacts/screenshots/11-projects-wide.png` | harness @2200×1300 | 全宽布局 | 页面铺满会话区域、状态色泳道均分 |
+| `artifacts/screenshots/12-browser-open.png` | harness @1280 | **点击 Issue 卡片正文 → 内置右侧浏览器** | dockkit tab `github.com`、地址栏与 iframe src 均为 `https://github.com/ceasarXuu/Astropath/issues/240`；**未创建绑定**（卡片仍显示「绑定」）。注意 Web 版内置浏览器是 iframe，github.com 的 `X-Frame-Options: DENY` 会拒绝内嵌（截图为空白 pane）；Desktop 版用 Electron webview 正常渲染。绑定请用卡片上的「绑定」按钮 |
+| `artifacts/screenshots/13-issue-subtitle.png` | harness @1280 | **会话 Issue 副标题** | 会话标题下第二行显示 `#240` chip + Issue 标题（单行省略、tooltip 带完整 `repo#N title`），第三行才是视图 tabs；副标题行位于 tabs 之上（bottom 61 ≤ tabs top 71）且与标题左对齐（x 300 == 300）；点击可打开内置浏览器 |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
 ![projects 未绑定空态](../artifacts/screenshots/02-projects-empty.png)
@@ -1318,51 +1536,66 @@ comments，落在 `/tmp/theme-probe/light-*.png`，**不随包发布**；`color-
 ![Issue 评论区](../artifacts/screenshots/09-issue-comments.png)
 ![Desktop 安装后的会话头部（真实应用）](../artifacts/screenshots/10-desktop-tabs.png)
 ![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
+![卡片点击在内置右侧浏览器打开 GitHub](../artifacts/screenshots/12-browser-open.png)
+![会话 Issue 副标题](../artifacts/screenshots/13-issue-subtitle.png)
 
-> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出）；01–09 为 harness 的
-> 1280×800 real 产出，`11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出。01–09 与 11 均已按
-> v0.3.0 视觉系统刷新；真实数据下 `No status` 隐藏，fixture 模式（5 列）的同名截图在批量对比时
-> 可能被覆盖——以本表列出的 real 集为准。浅色主题有手动抽查（见 8.3 补充）。
+> `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，Lead 维护，v0.4.0 重装后刷新为
+> 1313×790 裁剪，sha256 `1f375330…`）；01–09、12、13 为 harness 的 1280×800 产出，
+> `11-projects-wide.png` 为 harness 的 2200×1300 宽窗口产出。`12` 的空白 iframe 是 Web 版
+> X-Frame-Options 限制所致，不是打开失败（Desktop 版用 Electron `<webview>` 正常渲染）。
 
 ### 8.5 安装验证（本机 Desktop profile）
 
-2026-10-28 以 **v0.3.0 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
-profile `desktop`）：安装命令 `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`，
-`/health` 返回 `gh 2.96.0 / ceasarXuu`；`10-desktop-tabs.png` 为该环境的会话头部手动截图
-（2560×1370，sha256 `2dd32a77…5c42`）。页签与头部不随 v0.3.0 改变，因此该手动图沿用；v0.3.0 的
-视图样式证据以 01–09 / 11 的 refreshed 截图为准。回滚：`dsh plugin --profile desktop remove
-@local/dsh-github-projects`（见 7.5）。
+2026-10-28 以 **v0.4.0 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
+profile `desktop`）：
+
+| 步骤 | 命令 / 结果 |
+|---|---|
+| 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`（与 7.2 一致） |
+| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启 |
+| 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `{"ok":true,"gh":{"version":"gh version 2.96.0 (2026-07-02)","account":"ceasarXuu"}}` |
+| Agent 工具现场验证 | 在真实会话中由模型调用 `github_issue_bind`（#240）→ `github_issue_switch`（#91）→ `github_issue_unbind`，渲染结果与 `output.render` 文本一致，`state.json` 中绑定出现/消失，Desktop 头部在绑定期间显示 `#240 …` 副标题 |
+| 现场截图 | `10-desktop-tabs.png`（1313×790 裁剪，sha256 `1f375330…6e38`，重装后刷新，绑定期间拍摄） |
+| 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（见 7.5） |
 
 ### 8.6 历史基线与未验证项
 
-**v0.3.0 结论**：宿主测试 69/69；fixture 与 real 两个 e2e 模式均 PASS（frozen client `813dae78…`；
-run dirs `2026-10-27T21-29-15-300Z` / `2026-10-27T21-29-27-351Z`）；隐藏空泳道规则在 baseline、
-过滤、real 数据三种情形下均验证（real `data-ghp-hidden-lanes="no-status"`）；11 张官方截图全部按
-v0.3.0 视觉系统刷新；浅色主题由 CDP probe 抽查通过（probe 文件不随包发布）。
+**v0.4.0 结论**：宿主测试 **87/87**；fixture 与 real 两个 e2e 模式均 17/17 阶段 PASS（冻结输入
+client `7fa1ef01…` / index `4e025542…` / github `a4d279f9…` / state `484af66b…`；run dirs
+`2026-10-27T22-30-06-883Z` / `2026-10-27T22-30-20-913Z`）；会话副标题、内置浏览器打开（不绑定）、
+warm 打开无骨架（27/72 ms）、real 隐藏空 No-status（4 列 195 卡）、wide 86.6%、console 0/0/0 均已
+验证；**3 个 agent 工具在真实 Desktop 应用里现场跑通**（bind/switch/unbind + state.json + 头部副标题），
+`10-desktop-tabs.png` 已按 v0.4.0 重装刷新；13 张截图齐全。冷启动 real 看板 3.70 s 略高于 3.5 s
+目标（记录、不判失败）。
 
-**v1.1.1（0.2.1）验收基线（2026-10-28）**：宿主测试 69/69；fixture 与 real e2e 均 PASS（frozen
-client `4f41dc9d…`；run dirs `2026-10-27T21-15-18-395Z` / `2026-10-27T21-15-31-437Z`）；
-`projects-wide` 在 2200×1300 下页面占窗口 86.6%（旧版上限 45.5%），五列均分；11 张官方截图齐全。
+**v0.3.0 验收基线（2026-10-28）**：视觉系统 + 空 No-status 泳道隐藏；宿主测试 69/69；fixture/real
+e2e 均 PASS（frozen client `813dae78…`）；11 张截图；real #9 `data-ghp-hidden-lanes="no-status"`、
+4 条泳道 195 卡。
 
-**v1.1（0.2.0）验收基线（2026-10-28）**：泳道看板 + milestone 过滤；宿主测试 69/69；fixture/real
-e2e 均 PASS；10 张官方截图。
+**v1.1.1（0.2.1）验收基线（2026-10-28）**：全宽布局；宿主测试 69/69；fixture/real PASS；
+`projects-wide` 2200×1300 页面 86.6%（旧上限 45.5%）；11 张截图。
 
-**v1（0.1.0）验收基线（2026-10-28）**：最初的分组列表 + Issue 详情；宿主测试 69/69；fixture/real
-e2e 均 PASS。旧截图编号已随版本重排，不再保留。
+**v1.1（0.2.0）/ v1（0.1.0）**：泳道看板 + milestone 过滤 / 最初的分组列表 + Issue 详情；均通过
+fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保留。
 
-未验证项（v0.3.0 补齐后复核）：
+未验证项（v0.4.0 补齐后复核）：
 
 - 只在 macOS + DSH Desktop 0.2.1-rc.3 + Chrome 156 上验证；Windows、Linux、其他 DSH 版本未测。
-- 只验证了 `gh` 2.96.0；旧版 2.x 的 `--format json` 兼容性未逐一测试。
+- 只验证了 `gh` 2.96.0；旧版 2.x 的 GraphQL/REST 兼容性未逐一测试。
 - 只验证了 GitHub.com + 单个账号；GitHub Enterprise Server、多账号切换未测。
+- **会话副标题依赖宿主私有 header DOM**：只在当前 DSH 版本验证；宿主升级若改变
+  `header[data-window-drag]` 结构，副标题会降级隐藏（不影响主功能），需要随版本复核。
+- **Agent 工具的模型侧行为**只在宿主单测（fake `ctx.tools`/`exec.agent.session`）验证，未做真实模型
+  端到端调用；工具后 UI 在 ≤4s 内更新由本地轮询保证，非实时推送。
+- **内置浏览器打开**依赖 DSH 右侧栏 browser tab；Web 版是 iframe，github.com 的
+  `X-Frame-Options: DENY` 会拒绝内嵌（Desktop Electron webview 正常渲染）；回退 `window.open` 的
+  体验未单独截图验证。
+- **GraphQL 分页/缓存**：`/items` 只取到 `maxProjectItems`（默认 200）即停；`staleTtlMs`（10 min）
+  内可能先显示旧数据；磁盘缓存跨重启保留读取结果。均按设计记录在 §3.6/§9。
+- **延迟数字是参考值**：/projects ~1.4 s、/items 冷 ~3.4 s、warm 打开 <300 ms 等数字来自本机实测，
+  会随网络、项目大小、`gh` 版本变化；real 冷启动看板本次实测 3.70 s（记录值，未断言 ≤3.5 s）。
 - 未做长时间运行/大 Project（数千条目）、弱网、限流风暴等压力场景验证。
-- 宽布局只在 e2e 的 2200×1300 与 1280×800 两个视口验证；其它分辨率/缩放比例未逐一验证。
-- 视觉系统的深色主题由 e2e 覆盖、浅色主题由 CDP probe 抽查（`/tmp/theme-probe/light-*.png`，不随包
-  发布，也不在官方 11 张截图集内）；未做逐主题/逐对比度设置的 WCAG 实测，颜色对比度依赖宿主
-  label/tint token。
-- 未做无障碍（屏幕阅读器）实测；彩色圆点均为 `aria-hidden`、文字标签常驻的设计未做真机辅助技术测试。
-- 泳道看板未做拖拽（设计上只读）；窄于约 960px 的横向滚动未单独截图。
-- 未在真实 Desktop 中逐项操作泳道切换、milestone 过滤等全部交互；这些路径由 e2e 覆盖。
+- 未做无障碍（屏幕阅读器）实测；颜色/副标题等按规范实现，未做真机辅助技术测试。
 
 ---
 
@@ -1374,6 +1607,18 @@ e2e 均 PASS。旧截图编号已随版本重排，不再保留。
 - **只处理 Issue，不处理 PR 详情**：PR/Draft 条目只能跳转 GitHub。
 - **单 Project**：一个工作区同时只绑定一个 Project。
 - **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
+- **会话副标题依赖宿主私有头部 DOM**：出厂头部没有 subtitle slot，插件用受控 portal 在
+  `header[data-window-drag]` 内插入并守卫副标题行；宿主结构变化时功能会**降级为不显示**（不报错、
+  不影响会话），需要随 DSH 升级复核。
+- **Agent 工具只作用于当前会话**：没有目标会话参数，不能给其它会话绑定/解绑；工具写入后客户端靠
+  本地轮询在 ≤4s 内反映，不是实时推送。
+- **内置浏览器**：卡片/行点击通过 DSH 右侧栏 browser tab 打开 GitHub；宿主没有该能力时回退
+  `window.open` 新标签页，此时会离开当前界面。
+- **Web 版内置浏览器受 X-Frame-Options 限制**：Web 构建用 iframe 承载浏览器，github.com 返回
+  `X-Frame-Options: DENY`，因此 Web 版里内嵌的 GitHub 页面可能显示空白（地址栏 URL 正确）；
+  Desktop 版使用 Electron webview 可正常渲染。这只影响"在界面内查看"，不影响跳转 URL 本身。
+- **读取延迟是参考值**：1.4s / 3.4s / <300ms 等数字来自本机实测，随网络、项目规模、`gh` 版本变化，
+  不构成 SLA。
 - **泳道只读**：不支持拖拽卡片改 Status、不支持自定义排序；未知自定义状态只做只读展示（右侧扩展列，
   且仅在该列非空时出现）。
 - **空 No status 泳道**：`No status` 在过滤后为空时自动隐藏（其余四个规范列始终显示），因此泳道数量
@@ -1394,11 +1639,16 @@ e2e 均 PASS。旧截图编号已随版本重排，不再保留。
 
 - 绑定存储在 profile 级别，**不随仓库走**：换机器/换 profile 需要重新绑定；同一 profile 的所有会话共享。
 - `state.json` 损坏时按空 store 处理，**不会自动备份/恢复**；损坏前建议备份该文件。
-- 内存缓存 60 s：刚在 GitHub 改完 Issue，页签里可能短暂是旧数据 → 点「刷新」。
-- **首次健康探测慢时的 `pending` 占位**：`gh` 首次探测超过 `healthFirstReadTimeoutMs`（3 s）时，
-  `/config` 先返回 `{available:false, error:"pending"}`，界面可能短暂显示「gh CLI 不可用」警告条
-  （详情文字就是 `pending`）；探测完成后重新读取 `/config` 即恢复。这不是 `gh` 缺失。
-- 大 Project（> `maxProjectItems`）只显示前 N 条，footer 提示；没有分页。
+- **SWR 数据可能先旧后新**：fresh 窗口 `cacheTtlMs`（60 s）内直接用缓存；过期后在
+  `staleTtlMs`（10 min）内**先显示旧数据**（`stale:true`）并后台刷新；冷启动还可能先用磁盘缓存
+  渲染。刚在 GitHub 改完数据时请点「刷新」（`refresh=1` 等待新鲜读取）。
+- **磁盘缓存是持久数据**：`cache.json` 跨重启保留 GitHub 读取结果（无 token），共享机器/备份时需注意；
+  可 `diskCache: false` 关闭或删除该文件。
+- **冷启动的 `pending` 健康占位**：`/config` 永不等待 `gh`，冷启动时先返回
+  `{available:false, error:"pending"}`；界面可能短暂显示「gh CLI 不可用」警告条（详情文字就是
+  `pending`），后台探测完成后重新读取 `/config` 即恢复。这不是 `gh` 缺失。
+- 大 Project（> `maxProjectItems`）只显示前 N 条（GraphQL 分页到上限即停），footer 提示；没有
+  "加载更多"。
 
 ### 9.3 环境与兼容性
 

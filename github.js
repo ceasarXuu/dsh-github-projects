@@ -1,5 +1,5 @@
 /**
- * `gh` CLI adapter for the `github-projects` host plugin (contract §3.2).
+ * `gh` CLI adapter for the `github-projects` host plugin (contract §3.2/§3.5).
  *
  * Every read is one or more `gh` child processes: there is no HTTP client and
  * no credential handling here — `gh` owns authentication. The runner is
@@ -9,7 +9,15 @@
  * (`gh-missing`, `gh-auth`, `gh-failed`, `timeout`) and never leak stdout
  * bodies into error messages.
  *
- * Normalizers map the captured `gh` JSON payloads onto the exact wire types of
+ * Read path (v0.4.0, contract §3.5):
+ * - Projects: exactly ONE `gh api graphql` call for the viewer and its
+ *   organizations; closed Projects are dropped and partial GraphQL errors are
+ *   preserved per owner.
+ * - Project items: `gh api graphql` paginated 100 nodes per page, status /
+ *   milestone / labels / content from the same payload, no `gh project view`.
+ * - Issue detail: REST (`gh api repos/.../issues/N` + comments) as before.
+ *
+ * Normalizers map captured `gh` JSON payloads onto the exact wire types of
  * contract §3.1. They are exported so unit tests can drive them from
  * `test/fixtures/*` without a process.
  *
@@ -57,9 +65,6 @@ const AUTH_PATTERN = /auth login|authenticate|authentication|not logged in|no oa
 /** `gh api` 404 markers for GitHub REST reads. */
 const NOT_FOUND_PATTERN = /http 404|\b404\b|not found/i
 
-/** GraphQL 404 markers for Projects v2 reads. */
-const PROJECT_NOT_FOUND_PATTERN = /could not resolve to a projectv2|could not find project|no project with number|project .* not found/i
-
 function lastChars(text, max) {
   const value = typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : ''
   return value.length <= max ? value : value.slice(-max)
@@ -99,15 +104,6 @@ function asIssueNotFound(error) {
   if (classified.code !== 'gh-failed') return classified
   if (!NOT_FOUND_PATTERN.test(classified.message)) return classified
   return new GhError('issue-not-found', '找不到该 Issue（或无权访问）')
-}
-
-function asProjectNotFound(error) {
-  const classified = classifyGhError(error)
-  if (classified.code !== 'gh-failed') return classified
-  if (!PROJECT_NOT_FOUND_PATTERN.test(classified.message) && !NOT_FOUND_PATTERN.test(classified.message)) {
-    return classified
-  }
-  return new GhError('project-not-found', '找不到该 Project（或无权访问）')
 }
 
 /* ------------------------------------------------------------------ */
@@ -425,6 +421,208 @@ export function toIssueSummary(issue) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 5.5 GraphQL read path (v0.4.0).                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One call for every accessible Project (contract §3.5): the viewer's own
+ * Projects plus the Projects of every organization the viewer belongs to.
+ * Mirrors `test/fixtures/queries/projects.graphql`.
+ */
+export const GRAPHQL_PROJECTS_QUERY = `query {
+  viewer {
+    login
+    projectsV2(first: 100) {
+      totalCount
+      nodes { number title url closed shortDescription items { totalCount } }
+    }
+    organizations(first: 50) {
+      nodes {
+        login
+        projectsV2(first: 100) {
+          totalCount
+          nodes { number title url closed shortDescription items { totalCount } }
+        }
+      }
+    }
+  }
+}`
+
+/**
+ * One page of a Project's items plus the Project summary, mirroring
+ * `test/fixtures/queries/items.graphql` (plus `closed`/`__typename` so the
+ * `/items` response can carry the full `Project` without a second read).
+ */
+export const GRAPHQL_ITEMS_QUERY = `query($owner:String!,$number:Int!,$limit:Int!,$cursor:String){
+  repositoryOwner(login:$owner){
+    __typename
+    ... on ProjectV2Owner {
+      projectV2(number:$number){
+        title
+        url
+        closed
+        shortDescription
+        items(first:$limit, after:$cursor){
+          totalCount
+          pageInfo { hasNextPage endCursor }
+          nodes{
+            id
+            fieldValues(first:20){ nodes{ ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } } } }
+            content{
+              __typename
+              ... on Issue { number title url state repository { nameWithOwner } labels(first:10){ nodes{ name } } milestone { title } }
+              ... on PullRequest { number title url state repository { nameWithOwner } labels(first:10){ nodes{ name } } milestone { title } }
+              ... on DraftIssue { title }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+/** Nodes of one GraphQL connection, tolerating a missing/`null` connection. */
+function graphqlNodes(connection) {
+  return isRecord(connection) && Array.isArray(connection.nodes) ? connection.nodes : []
+}
+
+/** First GraphQL error carrying a message, or null. */
+function firstGraphqlError(payload) {
+  if (!isRecord(payload) || !Array.isArray(payload.errors)) return null
+  for (const error of payload.errors) {
+    if (isRecord(error) && typeof error.message === 'string' && error.message.length > 0) return error
+  }
+  return null
+}
+
+function graphqlErrorTail(payload) {
+  const error = firstGraphqlError(payload)
+  return error === null ? null : truncateChars(error.message, 300).text
+}
+
+/** Resolve the owner a partially-failed GraphQL error belongs to, best-effort. */
+function ownerOfGraphqlError(payload, error) {
+  const path = isRecord(error) && Array.isArray(error.path) ? error.path : []
+  const data = isRecord(payload) && isRecord(payload.data) ? payload.data : null
+  try {
+    if (path[0] === 'viewer' && path[1] === 'organizations' && path[2] === 'nodes') {
+      const index = Number(path[3])
+      const node = Number.isInteger(index) ? graphqlNodes(data?.viewer?.organizations)[index] : undefined
+      if (isRecord(node) && typeof node.login === 'string') return node.login
+    }
+    if (path[0] === 'viewer' && path[1] === 'projectsV2') {
+      return typeof data?.viewer?.login === 'string' ? data.viewer.login : 'viewer'
+    }
+  } catch {
+    /* fall through to the generic owner label */
+  }
+  return 'graphql'
+}
+
+/** GraphQL errors preserved as the contract's per-owner `errors` entries. */
+function graphqlOwnerErrors(payload) {
+  if (!isRecord(payload) || !Array.isArray(payload.errors)) return []
+  const errors = []
+  for (const error of payload.errors) {
+    if (!isRecord(error) || typeof error.message !== 'string' || error.message.length === 0) continue
+    errors.push({
+      owner: ownerOfGraphqlError(payload, error),
+      code: 'gh-failed',
+      message: truncateChars(error.message, 300).text,
+    })
+  }
+  return errors
+}
+
+/** Owner type from the public Project URL (`/users/…` vs `/orgs/…`). */
+export function ownerTypeFromProjectUrl(url) {
+  if (typeof url === 'string') {
+    if (/^https?:\/\/github\.com\/orgs\//u.test(url)) return 'organization'
+    if (/^https?:\/\/github\.com\/users\//u.test(url)) return 'user'
+  }
+  return 'user'
+}
+
+/**
+ * One GraphQL `ProjectV2` node → contract `Project`.
+ * `context.owner`/`context.ownerType` come from the connection that returned it.
+ */
+export function normalizeGraphqlProject(raw, context = {}) {
+  const source = isRecord(raw) ? raw : {}
+  const owner = typeof context.owner === 'string' ? context.owner : ''
+  const ownerType = context.ownerType === 'organization' ? 'organization' : 'user'
+  const items = isRecord(source.items) ? source.items : null
+  const itemCount = items !== null && Number.isInteger(items.totalCount) && items.totalCount >= 0
+    ? items.totalCount
+    : null
+  const number = Number.isInteger(source.number) && source.number > 0
+    ? source.number
+    : Number.isInteger(context.number) && context.number > 0 ? context.number : 0
+  const rawDescription = typeof source.shortDescription === 'string' ? source.shortDescription : ''
+  return {
+    owner,
+    ownerType,
+    number,
+    title: typeof source.title === 'string' ? source.title : '',
+    url: httpUrl(source.url),
+    itemCount,
+    closed: source.closed === true,
+    description: rawDescription === '' ? null : truncateChars(rawDescription, MAX_DESCRIPTION_CHARS).text,
+  }
+}
+
+/**
+ * One GraphQL `ProjectV2Item` node → contract `ProjectItem`.
+ * The Status value is the single-select field literally named `Status`.
+ */
+export function normalizeGraphqlItem(raw) {
+  const source = isRecord(raw) ? raw : {}
+  const content = isRecord(source.content) ? source.content : {}
+  const typename = typeof content.__typename === 'string' ? content.__typename : ''
+  const type = typename === 'PullRequest' ? 'pr' : typename === 'DraftIssue' ? 'draft' : 'issue'
+  const repository = isRecord(content.repository) ? content.repository : null
+  const repo = repository !== null
+    && typeof repository.nameWithOwner === 'string'
+    && repository.nameWithOwner.includes('/')
+    ? repository.nameWithOwner
+    : null
+  const labels = isRecord(content.labels) && Array.isArray(content.labels.nodes)
+    ? content.labels.nodes
+      .map(label => (isRecord(label) && typeof label.name === 'string' && label.name.length > 0 ? label.name : null))
+      .filter(name => name !== null)
+    : []
+  const milestone = isRecord(content.milestone)
+    && typeof content.milestone.title === 'string'
+    && content.milestone.title.length > 0
+    ? content.milestone.title
+    : null
+  let status = null
+  const fieldValues = isRecord(source.fieldValues) && Array.isArray(source.fieldValues.nodes)
+    ? source.fieldValues.nodes
+    : []
+  for (const value of fieldValues) {
+    if (!isRecord(value) || !isRecord(value.field)) continue
+    if (value.field.name !== 'Status') continue
+    if (typeof value.name === 'string' && value.name.length > 0) status = value.name
+    break
+  }
+  const stateText = typeof content.state === 'string' ? content.state.toUpperCase() : null
+  const state = stateText === 'OPEN' || stateText === 'CLOSED' || stateText === 'MERGED' ? stateText : null
+  return {
+    id: source.id === undefined || source.id === null ? '' : String(source.id),
+    type,
+    number: Number.isInteger(content.number) && content.number > 0 ? content.number : null,
+    repo,
+    title: typeof content.title === 'string' ? content.title : '',
+    url: httpUrl(content.url),
+    state,
+    status,
+    labels,
+    milestone,
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 6. The adapter.                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -531,75 +729,47 @@ export function createGh(options = {}) {
     }
   }
 
-  /** Owner logins of the authenticated account's organizations. */
-  async function organizationLogins() {
-    const parsed = await execJson(['api', 'user/orgs', '--jq', '[.[].login]'])
-    if (!Array.isArray(parsed)) throw new GhError('gh-failed', 'gh api user/orgs 返回了非数组 JSON')
-    const logins = []
-    const seen = new Set()
-    for (const value of parsed) {
-      if (typeof value !== 'string' || value.length === 0) continue
-      const lowered = value.toLowerCase()
-      if (seen.has(lowered)) continue
-      seen.add(lowered)
-      logins.push(value)
+  /** One `gh api graphql` invocation; variables become typed `-F` fields. */
+  async function execGraphql(query, variables = {}) {
+    const args = ['api', 'graphql', '-f', `query=${query}`]
+    for (const [key, value] of Object.entries(variables)) {
+      if (value === undefined || value === null) continue
+      args.push('-F', `${key}=${String(value)}`)
     }
-    return logins
+    return execJson(args)
   }
 
   /**
-   * Every accessible Project grouped by owner (contract §3.2 query 2).
-   * The current user is always listed first; an owner whose project listing
-   * fails contributes to `errors` instead of failing the whole response.
+   * Every accessible Project grouped by owner (contract §3.5): ONE GraphQL
+   * call for the viewer's Projects plus every organization's Projects.
+   * Closed Projects are dropped; GraphQL errors that arrive beside a usable
+   * payload are preserved as the per-owner `errors` array.
    */
   async function listProjects() {
-    const login = await accountLogin()
-    if (typeof login !== 'string' || login.length === 0) {
-      throw new GhError('gh-failed', '无法确定已登录的 GitHub 账号')
+    const payload = await execGraphql(GRAPHQL_PROJECTS_QUERY)
+    const errors = graphqlOwnerErrors(payload)
+    const data = isRecord(payload.data) ? payload.data : null
+    const viewer = data !== null && isRecord(data.viewer) ? data.viewer : null
+    if (viewer === null || typeof viewer.login !== 'string' || viewer.login.length === 0) {
+      const tail = graphqlErrorTail(payload)
+      throw new GhError('gh-failed', `GraphQL 响应缺少 viewer${tail === null ? '' : `：${tail}`}`)
     }
-    const owners = [{ login, type: 'user' }]
-    const errors = []
-    try {
-      for (const org of await organizationLogins()) {
-        if (org.toLowerCase() === login.toLowerCase()) continue
-        owners.push({ login: org, type: 'organization' })
-      }
-    } catch (error) {
-      const classified = classifyGhError(error)
-      // Missing CLI / broken credentials fail the whole read; anything else is
-      // reported per owner and the user's own projects remain usable.
-      if (classified.code === 'gh-missing' || classified.code === 'gh-auth' || classified.code === 'timeout') {
-        throw classified
-      }
-      errors.push({ owner: 'user/orgs', code: classified.code, message: classified.message })
-    }
-
-    const results = await Promise.all(owners.map(async (owner) => {
-      try {
-        const parsed = await execJson([
-          'project', 'list',
-          '--owner', owner.login,
-          '--format', 'json',
-          '--limit', '100',
-        ])
-        const rawProjects = Array.isArray(parsed?.projects) ? parsed.projects : []
-        const projects = rawProjects
-          .map(normalizeProject)
-          .filter(project => project.number > 0 && project.owner !== '')
-        return { projects, error: null }
-      } catch (error) {
-        const classified = classifyGhError(error)
-        return {
-          projects: [],
-          error: { owner: owner.login, code: classified.code, message: classified.message },
-        }
-      }
-    }))
-
+    const owners = [{ login: viewer.login, type: 'user' }]
     const projects = []
-    for (const result of results) {
-      projects.push(...result.projects)
-      if (result.error !== null) errors.push(result.error)
+    const seenOwners = new Set([viewer.login.toLowerCase()])
+    const appendProjects = (connection, owner, ownerType) => {
+      for (const node of graphqlNodes(connection)) {
+        const project = normalizeGraphqlProject(node, { owner, ownerType })
+        if (project.number > 0 && project.closed === false) projects.push(project)
+      }
+    }
+    appendProjects(viewer.projectsV2, viewer.login, 'user')
+    for (const organization of graphqlNodes(viewer.organizations)) {
+      if (!isRecord(organization) || typeof organization.login !== 'string' || organization.login.length === 0) continue
+      if (seenOwners.has(organization.login.toLowerCase())) continue
+      seenOwners.add(organization.login.toLowerCase())
+      owners.push({ login: organization.login, type: 'organization' })
+      appendProjects(organization.projectsV2, organization.login, 'organization')
     }
     return { owners, projects, errors }
   }
@@ -613,33 +783,66 @@ export function createGh(options = {}) {
   }
 
   /**
-   * One Project's items (contract §3.2 query 3) plus the Project summary the
-   * `/items` wire object carries. `gh project item-list` does not echo the
-   * project metadata, so `gh project view` supplies it.
+   * One Project's items (contract §3.5) via paginated GraphQL, 100 nodes per
+   * page, stopping at `totalCount`/`maxProjectItems`. The Project summary comes
+   * from the same payload, so there is no second `gh project view` read.
    */
   async function projectItems(owner, number) {
-    const project = validateProjectRequest(owner, number)
-    const [itemsOutcome, projectOutcome] = await Promise.allSettled([
-      execJson([
-        'project', 'item-list', String(project.number),
-        '--owner', project.owner,
-        '--format', 'json',
-        '--limit', String(maxProjectItems),
-      ]),
-      execJson(['project', 'view', String(project.number), '--owner', project.owner, '--format', 'json']),
-    ])
-    if (itemsOutcome.status === 'rejected') throw asProjectNotFound(itemsOutcome.reason)
-    if (projectOutcome.status === 'rejected') throw asProjectNotFound(projectOutcome.reason)
-    const parsedItems = itemsOutcome.value
-    const rawItems = Array.isArray(parsedItems?.items) ? parsedItems.items : []
-    const items = rawItems.map(normalizeProjectItem)
-    const totalCount = Number.isInteger(parsedItems?.totalCount) && parsedItems.totalCount >= 0
-      ? parsedItems.totalCount
-      : items.length
+    const target = validateProjectRequest(owner, number)
+    const collected = []
+    let project = null
+    let totalCount = null
+    let cursor = null
+    let hasNextPage = true
+    let pages = 0
+    // Bound the loop independently of GitHub's pagination as a failure guard.
+    const maxPages = 40
+    while (hasNextPage && collected.length < maxProjectItems && pages < maxPages) {
+      const limit = Math.max(1, Math.min(100, maxProjectItems - collected.length))
+      const variables = { owner: target.owner, number: target.number, limit }
+      if (cursor !== null) variables.cursor = cursor
+      const payload = await execGraphql(GRAPHQL_ITEMS_QUERY, variables)
+      pages += 1
+      const data = isRecord(payload.data) ? payload.data : null
+      const ownerNode = data !== null && isRecord(data.repositoryOwner) ? data.repositoryOwner : null
+      const projectNode = ownerNode !== null && isRecord(ownerNode.projectV2) ? ownerNode.projectV2 : null
+      if (projectNode === null || projectNode === undefined) {
+        const tail = graphqlErrorTail(payload)
+        throw new GhError('project-not-found', `找不到该 Project（或无权访问）${tail === null ? '' : `：${tail}`}`)
+      }
+      if (project === null) {
+        const typename = typeof ownerNode.__typename === 'string' ? ownerNode.__typename.toLowerCase() : ''
+        const ownerType = typename === 'organization' || typename === 'user'
+          ? typename
+          : ownerTypeFromProjectUrl(projectNode.url)
+        project = normalizeGraphqlProject(projectNode, { owner: target.owner, ownerType, number: target.number })
+      }
+      const itemsNode = isRecord(projectNode.items) ? projectNode.items : null
+      if (itemsNode === null) throw new GhError('gh-failed', 'GraphQL 响应缺少 items')
+      if (Number.isInteger(itemsNode.totalCount) && itemsNode.totalCount >= 0) totalCount = itemsNode.totalCount
+      for (const node of graphqlNodes(itemsNode)) collected.push(normalizeGraphqlItem(node))
+      const pageInfo = isRecord(itemsNode.pageInfo) ? itemsNode.pageInfo : null
+      hasNextPage = pageInfo !== null
+        && pageInfo.hasNextPage === true
+        && typeof pageInfo.endCursor === 'string'
+        && pageInfo.endCursor.length > 0
+      cursor = hasNextPage ? pageInfo.endCursor : null
+    }
+    const items = collected.slice(0, maxProjectItems)
+    const total = totalCount === null ? items.length : totalCount
     return {
-      project: normalizeProject(projectOutcome.value),
+      project: project ?? {
+        owner: target.owner,
+        ownerType: 'user',
+        number: target.number,
+        title: '',
+        url: null,
+        itemCount: null,
+        closed: false,
+        description: null,
+      },
       items,
-      truncated: totalCount > items.length,
+      truncated: total > items.length,
     }
   }
 

@@ -13,10 +13,13 @@ import { test } from 'node:test'
 import {
   createGh,
   classifyGhError,
+  normalizeGraphqlItem,
+  normalizeGraphqlProject,
   normalizeIssue,
   normalizeIssueComment,
   normalizeProject,
   normalizeProjectItem,
+  ownerTypeFromProjectUrl,
   parseIssueRef,
   parseOwnerParam,
   parsePositiveInt,
@@ -32,7 +35,6 @@ import {
   ghError,
   ghMissingError,
   ghNotFound,
-  ghProjectNotFound,
   ghTimeoutError,
 } from './support.mjs'
 
@@ -172,6 +174,100 @@ test('normalizeProjectItem maps PRs, drafts, and missing milestones', () => {
   assert.equal(closed.state, 'CLOSED')
 })
 
+/* ------------------------------------------------------------------ */
+/* GraphQL normalizers (v0.4.0)                                        */
+/* ------------------------------------------------------------------ */
+
+test('normalizeGraphqlProject maps a Projects v2 node; closed ones stay flagged', () => {
+  const viewer = fixture.graphqlProjects.data.viewer
+  const open = viewer.projectsV2.nodes.find(node => node.number === 9)
+  assert.deepEqual(normalizeGraphqlProject(open, { owner: 'ceasarXuu', ownerType: 'user' }), {
+    owner: 'ceasarXuu',
+    ownerType: 'user',
+    number: 9,
+    title: 'Astropath-issues',
+    url: 'https://github.com/users/ceasarXuu/projects/9',
+    itemCount: 195,
+    closed: false,
+    description: open.shortDescription,
+  })
+  const closed = viewer.projectsV2.nodes.find(node => node.number === 4)
+  assert.equal(normalizeGraphqlProject(closed, { owner: 'ceasarXuu', ownerType: 'user' }).closed, true)
+
+  // The items payload does not repeat `number`; the read target supplies it.
+  const itemsProject = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2
+  assert.equal(normalizeGraphqlProject(itemsProject, { owner: 'ceasarXuu', ownerType: 'user', number: 9 }).number, 9)
+  assert.equal(
+    normalizeGraphqlProject({ number: 1, shortDescription: 'x'.repeat(900) }, { owner: 'o' }).description.length,
+    500,
+  )
+})
+
+test('ownerTypeFromProjectUrl distinguishes user and organization Projects', () => {
+  assert.equal(ownerTypeFromProjectUrl('https://github.com/users/ceasarXuu/projects/9'), 'user')
+  assert.equal(ownerTypeFromProjectUrl('https://github.com/orgs/XuyuTech/projects/2'), 'organization')
+  assert.equal(ownerTypeFromProjectUrl(null), 'user')
+  assert.equal(ownerTypeFromProjectUrl('https://example.com/x'), 'user')
+})
+
+test('normalizeGraphqlItem maps Issue / PullRequest / DraftIssue nodes', () => {
+  const first = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2.items.nodes[0]
+  assert.deepEqual(normalizeGraphqlItem(first), {
+    id: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs',
+    type: 'issue',
+    number: 240,
+    repo: 'ceasarXuu/Astropath',
+    title: '[v1.2.0][UI] 会话名称丰富化：双标题 / TUI icon / 路径·repo·branch / 运行·已读状态',
+    url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    state: 'OPEN',
+    status: 'In Progress',
+    labels: ['enhancement', 'todo'],
+    milestone: 'v1.2.0',
+  })
+
+  const merged = normalizeGraphqlItem({
+    id: 'pr-1',
+    fieldValues: { nodes: [{}, { name: 'Done', field: { name: 'Status' } }] },
+    content: {
+      __typename: 'PullRequest',
+      number: 12,
+      title: 'A PR',
+      url: 'https://github.com/o/r/pull/12',
+      state: 'MERGED',
+      repository: { nameWithOwner: 'o/r' },
+      labels: { nodes: [{ name: 'x' }] },
+      milestone: null,
+    },
+  })
+  assert.equal(merged.type, 'pr')
+  assert.equal(merged.state, 'MERGED')
+  assert.equal(merged.status, 'Done')
+  assert.deepEqual(merged.labels, ['x'])
+  assert.equal(merged.milestone, null)
+
+  const draft = normalizeGraphqlItem({ id: 'draft-1', content: { __typename: 'DraftIssue', title: 'Draft idea' } })
+  assert.deepEqual(draft, {
+    id: 'draft-1',
+    type: 'draft',
+    number: null,
+    repo: null,
+    title: 'Draft idea',
+    url: null,
+    state: null,
+    status: null,
+    labels: [],
+    milestone: null,
+  })
+
+  // A Status field whose value is blank is unmapped.
+  const noStatus = normalizeGraphqlItem({
+    id: 'x',
+    fieldValues: { nodes: [{ name: '', field: { name: 'Status' } }] },
+    content: { __typename: 'Issue', number: 1, title: 't' },
+  })
+  assert.equal(noStatus.status, null)
+})
+
 test('normalizeIssue maps the captured REST issue + comments payload', () => {
   const issue = normalizeIssue(fixture.issue, fixture.comments, { repo: REPO, number: 240, maxComments: 30 })
   assert.equal(issue.repo, REPO)
@@ -245,7 +341,7 @@ test('health reports version + account from the fixture runner', async () => {
   })
 })
 
-test('listProjects aggregates the user and every org, mapping Projects', async () => {
+test('listProjects makes ONE GraphQL call and drops closed Projects', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
   const result = await gh.listProjects()
@@ -254,53 +350,104 @@ test('listProjects aggregates the user and every org, mapping Projects', async (
     { login: 'XuyuTech', type: 'organization' },
     { login: 'BeanDoor', type: 'organization' },
   ])
-  assert.equal(result.projects.length, 4)
+  assert.deepEqual(result.projects.map(project => project.number), [9, 8, 6, 5])
   assert.deepEqual(result.errors, [])
-  assert.deepEqual(
-    runner.commands().filter(command => command.startsWith('project list')),
-    [
-      'project list --owner ceasarXuu --format json --limit 100',
-      'project list --owner XuyuTech --format json --limit 100',
-      'project list --owner BeanDoor --format json --limit 100',
-    ],
-  )
+  assert.equal(runner.calls.length, 1, 'exactly one gh invocation for /projects')
+  assert.equal(runner.calls[0][0], 'api')
+  assert.equal(runner.calls[0][1], 'graphql')
+  assert.match(runner.calls[0].join(' '), /projectsV2/u)
 })
 
-test('listProjects keeps other owners when one owner listing fails', async () => {
+test('listProjects preserves partial GraphQL errors as per-owner entries', async () => {
   const runner = createRunner(async (args) => {
-    if (args[0] === 'project' && args[1] === 'list' && args.includes('XuyuTech')) throw ghError('GraphQL: Resource not accessible by integration')
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const payload = JSON.parse(JSON.stringify(fixture.graphqlProjects))
+      payload.errors = [{
+        message: 'Could not resolve to an Organization with the login of XuyuTech.',
+        path: ['viewer', 'organizations', 'nodes', 0, 'projectsV2'],
+      }]
+      return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
+    }
     return fixtureRun(args)
   })
-  const gh = createGh({ run: runner })
-  const result = await gh.listProjects()
+  const result = await createGh({ run: runner }).listProjects()
   assert.equal(result.projects.length, 4)
-  assert.equal(result.owners.length, 3)
-  assert.equal(result.errors.length, 1)
-  assert.equal(result.errors[0].owner, 'XuyuTech')
+  assert.deepEqual(result.errors.map(error => error.owner), ['XuyuTech'])
   assert.equal(result.errors[0].code, 'gh-failed')
-  assert.equal(typeof result.errors[0].message, 'string')
+  assert.match(result.errors[0].message, /Could not resolve/u)
 })
 
-test('projectItems maps items and derives the Project summary', async () => {
+test('listProjects fails gh-failed when the GraphQL payload has no viewer', async () => {
+  const runner = createRunner(async () => ({
+    stdout: `${JSON.stringify({ errors: [{ message: 'Bad credentials' }] })}\n`,
+    stderr: '',
+  }))
+  await assert.rejects(createGh({ run: runner }).listProjects(), { code: 'gh-failed' })
+})
+
+test('projectItems merges GraphQL pages and derives the Project summary', async () => {
   const runner = fixtureRunner()
-  const gh = createGh({ run: runner })
-  const result = await gh.projectItems('ceasarXuu', 9)
+  const result = await createGh({ run: runner }).projectItems('ceasarXuu', 9)
   assert.equal(result.project.owner, 'ceasarXuu')
+  assert.equal(result.project.ownerType, 'user')
   assert.equal(result.project.number, 9)
   assert.equal(result.project.title, 'Astropath-issues')
   assert.equal(result.project.itemCount, 195)
-  assert.equal(result.items.length, 3)
-  assert.equal(result.truncated, true)
-  assert.ok(runner.commands().includes('project item-list 9 --owner ceasarXuu --format json --limit 200'))
-  assert.ok(runner.commands().includes('project view 9 --owner ceasarXuu --format json'))
+  assert.equal(result.project.closed, false)
+  assert.equal(result.items.length, 195)
+  assert.equal(result.truncated, false)
+  assert.equal(result.items[0].state, 'OPEN')
+  assert.equal(result.items[0].status, 'In Progress')
+
+  const itemQueries = runner.calls.filter(args => (
+    args[0] === 'api' && args[1] === 'graphql' && args.some(arg => typeof arg === 'string' && /projectV2\(number/u.test(arg))
+  ))
+  assert.equal(itemQueries.length, 2)
+  assert.ok(itemQueries[0].join(' ').includes('-F limit=100'))
+  assert.ok(!itemQueries[0].join(' ').includes('-F cursor='))
+  const page1Cursor = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2.items.pageInfo.endCursor
+  assert.ok(itemQueries[1].join(' ').includes(`-F cursor=${page1Cursor}`))
 })
 
-test('projectItems maps a missing Project to project-not-found', async () => {
-  const runner = createRunner(async (args) => {
-    if (args[0] === 'project') throw ghProjectNotFound(Number(args[2]))
+test('projectItems uses the GraphQL owner __typename or the Project URL for ownerType', async () => {
+  const asOrganization = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const payload = JSON.parse(JSON.stringify(fixture.graphqlItemsPage1))
+      const owner = payload.data.repositoryOwner
+      owner.__typename = 'Organization'
+      owner.projectV2.url = 'https://github.com/orgs/XuyuTech/projects/9'
+      return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
+    }
     return fixtureRun(args)
   })
-  const gh = createGh({ run: runner })
+  const organization = await createGh({ run: asOrganization }).projectItems('XuyuTech', 9)
+  assert.equal(organization.project.ownerType, 'organization')
+
+  // No __typename in the payload: the /orgs/ URL still tells the truth.
+  const urlOnly = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const payload = JSON.parse(JSON.stringify(fixture.graphqlItemsPage1))
+      payload.data.repositoryOwner.projectV2.url = 'https://github.com/orgs/XuyuTech/projects/9'
+      return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
+    }
+    return fixtureRun(args)
+  })
+  const fallback = await createGh({ run: urlOnly }).projectItems('XuyuTech', 9)
+  assert.equal(fallback.project.ownerType, 'organization')
+})
+
+test('projectItems caps at maxProjectItems and flags truncated', async () => {
+  const capped = createGh({ run: fixtureRunner(), maxProjectItems: 50 })
+  const result = await capped.projectItems('ceasarXuu', 9)
+  assert.equal(result.items.length, 50)
+  assert.equal(result.truncated, true)
+  assert.equal(result.project.itemCount, 195)
+})
+
+test('projectItems maps a GraphQL-null Project to project-not-found', async () => {
+  // Real `gh api graphql` answers 200 with `projectV2: null` for a missing or
+  // unauthorized Project; the adapter classifies that as a 404-domain error.
+  const gh = createGh({ run: fixtureRunner() })
   await assert.rejects(gh.projectItems('ceasarXuu', 99999), { code: 'project-not-found' })
 })
 

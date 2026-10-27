@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -57,27 +57,45 @@ function useApp(t, options) {
 /* Registration + idle behaviours                                      */
 /* ------------------------------------------------------------------ */
 
-test('module declares the mandatory webServer inject so Cordis waits before apply', () => {
-  // Activation ordering: `--patch`/bundle rows can run before the carrier exists.
-  assert.deepEqual(inject, ['webServer'])
+test('module declares the mandatory webServer + tools injects so Cordis waits before apply', () => {
+  // Activation ordering: `--patch`/bundle rows can run before the carriers exist.
+  assert.deepEqual(inject, ['webServer', 'tools'])
   assert.equal(pluginName, 'github-projects')
 })
 
-test('apply registers exactly one prefix route at /plugin/github-projects', (t) => {
+test('apply registers exactly one prefix route and the three agent tools', (t) => {
   const app = useApp(t)
   assert.equal(app.routes.length, 1)
   assert.equal(app.routes[0].kind, 'prefix')
   assert.equal(app.routes[0].path, ROUTE_PATH)
   assert.equal(ROUTE_PATH, '/plugin/github-projects')
   assert.equal(typeof app.routes[0].handler, 'function')
+
+  assert.deepEqual(app.tools.map(definition => definition.name), [
+    'github_issue_bind',
+    'github_issue_switch',
+    'github_issue_unbind',
+  ])
+  for (const definition of app.tools) {
+    assert.equal(typeof definition.description, 'string')
+    assert.equal(definition.parameters.type, 'object')
+    assert.equal(typeof definition.output.schema, 'object')
+    assert.equal(typeof definition.output.render, 'function')
+    assert.equal(typeof definition.execute, 'function')
+  }
 })
 
-test('apply is inert instead of throwing when the composition has no webServer', () => {
+test('apply is inert instead of throwing when the composition has no webServer/tools', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ghp-inert-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const ctx = {
     get: () => undefined,
-    effect: () => { throw new Error('must not register a route without webServer') },
+    effect: () => { throw new Error('must not register anything without its services') },
   }
-  assert.doesNotThrow(() => apply(ctx, { statePath: join(tmpdir(), 'ghp-inert-state.json') }))
+  assert.doesNotThrow(() => apply(ctx, {
+    statePath: join(dir, 'state.json'),
+    cacheFile: join(dir, 'cache.json'),
+  }))
 })
 
 test('the route handler also accepts a pre-stripped request path', async (t) => {
@@ -104,20 +122,31 @@ test('GET /health answers the GhHealth contract', async (t) => {
   })
 })
 
-test('GET /config reads bindings only, echoing unknown ids as null bindings', async (t) => {
+test('GET /config reads bindings only and never waits for gh', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
-  assert.deepEqual(Object.keys(body).sort(), ['gh', 'session', 'workspace'])
-  assert.deepEqual(body.workspace, { workspaceId: 'ws-123', project: null })
-  assert.deepEqual(body.session, { sessionId: 'session-abc', issue: null, workspaceId: 'ws-123' })
-  assert.equal(body.gh.available, true)
+
+  // Cold start: the placeholder, immediately (never a blocking health probe).
+  const started = Date.now()
+  const cold = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
+  const elapsed = Date.now() - started
+  assert.deepEqual(Object.keys(cold).sort(), ['gh', 'session', 'workspace'])
+  assert.deepEqual(cold.workspace, { workspaceId: 'ws-123', project: null })
+  assert.deepEqual(cold.session, { sessionId: 'session-abc', issue: null, workspaceId: 'ws-123' })
+  assert.deepEqual(cold.gh, { available: false, version: null, account: null, error: 'pending' })
+  assert.ok(elapsed < 50, `cold /config took ${String(elapsed)}ms`)
+
+  // The background probe populates the snapshot soon after.
+  await sleep(25)
+  const warm = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
+  assert.equal(warm.gh.available, true)
+  assert.equal(warm.gh.account, 'ceasarXuu')
 
   const empty = expectJson(await app.get('/config'))
   assert.deepEqual(empty.workspace, { workspaceId: '', project: null })
   assert.deepEqual(empty.session, { sessionId: '', issue: null, workspaceId: null })
 
-  // No GitHub read was attempted for bindings (only health probes).
-  assert.deepEqual(app.commands().filter(command => command.startsWith('project')), [])
+  // Bindings reads never trigger a Project GraphQL read.
+  assert.deepEqual(app.commands().filter(command => command.includes('projectsV2')), [])
 })
 
 test('GET /health awaits a fresh probe on every call', async (t) => {
@@ -133,7 +162,7 @@ test('GET /config answers the last health snapshot instead of blocking on a slow
     if (slow) await sleep(300)
     return fixtureRun(args)
   })
-  const app = useApp(t, { runner })
+  const app = useApp(t)
 
   // First probe populates the baseline snapshot.
   const baseline = expectJson(await app.get('/health'))
@@ -154,24 +183,23 @@ test('GET /config answers the last health snapshot instead of blocking on a slow
   assert.equal(after.gh.available, true)
 })
 
-test('GET /config answers a pending placeholder when the very first probe is slow', async (t) => {
+test('GET /config answers instantly while the very first gh probe hangs', async (t) => {
+  let release
+  const hanging = new Promise((resolve) => { release = resolve })
   const runner = createRunner(async (args) => {
-    if (args[0] === '--version' || (args[0] === 'api' && args[1] === 'user')) await sleep(250)
+    if (args[0] === '--version' || (args[0] === 'api' && args[1] === 'user')) await hanging
     return fixtureRun(args)
   })
-  const app = useApp(t, { runner, config: { healthFirstReadTimeoutMs: 40 } })
+  const app = useApp(t, { runner })
 
   const started = Date.now()
   const body = expectJson(await app.get('/config?workspaceId=w'))
   const elapsed = Date.now() - started
   assert.deepEqual(body.gh, { available: false, version: null, account: null, error: 'pending' })
-  assert.ok(elapsed < 200, `config blocked ${String(elapsed)}ms on the first slow probe`)
-
-  // The probe keeps running in the background; the next read sees the real snapshot.
-  await sleep(400)
-  const later = expectJson(await app.get('/config?workspaceId=w'))
-  assert.equal(later.gh.available, true)
-  assert.equal(later.gh.account, 'ceasarXuu')
+  assert.ok(elapsed < 50, `cold /config blocked ${String(elapsed)}ms on a hanging gh probe`)
+  release()
+  await sleep(25)
+  assert.equal(expectJson(await app.get('/config')).gh.available, true)
 })
 
 /* ------------------------------------------------------------------ */
@@ -238,17 +266,28 @@ test('bindings survive a plugin reload (durable state file)', async (t) => {
 /* GET /projects                                                       */
 /* ------------------------------------------------------------------ */
 
-test('GET /projects returns owners, normalized Projects, fetchedAt, errors', async (t) => {
+/** Count the `gh api graphql` invocations one fake app has made. */
+function graphqlCalls(app) {
+  return app.calls.filter(args => args[0] === 'api' && args[1] === 'graphql').length
+}
+
+/** Wait a little for an async background cache revalidation to settle. */
+const settle = () => sleep(120)
+
+test('GET /projects returns owners, normalized Projects, fetchedAt, stale, errors', async (t) => {
   const app = useApp(t)
   const body = expectJson(await app.get('/projects'))
-  assert.deepEqual(Object.keys(body).sort(), ['errors', 'fetchedAt', 'owners', 'projects'])
+  assert.deepEqual(Object.keys(body).sort(), ['errors', 'fetchedAt', 'owners', 'projects', 'stale'])
   assert.deepEqual(body.owners, [
     { login: 'ceasarXuu', type: 'user' },
     { login: 'XuyuTech', type: 'organization' },
     { login: 'BeanDoor', type: 'organization' },
   ])
+  // The 4 closed Projects in the GraphQL fixture are filtered out.
   assert.equal(body.projects.length, 4)
+  assert.deepEqual(body.projects.map(project => project.number), [9, 8, 6, 5])
   assert.deepEqual(body.errors, [])
+  assert.equal(body.stale, false)
   assert.match(body.fetchedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
   assert.deepEqual(Object.keys(body.projects[0]).sort(), [
     'closed', 'description', 'itemCount', 'number', 'owner', 'ownerType', 'title', 'url',
@@ -256,42 +295,203 @@ test('GET /projects returns owners, normalized Projects, fetchedAt, errors', asy
   assert.equal(body.projects[0].number, 9)
   assert.equal(body.projects[0].ownerType, 'user')
   assert.equal(body.projects[0].itemCount, 195)
+  assert.equal(body.projects[0].closed, false)
+  assert.equal(app.commands().filter(command => command.startsWith('project list')).length, 0)
 })
 
-test('GET /projects caches for cacheTtlMs and refresh=1 bypasses the cache', async (t) => {
+test('GET /projects uses ONE GraphQL call and serves the fresh cache without gh', async (t) => {
   const app = useApp(t, { config: { cacheTtlMs: 60_000 } })
-  const listCalls = () => app.commands().filter(command => command.startsWith('project list')).length
 
   expectJson(await app.get('/projects'))
-  assert.equal(listCalls(), 3)
+  assert.equal(graphqlCalls(app), 1)
   const cached = expectJson(await app.get('/projects'))
-  assert.equal(listCalls(), 3)
+  assert.equal(graphqlCalls(app), 1)
+  assert.equal(cached.stale, false)
   assert.equal(cached.fetchedAt, expectJson(await app.get('/projects')).fetchedAt)
 
-  expectJson(await app.get('/projects?refresh=1'))
-  assert.equal(listCalls(), 6)
+  const refreshed = expectJson(await app.get('/projects?refresh=1'))
+  assert.equal(graphqlCalls(app), 2)
+  assert.equal(refreshed.stale, false)
+})
+
+/* ------------------------------------------------------------------ */
+/* SWR cache (fresh / stale / refresh / cold)                          */
+/* ------------------------------------------------------------------ */
+
+test('SWR: a stale entry returns immediately as stale while one background refresh runs', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql' && args.some(arg => typeof arg === 'string' && /projectsV2/u.test(arg))) {
+      await sleep(120)
+    }
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner, config: { cacheTtlMs: 0, staleTtlMs: 600_000 } })
+
+  // Cold: awaits the read and is not stale.
+  const coldStarted = Date.now()
+  const cold = expectJson(await app.get('/projects'))
+  assert.ok(Date.now() - coldStarted >= 100, 'cold read must await the loader')
+  assert.equal(cold.stale, false)
+  assert.equal(graphqlCalls(app), 1)
+
+  // Stale: returns the cached payload instantly, one background refresh.
+  const staleStarted = Date.now()
+  const stale = expectJson(await app.get('/projects'))
+  const staleElapsed = Date.now() - staleStarted
+  assert.equal(stale.stale, true)
+  assert.ok(staleElapsed < 60, `stale read blocked ${String(staleElapsed)}ms`)
+  assert.equal(stale.fetchedAt, cold.fetchedAt)
+  assert.equal(graphqlCalls(app), 2)
+
+  // Single-flight: concurrent stale reads share one background revalidation.
+  await settle()
+  const callsBefore = graphqlCalls(app)
+  const [left, right] = await Promise.all([app.get('/projects'), app.get('/projects')])
+  assert.equal(expectJson(left).stale, true)
+  assert.equal(expectJson(right).stale, true)
+  await settle()
+  assert.equal(graphqlCalls(app) - callsBefore, 1, 'one background revalidation for concurrent stale reads')
+})
+
+test('SWR: refresh=1 awaits a fresh read and reports stale:false', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql' && args.some(arg => typeof arg === 'string' && /projectsV2/u.test(arg))) {
+      await sleep(80)
+    }
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner, config: { cacheTtlMs: 0, staleTtlMs: 600_000 } })
+
+  expectJson(await app.get('/projects'))
+  const started = Date.now()
+  const refreshed = expectJson(await app.get('/projects?refresh=1'))
+  assert.ok(Date.now() - started >= 60, 'refresh=1 must await the fresh read')
+  assert.equal(refreshed.stale, false)
+
+  // Concurrent refresh=1 calls share one in-flight gh read.
+  const callsBefore = graphqlCalls(app)
+  const [left, right] = await Promise.all([
+    app.get('/projects?refresh=1'),
+    app.get('/projects?refresh=1'),
+  ])
+  assert.equal(expectJson(left).stale, false)
+  assert.equal(expectJson(right).stale, false)
+  assert.equal(graphqlCalls(app) - callsBefore, 1)
+})
+
+test('SWR: cold reads await, single-flight concurrent cold reads into one gh call', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql' && args.some(arg => typeof arg === 'string' && /projectsV2/u.test(arg))) {
+      await sleep(60)
+    }
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner })
+  const [first, second] = await Promise.all([app.get('/projects'), app.get('/projects')])
+  assert.equal(expectJson(first).stale, false)
+  assert.equal(expectJson(second).stale, false)
+  assert.equal(graphqlCalls(app), 1)
+})
+
+test('SWR: disk cache persists successful reads and warm-starts the next plugin instance', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ghp-disk-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const cacheFile = join(dir, 'cache.json')
+
+  const first = startApp({ cacheFile, config: { cacheTtlMs: 60_000 } })
+  expectJson(await first.get('/projects'))
+  await settle()
+  first.dispose()
+
+  const persisted = JSON.parse(readFileSync(cacheFile, 'utf8'))
+  assert.equal(persisted.version, 1)
+  assert.ok(Object.hasOwn(persisted.entries, 'projects'))
+  assert.deepEqual(persisted.entries.projects.value.projects.map(project => project.number), [9, 8, 6, 5])
+
+  const second = startApp({ cacheFile, config: { cacheTtlMs: 60_000 } })
+  t.after(() => second.dispose())
+  const warmed = expectJson(await second.get('/projects'))
+  assert.equal(warmed.stale, false)
+  assert.equal(warmed.projects.length, 4)
+  assert.equal(graphqlCalls(second), 0, 'a fresh disk entry must not spawn gh')
+})
+
+test('SWR: diskCache:false writes no cache file', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ghp-nodisk-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const cacheFile = join(dir, 'cache.json')
+  const app = useApp(t, { cacheFile, config: { diskCache: false } })
+  expectJson(await app.get('/projects'))
+  await settle()
+  assert.equal(existsSync(cacheFile), false)
 })
 
 /* ------------------------------------------------------------------ */
 /* GET /items                                                          */
 /* ------------------------------------------------------------------ */
 
-test('GET /items returns the Project summary plus normalized items', async (t) => {
+test('GET /items returns the Project summary plus 195 normalized GraphQL items', async (t) => {
   const app = useApp(t)
   const body = expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
-  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'items', 'project', 'truncated'])
+  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'items', 'project', 'stale', 'truncated'])
+  assert.equal(body.project.owner, 'ceasarXuu')
+  assert.equal(body.project.ownerType, 'user')
   assert.equal(body.project.number, 9)
   assert.equal(body.project.title, 'Astropath-issues')
   assert.equal(body.project.itemCount, 195)
-  assert.equal(body.items.length, 3)
+  assert.equal(body.project.closed, false)
+  assert.equal(body.items.length, 195)
+  assert.equal(body.truncated, false)
+  assert.equal(body.stale, false)
   assert.equal(body.items[0].type, 'issue')
   assert.equal(body.items[0].number, 240)
   assert.equal(body.items[0].repo, 'ceasarXuu/Astropath')
   assert.equal(body.items[0].status, 'In Progress')
+  assert.equal(body.items[0].state, 'OPEN')
   assert.deepEqual(body.items[0].labels, ['enhancement', 'todo'])
   assert.equal(body.items[0].milestone, 'v1.2.0')
-  assert.equal(body.items[0].state, null)
+  const statusCounts = body.items.reduce((counts, item) => {
+    counts[item.status ?? 'null'] = (counts[item.status ?? 'null'] ?? 0) + 1
+    return counts
+  }, {})
+  assert.deepEqual(statusCounts, { 'In Progress': 1, 'In Review': 1, TODO: 27, Done: 166 })
+})
+
+test('GET /items paginates at 100/page using the page cursor', async (t) => {
+  const app = useApp(t)
+  expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
+  const itemQueries = app.calls.filter(args => (
+    args[0] === 'api'
+    && args[1] === 'graphql'
+    && args.some(arg => typeof arg === 'string' && /projectV2\(number/u.test(arg))
+  ))
+  assert.equal(itemQueries.length, 2)
+  const flat = itemQueries.map(args => args.join(' '))
+  assert.ok(flat[0].includes('-F limit=100'))
+  assert.ok(!flat[0].includes('-F cursor='))
+  assert.ok(flat[1].includes('-F limit=100'))
+  assert.ok(flat[1].includes('-F cursor='))
+})
+
+test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
+  const capped = useApp(t, { config: { maxProjectItems: 50 } })
+  const body = expectJson(await capped.get('/items?owner=ceasarXuu&number=9'))
+  assert.equal(body.items.length, 50)
   assert.equal(body.truncated, true)
+  const queries = capped.commands().filter(command => command.includes('projectV2(number'))
+  assert.equal(queries.length, 1)
+  assert.ok(queries[0].includes('-F limit=50'))
+
+  const partial = useApp(t, { config: { maxProjectItems: 150 } })
+  const partialBody = expectJson(await partial.get('/items?owner=ceasarXuu&number=9'))
+  assert.equal(partialBody.items.length, 150)
+  assert.equal(partialBody.truncated, true)
+  const partialQueries = partial.calls.filter(args => (
+    args[0] === 'api' && args[1] === 'graphql' && args.some(arg => typeof arg === 'string' && /projectV2\(number/u.test(arg))
+  ))
+  assert.equal(partialQueries.length, 2)
+  assert.ok(partialQueries[0].join(' ').includes('-F limit=100'))
+  assert.ok(partialQueries[1].join(' ').includes('-F limit=50'))
 })
 
 test('GET /items maps a missing Project to 404 and bad params to 400', async (t) => {
@@ -302,12 +502,6 @@ test('GET /items maps a missing Project to 404 and bad params to 400', async (t)
   expectErrorJson(await app.get('/items?owner=ceasarXuu'), 400, 'bad-request')
 })
 
-test('GET /items uses the configured maxProjectItems as the gh limit', async (t) => {
-  const app = useApp(t, { config: { maxProjectItems: 50 } })
-  expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
-  assert.ok(app.commands().includes('project item-list 9 --owner ceasarXuu --format json --limit 50'))
-})
-
 /* ------------------------------------------------------------------ */
 /* GET /issue                                                          */
 /* ------------------------------------------------------------------ */
@@ -315,7 +509,8 @@ test('GET /items uses the configured maxProjectItems as the gh limit', async (t)
 test('GET /issue returns a contract IssueDetail with comments', async (t) => {
   const app = useApp(t)
   const body = expectJson(await app.get('/issue?repo=ceasarXuu/Astropath&number=240'))
-  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'issue'])
+  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'issue', 'stale'])
+  assert.equal(body.stale, false)
   const issue = body.issue
   assert.equal(issue.repo, 'ceasarXuu/Astropath')
   assert.equal(issue.number, 240)
@@ -446,6 +641,133 @@ test('POST /unbind-issue clears the session binding', async (t) => {
   assert.equal(config.session.issue, null)
   assert.equal(config.session.workspaceId, 'w1')
   expectErrorJson(await app.post('/unbind-issue', {}), 400, 'bad-request')
+})
+
+/* ------------------------------------------------------------------ */
+/* Agent tools (contract §3.4)                                         */
+/* ------------------------------------------------------------------ */
+
+const TOOL_EXEC = { agent: { session: { id: 'sess-tool-1' } }, signal: new AbortController().signal }
+const OTHER_TOOL_EXEC = { agent: { session: { id: 'sess-tool-2' } }, signal: new AbortController().signal }
+
+function toolOf(app, name) {
+  const definition = app.tools.find(tool => tool.name === name)
+  assert.ok(definition, `tool ${name} not registered`)
+  return definition
+}
+
+const EXPECTED_TOOL_ISSUE = {
+  repo: 'ceasarXuu/Astropath',
+  number: 240,
+  title: fixture.issue.title,
+  url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+  state: 'open',
+}
+
+test('tool github_issue_bind binds the current session and renders text', async (t) => {
+  const app = useApp(t)
+  const tool = toolOf(app, 'github_issue_bind')
+  const value = await tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  assert.deepEqual(value, { bound: true, issue: EXPECTED_TOOL_ISSUE, previous: null })
+
+  const config = expectJson(await app.get('/config?sessionId=sess-tool-1'))
+  assert.deepEqual(config.session.issue, EXPECTED_TOOL_ISSUE)
+  assert.equal(app.readState().sessions['sess-tool-1'].issue.number, 240)
+
+  const rendered = tool.output.render({ ref: 'ceasarXuu/Astropath#240' }, value)
+  assert.deepEqual(rendered, [{ type: 'text', text: `已绑定 #240 ${fixture.issue.title}（ceasarXuu/Astropath）` }])
+})
+
+test('tool github_issue_bind refuses when the session is already bound', async (t) => {
+  const app = useApp(t)
+  const tool = toolOf(app, 'github_issue_bind')
+  await tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  await assert.rejects(tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'bad-request')
+    assert.match(error.message, /already bound: ceasarXuu\/Astropath#240/u)
+    return true
+  })
+})
+
+test('tool github_issue_switch replaces the binding and reports the previous issue', async (t) => {
+  const app = useApp(t)
+  const bind = toolOf(app, 'github_issue_bind')
+  const switchTool = toolOf(app, 'github_issue_switch')
+
+  await assert.rejects(switchTool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'bad-request')
+    assert.match(error.message, /not bound/u)
+    return true
+  })
+
+  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  const value = await switchTool.execute({ ref: 'https://github.com/ceasarXuu/Astropath/issues/240' }, TOOL_EXEC)
+  assert.deepEqual(value, { switched: true, issue: EXPECTED_TOOL_ISSUE, previous: EXPECTED_TOOL_ISSUE })
+  const rendered = switchTool.output.render({}, value)
+  assert.match(rendered[0].text, /已切换到 #240/u)
+})
+
+test('tool github_issue_unbind clears the binding and is idempotent', async (t) => {
+  const app = useApp(t)
+  const bind = toolOf(app, 'github_issue_bind')
+  const unbind = toolOf(app, 'github_issue_unbind')
+
+  // Nothing bound: still a successful no-op.
+  assert.deepEqual(await unbind.execute({}, TOOL_EXEC), { unbound: true, previous: null })
+  assert.deepEqual(unbind.output.render({}, { unbound: true, previous: null }), [
+    { type: 'text', text: '当前会话未绑定 Issue' },
+  ])
+
+  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  const value = await unbind.execute({}, TOOL_EXEC)
+  assert.deepEqual(value, { unbound: true, previous: EXPECTED_TOOL_ISSUE })
+  assert.match(unbind.output.render({}, value)[0].text, /已解绑 #240/u)
+  assert.equal(expectJson(await app.get('/config?sessionId=sess-tool-1')).session.issue, null)
+  assert.deepEqual(await unbind.execute({}, TOOL_EXEC), { unbound: true, previous: null })
+})
+
+test('agent tools validate the calling session and the ref argument', async (t) => {
+  const app = useApp(t)
+  const bind = toolOf(app, 'github_issue_bind')
+  for (const exec of [undefined, {}, { agent: {} }, { agent: { session: {} } }, { agent: { session: { id: '  ' } } }]) {
+    await assert.rejects(bind.execute({ ref: 'ceasarXuu/Astropath#240' }, exec), (error) => {
+      assert.match(error.message, /no current session/u)
+      return true
+    })
+  }
+  await assert.rejects(bind.execute({}, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'bad-request')
+    assert.match(error.message, /ref must be/u)
+    return true
+  })
+  for (const args of [null, 'nope', 42, { ref: 'not a reference' }, { ref: 'https://github.com/a/b/pull/1' }]) {
+    await assert.rejects(bind.execute(args, TOOL_EXEC), (error) => {
+      assert.equal(error.code, 'bad-request')
+      assert.match(error.message, /bad-request:/u)
+      return true
+    })
+  }
+})
+
+test('agent tools surface gh failures with the contract code and never touch other sessions', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'repos/ceasarXuu/Astropath/issues/123') throw ghNotFound()
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner })
+  const bind = toolOf(app, 'github_issue_bind')
+
+  await assert.rejects(bind.execute({ ref: 'ceasarXuu/Astropath#123' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'issue-not-found')
+    assert.match(error.message, /^issue-not-found: /u)
+    return true
+  })
+
+  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  // Session 2 is untouched, and its own tools address only its own id.
+  assert.equal(expectJson(await app.get('/config?sessionId=sess-tool-2')).session.issue, null)
+  const switchTool = toolOf(app, 'github_issue_switch')
+  await assert.rejects(switchTool.execute({ ref: 'ceasarXuu/Astropath#240' }, OTHER_TOOL_EXEC), /not bound/u)
 })
 
 /* ------------------------------------------------------------------ */

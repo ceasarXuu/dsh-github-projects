@@ -1,11 +1,13 @@
 # dsh-github-projects
 
-**v0.3.0** · the GitHub Project and Issue bound to your DSH session, one tab away.
+**v0.4.0** · the GitHub Project and Issue bound to your DSH session, one tab away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
-filter — and `issue` shows the Issue bound to the **session**. Everything is read-only against
-GitHub — it is a viewing surface, not a writer.
+filter — and `issue` shows the Issue bound to the **session**, with a one-line **issue subtitle**
+under the session title. Clicking a card opens GitHub in DSH's built-in right-sidebar browser; a
+separate **Bind** action binds the Issue to the session, and the model can do the same through three
+agent tools. Everything is read-only against GitHub — it is a viewing surface, not a writer.
 
 ```
 conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
@@ -22,17 +24,41 @@ Binding is two levels deep, matching how GitHub context actually lives:
 | Level | Bound to | Chosen from | Persisted |
 |---|---|---|---|
 | Project | a **workspace** (shared by all its sessions) | `projects` tab → project picker | `state.json` in your DSH profile |
-| Issue | one **session** | `projects` tab → an Issue row → **Bind**, or paste a link in the `issue` tab | `state.json` in your DSH profile |
+| Issue | one **session** | an Issue card/row **Bind** button, an **agent tool**, or paste a link in the `issue` tab | `state.json` in your DSH profile |
 
 The `projects` tab reads the Project's items once (`GET /items`) and derives everything on the
 client: the swimlane columns from the Projects v2 `Status` field, the milestone filter from the
-`milestone` field, the text/status filters and their counts. Clicking an Issue card (or a list row's
-**Bind**) binds that Issue to the current session and switches to the `issue` tab, which renders the
-title, state, body, labels and comments. Neither tab replaces the shipped views: remove the plugin
-and the header returns to normal.
+`milestone` field, the text/status filters and their counts. Clicking an Issue/PR **card body or list
+row** opens its GitHub page in DSH's built-in right-sidebar browser (it does **not** bind); the
+explicit **Bind** action on the card/row binds that Issue to the current session, switches to the
+`issue` tab and adds the issue subtitle under the session title. `issue` renders the title, state,
+body, labels and comments. Neither tab replaces the shipped views: remove the plugin and the header
+returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
+
+## What's new in 0.4.0 — issue subtitle, agent tools, browser-open and faster reads
+
+- **Issue subtitle under the session title.** A session with a bound Issue shows `#N` (tinted chip)
+  plus the issue title on one line (ellipsis; full `repo#N title` in the tooltip). Clicking it opens
+  GitHub in DSH's built-in right-sidebar browser. It updates within ~4 s of an agent-tool change and
+  immediately after the plugin's own bind/unbind.
+- **Click = open in the built-in browser; Bind is explicit.** Clicking an Issue/PR card or list row
+  now opens the GitHub page in DSH's right-sidebar browser (same browser tab as links) instead of
+  binding. Use the explicit **Bind** button on the card/row to bind to the current session and jump
+  to the `issue` tab. PR/Draft rows only open in the browser. (In the Web build the embedded iframe
+  may be blocked by github.com's `X-Frame-Options`; the Desktop build's webview renders it.)
+- **Agent tools.** The model can manage the current session's Issue binding with
+  `github_issue_bind` / `github_issue_switch` / `github_issue_unbind` (args: an Issue URL or
+  `owner/repo#123`). They only touch the **current session**, never write to GitHub, and the UI
+  reflects the change within ≤4 s. Examples: “bind https://github.com/acme/web/issues/228 to this
+  session”, “switch this session to acme/web#240”, “unbind this session's Issue”.
+- **Faster reads.** `/projects` is now a single GraphQL call (~1.4 s vs ~3.1 s), `/items` uses
+  paginated GraphQL (~3.4 s cold vs ~4.6 s, no separate project-view call), the host serves stale
+  data instantly while revalidating in the background (SWR, `staleTtlMs` = 10 min) and persists a
+  disk cache across restarts, `/config` never waits on `gh`, and warm projects opens render cached
+  data with **no skeleton** (<300 ms host response; guarded by the e2e `projects-warm` stage).
 
 ## What's new in 0.3.0 — status color system + smarter lanes
 
@@ -94,13 +120,16 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | ![issue detail](artifacts/screenshots/08-issue-detail.png) | ![issue comments](artifacts/screenshots/09-issue-comments.png) |
 | Bound Issue: green Open badge, sticky header, body, labels | Comments with author, relative time and links |
 | ![wide layout](artifacts/screenshots/11-projects-wide.png) | |
-| 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed); the four real lanes share the width equally at 454.3px each | |
+| 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed) | |
+| ![built-in browser](artifacts/screenshots/12-browser-open.png) | ![issue subtitle](artifacts/screenshots/13-issue-subtitle.png) |
+| Clicking an Issue card body opens GitHub in DSH's built-in right-sidebar browser — **no binding** is created. Web build: the iframe is refused by github.com's `X-Frame-Options: DENY` (blank pane, URL still shown); Desktop's Electron webview renders it. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens the built-in browser) |
 
-Screenshots 01–09 are captured by the isolated e2e harness in **real-host mode** against live `gh`
-(real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`), refreshed for the v0.3.0
-color system. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width layout
-with the same status colors. `10-desktop-tabs.png` is different: it is a manual capture of the **real
-Desktop app**, showing the tabs on a live session:
+Screenshots 01–09, 12 and 13 are captured by the isolated e2e harness in **real-host mode** against
+live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`), refreshed for the
+v0.4.0 features. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
+layout. `10-desktop-tabs.png` is different: it is a manual 1313×790 crop of the **real Desktop app**
+after the v0.4.0 install (sha256 `1f375330…6e38`), showing the session title, the `#240 …` issue
+subtitle row (captured while the session was bound through an agent tool) and the four tabs:
 
 ![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -163,13 +192,18 @@ the CLI path above is the one exercised on this machine.
    **List** in the **Swimlane / List** toggle to switch to the grouped list view.
 4. Narrow the view with the **milestone** dropdown (`All` / `Backlog` / a milestone) and/or the text
    filter — counts update in both board and list.
-5. Click an Issue card (or **Bind** on a list row): the Issue is bound to the current session and the
-   view switches to the `issue` tab. A PR/Draft card opens GitHub instead.
+5. Click a card body/list row to open the Issue or PR in DSH's **built-in right-sidebar browser**
+   (this does not change the binding). Click the card/row **Bind** button to bind the Issue to the
+   current session — the view switches to the `issue` tab and the issue subtitle appears under the
+   session title.
 6. Alternatively, in an unbound `issue` tab paste a GitHub Issue URL or `owner/repo#123` and click
-   **Bind**.
+   **Bind**. Or just ask the model: “bind https://github.com/acme/web/issues/228 to this session”,
+   “switch this session to acme/web#240”, “unbind this session's Issue” (agent tools).
+7. The issue subtitle can be clicked any time to reopen the Issue in the built-in browser.
 
-Use **Refresh** to bypass the 60-second cache, **Change** to switch the workspace's Project, and
-**Unbind** (with confirmation) to clear a binding. Unbinding a Project does not unbind session Issues.
+Use **Refresh** to force a fresh read (cached data may be served stale for up to `staleTtlMs` while
+it revalidates), **Change** to switch the workspace's Project, and **Unbind** (with confirmation) to
+clear a binding. Unbinding a Project does not unbind session Issues.
 Button labels above are the English UI copy; the Chinese UI localizes the same actions as
 绑定 / 刷新 / 更换 / 解绑, and the view toggle as 泳道 / 列表.
 
@@ -183,11 +217,14 @@ so restate every key you need.
 |---|---|---|
 | `ghCommand` | `gh` | `gh` executable. An absolute path is recommended, because a GUI app often has a shorter `PATH` than your terminal |
 | `requestTimeoutMs` | `20000` | Timeout of one `gh` invocation |
-| `cacheTtlMs` | `60000` | In-memory cache TTL for GitHub reads; `refresh=1` bypasses it |
+| `cacheTtlMs` | `60000` | Fresh window of the in-memory cache; `refresh=1` waits for a fresh read |
+| `staleTtlMs` | `600000` | Stale-serve window (10 min): expired entries are served immediately with `stale:true` while one background refresh revalidates |
+| `diskCache` | `true` | Persist successful read results to `cacheFile` so a restart can render the last data before GitHub answers |
+| `cacheFile` | `null` | Disk cache file; `null` resolves to `$DSH_HOME/plugin-data/github-projects/cache.json` |
 | `maxProjectItems` | `200` | Upper bound of project items returned by one read |
 | `maxComments` | `30` | Upper bound of Issue comments returned by one read |
 | `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health snapshot shared by `/config` and `/health` |
-| `healthFirstReadTimeoutMs` | `3000` | Max wait for the first `/config` health probe; on timeout the response carries `error:"pending"` and the probe continues in the background |
+| `healthFirstReadTimeoutMs` | `3000` | **Legacy, no longer used** (since 0.4.0 `/config` never waits for a probe); accepted only for older configs |
 | `statePath` | `null` | Binding file; `null` resolves to `$DSH_HOME/plugin-data/github-projects/state.json` |
 
 ```yaml
@@ -198,6 +235,9 @@ so restate every key you need.
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
     cacheTtlMs: 120000
+    staleTtlMs: 600000
+    diskCache: true
+    cacheFile: null
     maxProjectItems: 200
     maxComments: 30
     healthCacheTtlMs: 5000
@@ -229,7 +269,7 @@ so restate every key you need.
 | “This is a Pull Request” | The bound reference points at a PR, not an Issue | Bind the Issue instead; PR rows open on GitHub |
 | Desktop returns to the workspace home right after install | Normal HMR profile recompose | Reopen a session; its data is untouched and the tabs are there |
 | Tabs missing after install | Bundle not enabled in the profile, or DSH not recomposed | Check `dsh.profile.bundles`, enable via plugin manager, reload |
-| A “gh CLI unavailable” warning flashes right after opening | First `/config` health probe exceeded `healthFirstReadTimeoutMs`, so the response carried `error:"pending"` | Harmless; it clears once the probe finishes (read `/config` again or reopen the tab) |
+| A “gh CLI unavailable” warning flashes right after opening | Cold start: `/config` never waits for `gh` and returns the `error:"pending"` placeholder while a background probe runs | Harmless; it clears once the probe finishes (read `/config` again or reopen the tab) |
 | Stale list | 60-second cache | Click **Refresh** |
 | “Binding save failed” | `statePath` unwritable (permissions/disk) | Check the path and permissions; or set `statePath` to a writable file |
 
@@ -265,13 +305,13 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | 0.3.0 (status color system + hidden empty `No status` lane; 0.2.x: full-width layout, swimlane board, milestone filter) |
+| Plugin version | 0.4.0 (issue subtitle, agent tools, built-in-browser click, faster SWR reads; 0.3.0: visual system + hidden `No status` lane; 0.2.x: full-width layout, swimlane board, milestone filter) |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v0.3.0 accepted 2026-10-28: 69/69 host tests; e2e PASS in fixture and real modes (frozen client `813dae78…`); hidden `No status` lane verified (real #9 exposes `data-ghp-hidden-lanes="no-status"`, 4 lanes / 195 cards); visual system refreshed in all 11 screenshots; light theme manually checked — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v0.4.0 accepted 2026-10-28: 87/87 host tests; e2e PASS in fixture and real modes (17/17 stages each; frozen client `7fa1ef01…`, index `4e025542…`); subtitle/browser-open/SWR verified; agent tools live-verified in the Desktop app (bind/switch/unbind, header subtitle); warm projects re-open 27–72 ms with no skeleton; 13 screenshots — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 There is no formal `engines.dsh` gate yet: a DSH upgrade that changes the `conversation.view` slot
 or session standard props may require a plugin update.
@@ -298,10 +338,31 @@ or session standard props may require a plugin update.
   not written to the profile binding file.
 - **One Project per workspace**, one Issue per session.
 - **Issue-only detail.** PR and draft rows open on GitHub; PRs cannot be bound to a session.
-- **No item state in the list.** `gh project item-list` does not include each item's open/closed
-  state, so the list doesn't show it; the `issue` tab (REST) does.
-- **Caps:** up to `maxProjectItems` items and `maxComments` comments (oldest first) per read; no pagination or
-  "load more". Long issue bodies are truncated at 100,000 characters.
+- **No item state in the list.** The items payload does not include each item's open/closed state, so
+  the board/list doesn't show it; the `issue` tab (REST) does.
+- **Caps:** up to `maxProjectItems` items (GraphQL pagination stops at the cap) and `maxComments`
+  comments (oldest first) per read; there is no client "load more". Long issue bodies are truncated at
+  100,000 characters.
+- **Issue subtitle is header-injection fragile:** the shipped header has no subtitle slot, so the
+  plugin inserts a guarded portal row under the title. If a DSH upgrade changes that header DOM, the
+  subtitle degrades to hidden (no errors, nothing else breaks); it needs re-checking on DSH upgrades.
+- **Agent tools only target the current session:** there is no parameter to bind/unbind another
+  session. They also need a host with `ctx.tools` and an owning agent; the UI reflects tool changes
+  via a cheap local poll (≤4 s), not a push channel.
+- **Built-in browser fallback:** card/row clicks use DSH's right-sidebar browser tab; on hosts without
+  it the plugin falls back to `window.open` (a normal browser tab, leaving the current view).
+- **Web build iframe limit:** the Web build's built-in browser is an iframe, and github.com sends
+  `X-Frame-Options: DENY`, so the embedded GitHub page can render blank in the Web build (the address
+  bar URL is still correct). The Desktop build's Electron webview renders it normally; this affects
+  only in-app viewing, not the URL itself.
+- **SWR freshness:** for up to `staleTtlMs` (10 min) you may see cached data first while a background
+  refresh runs, and a restarted DSH can render the disk cache before GitHub answers. Click **Refresh**
+  for a fresh read. The disk cache stores GitHub read results (no tokens) under your DSH profile —
+  delete it or set `diskCache: false` if you don't want it.
+- **Latency numbers are reference values** measured on this machine (single GraphQL `/projects`
+  ~1.4 s, paginated `/items` ~3.4 s cold, warm re-open 27–72 ms with no skeleton); they vary with
+  network, project size and `gh` version. The real-data cold board measured 3.70 s, slightly above the
+  3.5 s expectation and logged rather than failed.
 - **No search across Projects** and no cross-Project view.
 - **Bindings are per profile**, not stored with the repository; another machine or profile starts
   unbound.

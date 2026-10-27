@@ -44,7 +44,11 @@ export class CdpClient {
     this.networkFailures = []
     /** @type {{url: string, status: number, method: string|null}[]} */
     this.httpErrors = []
+    /** Plugin API request timings (requestWillBeSent → responseReceived). */
+    this.pluginRequests = []
+    this.pendingPluginRequests = new Map()
     this.closed = false
+    this.pendingPluginRequests = new Map()
 
     ws.addEventListener('message', event => this.#onMessage(event))
     ws.addEventListener('close', () => {
@@ -125,6 +129,13 @@ export class CdpClient {
       }
       return
     }
+    if (method === 'Network.requestWillBeSent') {
+      const url = params.request?.url ?? ''
+      if (url.includes('/plugin/github-projects')) {
+        this.pendingPluginRequests.set(params.requestId, { url, method: params.request.method, startedAt: Date.now() })
+      }
+      return
+    }
     if (method === 'Network.loadingFailed') {
       if (params.type === 'Image' || params.type === 'Font' || params.type === 'Stylesheet') return
       this.networkFailures.push({
@@ -136,6 +147,11 @@ export class CdpClient {
     }
     if (method === 'Network.responseReceived') {
       const response = params.response
+      const tracked = this.pendingPluginRequests.get(params.requestId)
+      if (tracked !== undefined) {
+        this.pendingPluginRequests.delete(params.requestId)
+        this.pluginRequests.push({ url: tracked.url, method: tracked.method, status: response.status, ms: Date.now() - tracked.startedAt })
+      }
       if (response.status >= 400) {
         this.httpErrors.push({ url: response.url, status: response.status, method: params.type ?? null, requestId: params.requestId })
       }

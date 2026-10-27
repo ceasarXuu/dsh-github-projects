@@ -25,21 +25,25 @@ The run prints one JSON line per stage: `{"step": "<name>", "ok": true|false, "d
 | 4 | `tabs` | session header has exactly the shipped `对话`, `轨迹` **and** the plugin's `projects`, `issue` tabs | `01-tabs.png` |
 | 5 | `projects-empty` | `projects` tab renders the unbound empty state (`绑定 GitHub Project`, `选择 Project`) | `02-projects-empty.png` |
 | 6 | `projects-picker` | picker opens, renders project rows + manual binding row, loading finished | `03-projects-picker.png` |
-| 7 | `projects-board` | binds `Astropath-issues` (#9) from the picker, then asserts the v1.1 swimlane board under the **v0.3.0 hidden-lane rule**: `[data-ghp-view-mode="board"]`, `[data-ghp-board]`, rendered lane keys a subsequence of `no-status,todo,in-progress,in-review,done` (+ trailing `other:*` only when non-empty), the four non-No-status lanes exactly once in order, `no-status` present iff not listed in `data-ghp-hidden-lanes` (and hidden when its filtered count is 0), every lane `data-ghp-count` == cards in that lane and board total == sum(counts), ≥1 card. Fixture data has a No-status item → 5 lanes + empty hidden list; real Project #9 has none → `data-ghp-hidden-lanes="no-status"` + exactly 4 lanes | `04-projects-board.png` |
-| 8 | `projects-list` | `[data-ghp-action="view-list"]` switches to list mode: `[data-ghp-view-mode="list"]`, `[data-ghp-list]`, grouped status sections with rows | `05-projects-list.png` |
-| 9 | `projects-milestone` | back to board; `[data-ghp-action="milestone"]` opens the dropdown, options include `all` + `backlog` + a concrete milestone (`v1.2.0` when present), selecting it moves `data-active="true"`, shrinks card counts (and keeps counters consistent); captured with the dropdown open; then reset to `all`, counts restored, dropdown closed | `06-projects-milestone.png` |
-| 9b | `projects-wide` | resizes the viewport to 2200×1300 (CDP `Emulation.setDeviceMetricsOverride`), keeps the bound board open and re-validates the hidden-lane rule for the visible lanes, then asserts the page fills the conversation body: `.ghp-page` width ≥ 70% of the window (old 1000px cap ≈ 45%), page left edge < 25% of the window (no centred fixed column), the visible lanes in order share the width (equal ±12px, lane sum ≥85% of board width), ≥1 card; the PNG is asserted to be exactly 2200×1300; viewport restored to 1280×800 for the issue stages | `11-projects-wide.png` (2200×1300) |
-| 10 | `issue-empty` | `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`, reference input) | `07-issue-empty.png` |
-| 11 | `issue-detail` | binds #240 from the projects board card (`[data-ghp-card][data-issue="ceasarXuu/Astropath#240"]`, whole card is the action; ref-paste fallback kept) and asserts the fully loaded detail (meta line `N 条评论`, markdown body, labels, comments) | `08-issue-detail.png` |
-| 12 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed) | — |
+| 7 | `projects-board` | binds `Astropath-issues` (#9) from the picker, then asserts the v1.1 swimlane board under the **v0.3.0 hidden-lane rule**: `[data-ghp-view-mode="board"]`, `[data-ghp-board]`, rendered lane keys a subsequence of `no-status,todo,in-progress,in-review,done` (+ trailing `other:*` only when non-empty), the four non-No-status lanes exactly once in order, `no-status` present iff not listed in `data-ghp-hidden-lanes` (and hidden when its filtered count is 0), every lane `data-ghp-count` == cards in that lane and board total == sum(counts), ≥1 card. Fixture data has a No-status item → 5 lanes + empty hidden list; real Project #9 has none → `data-ghp-hidden-lanes="no-status"` + exactly 4 lanes. Also logs the **cold board duration** (`coldBoardMs`, picker-select → board ready) and asserts no session subtitle exists before any bind | `04-projects-board.png` |
+| 8 | `projects-browser` | **v0.4.0**: clicks the Issue card body (`[data-ghp-card-action="open"]`) and asserts DSH's built-in right sidebar browser opened — `[data-sidebar-browser-frame]` iframe (or webview) whose `src` contains `github.com/ceasarXuu/Astropath/issues/240` — that **no binding was created** (no `[data-ghp-session-subtitle]`, active view stays `projects`), screenshots it, then closes the browser tab through the dockkit tab context menu (`[data-dockkit-tab-menu] [data-dockkit-menu-close]`, label 关闭) and restores the collapsed right-sidebar baseline. The shipped `ui-sidebar-browser` row is enabled by the harness overlay (it is disabled outside the desktop profile); in the Web build the built-in browser is an iframe and github.com sends `X-Frame-Options: DENY`, so the remote page body is expected to be refused — the stage asserts the tab, address bar and iframe `src`, and that specific refusal console error is allowlisted (see below). Desktop uses an Electron `<webview>` and renders the page natively | `12-browser-open.png` |
+| 9 | `projects-list` | `[data-ghp-action="view-list"]` switches to list mode: `[data-ghp-view-mode="list"]`, `[data-ghp-list]`, grouped status sections with rows | `05-projects-list.png` |
+| 10 | `projects-milestone` | back to board; `[data-ghp-action="milestone"]` opens the dropdown, options include `all` + `backlog` + a concrete milestone (`v1.2.0` when present), selecting it moves `data-active="true"`, shrinks card counts (and keeps counters consistent); captured with the dropdown open; then reset to `all`, counts restored, dropdown closed | `06-projects-milestone.png` |
+| 10b | `projects-wide` | resizes the viewport to 2200×1300 (CDP `Emulation.setDeviceMetricsOverride`), keeps the bound board open and re-validates the hidden-lane rule for the visible lanes, then asserts the page fills the conversation body: `.ghp-page` width ≥ 70% of the window (old 1000px cap ≈ 45%), page left edge < 25% of the window (no centred fixed column), the visible lanes in order share the width (equal ±12px, lane sum ≥85% of board width), ≥1 card; the PNG is asserted to be exactly 2200×1300; viewport restored to 1280×800 for the issue stages | `11-projects-wide.png` (2200×1300) |
+| 11 | `issue-empty` | `issue` tab renders the unbound empty state (`为当前会话绑定 Issue`, `从项目选择`, reference input) | `07-issue-empty.png` |
+| 12 | `issue-bind-subtitle` | **v0.4.0**: clicks the explicit `[data-ghp-card-action="bind"]` button on the #240 card (asserts it does **not** open the browser), asserts the client switches to the `issue` view, and that the session header subtitle (§4.5) appears: `[data-ghp-session-subtitle]` with `[data-ghp-subtitle-chip]` text `#240`, non-empty `[data-ghp-subtitle-title]` whose `title` attribute carries the full issue title, inside `header[data-window-drag]`, single-line (`nowrap`/height ≤26px) and ellipsised (`text-overflow: ellipsis` or scrollWidth > clientWidth) | `13-issue-subtitle.png` |
+| 13 | `issue-detail` | already on the bound `issue` view after the bind action; asserts the fully loaded detail (meta line `N 条评论`, markdown body, labels, comments) | `08-issue-detail.png` |
 | opt | `issue-comments` | only with `--extra-comments`: scrolls the issue view to the bottom and shoots the comments | `09-issue-comments.png` |
+| 14 | `projects-warm` | **v0.4.0 §3.5**: switches to `对话` and back to `projects`, measures until the cached `[data-ghp-view-mode="board"]`/`[data-ghp-board]` renders with **no** `[class*="ghp-skeleton"]`; asserts ≤ **1500 ms** and that no cold skeleton was ever rendered (module-level SWR cache hit), and logs the cold duration from `projects-board` (`coldBoardMs`) alongside `warmMs` | — |
+| 15 | `console` | zero browser console errors, zero uncaught exceptions, zero plugin HTTP ≥400 responses, zero plugin network failures (warnings are reported, not failed). The only allowlisted error is the documented github.com `X-Frame-Options` iframe refusal (Web-only); the stage also asserts a boolean `stale` on every 2xx `/projects`, `/items`, `/issue` response and logs per-request host timings | — |
 
 Screenshots are 1280×800 viewport PNGs written to
 [`artifacts/screenshots/`](../../artifacts/screenshots). Acceptance set:
 **01-tabs, 02-projects-empty, 03-projects-picker, 04-projects-board,
 05-projects-list, 06-projects-milestone, 07-issue-empty, 08-issue-detail,
-11-projects-wide** — the first eight at 1280×800, `11` at **2200×1300** (wide
-layout regression) — plus opt-in `09-issue-comments.png` with `--extra-comments`.
+11-projects-wide, 12-browser-open, 13-issue-subtitle** — 01–09 at 1280×800
+(09 opt-in), `11` at **2200×1300** (wide layout), `12` is the built-in-browser
+open state, `13` is the session-header issue subtitle.
 Board screenshots reflect the v0.3.0 hidden-empty-No-status rule: fixture mode
 shows five lanes, real Project #9 shows four lanes with
 `data-ghp-hidden-lanes="no-status"`.
@@ -55,7 +59,7 @@ artifact directory matches the current numbering.
 |---|---|
 | `--mode=fixture\|real` | host half under test. `fixture` mounts [`dev/mock-host.js`](../../dev/mock-host.js) (contract-shaped data from `test/fixtures/`, in-memory bindings, **no network, no gh**). `real` mounts [`index.js`](../../index.js) (real `gh`, read-only). Default `fixture`. |
 | `--keep` | keep the temp run directory (`home/`, `workspace/`, `documents/`, `logs/`, `chrome-profile/`). A failing run is kept even without this flag. |
-| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-milestone`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-board`, `projects-list`, `projects-milestone`, `projects-wide`, `issue-empty`, `issue-detail`, `issue-comments`, `console`. |
+| `--only=<stage>` | run the stages up to and including `<stage>` (prerequisites included), then stop; the `console` check still runs last. Useful for iterating on one view: `--only=projects-milestone`. Valid stages: `boot`, `app`, `session`, `tabs`, `projects-empty`, `projects-picker`, `projects-board`, `projects-browser`, `projects-list`, `projects-milestone`, `projects-wide`, `issue-empty`, `issue-bind-subtitle`, `issue-detail`, `issue-comments`, `projects-warm`, `console`. |
 | `--headful` | run Chrome with a visible window (local debugging; default is `--headless=new`). |
 | `--extra-comments` | also capture `09-issue-comments.png`. |
 | `--timeout-scale=<n>` | multiply every stage timeout (slow machines: `1.5`). Default `1`. |
@@ -100,6 +104,8 @@ DSH_HOME=<run>/home DEEPSEEK_API_KEY=sk-e2e-mock DEEPSEEK_BASE_URL=http://127.0.
 - id: workspace-controller            # keep the first-use workspace inside the temp root
   config:
     documentsDirectory: '<run>/documents'
+- id: ui-sidebar-browser              # shipped row; disabled outside the desktop profile
+  disabled: false                     # Web build renders the built-in browser as an iframe
 - insert:
     - id: github-projects
       name: '<absolute path of dev/mock-host.js or index.js>'
@@ -149,6 +155,15 @@ Common failures:
 | `projects-picker` / `issue-detail`: timeout waiting `ghp-*` content | client view regressed (skeleton never leaves / body never renders); failure dump + screenshot show the state. |
 | `boot` in real mode: `gh` unavailable / `gh-auth` | `gh auth status` not valid for the invoking user; fix `gh auth login` or use `--mode fixture`. |
 
+## Known-benign console errors
+
+The `console` stage fails on every unexpected console error/exception. The only
+allowlisted entry (matched by regex in `run.mjs` → `BENIGN_CONSOLE_ERRORS`) is:
+
+| Pattern | Why it is benign |
+|---|---|
+| `Refused to display … github.com … X-Frame-Options … deny` | github.com serves `X-Frame-Options: DENY`. In the Web build DSH renders the built-in browser tab as an `<iframe>`, so the remote page body is refused by design. The harness still asserts the browser tab, its address bar and the iframe `src` containing the issue URL (`12-browser-open.png`); the Desktop app uses an Electron `<webview>` and renders the GitHub page natively. |
+
 ## Known limitations / flakiness
 
 - Runs must not overlap: the harness writes fixed screenshot names under
@@ -162,6 +177,10 @@ Common failures:
   dismisses it (recorded in the `app` stage `dismissed` field).
 - `--mode real` performs only read calls, but rate limits / a temporary GitHub
   failure can still fail a stage; re-run or fall back to `--mode fixture`.
+- The built-in right-sidebar browser is enabled through the overlay only; the
+  Web build cannot embed github.com (`X-Frame-Options: DENY`), so screenshot
+  `12-browser-open.png` shows the browser tab/address with a refused frame body.
+  The actual page rendering is a Desktop-only behavior (Electron `<webview>`).
 - Screenshots are overwritten by the latest run; the artifact set is only
   deterministic when runs are serialized. The harness deletes stale numbered
   state shots from earlier revisions (`failure-*.png`, old `04-projects-list.png`,
@@ -170,40 +189,65 @@ Common failures:
 - `02-projects-empty.png` includes the isolated temp workspace path by design
   (the empty state documents which workspace is being bound).
 
-## Current status (2026-10-28) — plugin v0.3.0 final acceptance, client.js frozen
+## Current status (2026-10-28) — plugin v0.4.0 final acceptance (frozen)
 
-`client.js` frozen at sha256 `813dae78bbd27bdb47218a098dcb8e98df09fbe7c811551005be853c7a8b7a7d`
-(mtime 2026-10-28 05:28; v0.3.0 = hidden-empty-No-status lane rule + the
-§4.2.0 visual system: status palette, tinted count pills, raised cards on
-sunken lanes, hash-colored label/avatar dots, brand accents, full-width layout).
-`index.js` ships `export const inject = ['webServer']`.
+Frozen inputs for the authoritative pair:
+`client.js` sha256 `7fa1ef01f4a86969eb6660c8f474f53cdb0ce4cc73fcf1fac878814359102885`,
+`index.js` sha256 `4e025542ee37429123f44d56b21e87b5abb968000fe4a86bb45947a0003d130f`,
+`github.js` sha256 `a4d279f987054142b4537e3ab1122d749ae5c4241f017920f73c9a9a0eb75a5d`,
+`state.js` sha256 `484af66b19838088453351690b6789a64ad47c33fdf8bc3366ac66a886775304`
+(the host half also ships the three agent tools and GraphQL/SWR reads, covered by
+`node --test test/host/*.mjs`, not by the browser harness).
 
-| Mode | Command | Exit | Run dir | Result |
-|---|---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-15-300Z` | hidden-lane rule: `hidden=""`, 5 lanes `no-status 1 / todo 3 / in-progress 2 / in-review 1 / done 1` (8 == sum); milestone v1.2.0 hides No-status (4 lanes, `todo 0 / in-progress 2 / in-review 1 / done 1`), 8→4→8; wide @2200×1300: 5 lanes `[361.8 ×5]` spread 0, page 86.6% of window, shot exactly 2200×1300; console 0/0/0; shots 01–08 + 11 |
-| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T21-29-27-351Z` | hidden-lane rule: **`data-ghp-hidden-lanes="no-status"`, exactly 4 lanes `todo 27 / in-progress 1 / in-review 1 / done 166` = 195 cards = sum**; milestone v1.2.0 keeps No-status hidden, 195→19→195; wide @2200×1300: 4 lanes `[454.3 ×4]` spread 0, page 86.6%, 195 cards; issue #240 via card + full detail; console 0/0/0; shots 01–09 + 11 |
+| Mode | Command | Exit | Run dir |
+|---|---|---|---|
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-06-883Z` |
+| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-30-20-913Z` |
 
-Both authoritative runs were sequential against the frozen client;
-`artifacts/screenshots/` holds the **real-mode** v0.3.0 set from
-`2026-10-27T21-29-27-351Z`.
+All 17 stages pass in both modes (boot, app, session, tabs, projects-empty,
+projects-picker, projects-board, projects-browser, projects-list,
+projects-milestone, projects-wide, issue-empty, issue-bind-subtitle,
+issue-detail, [issue-comments], projects-warm, console); screenshots in
+`artifacts/screenshots/` are the real-mode authoritative set.
+
+Measured evidence (fixture → real):
+- built-in browser (`projects-browser`): address bar + `[data-sidebar-browser-frame]`
+  iframe both `https://github.com/ceasarXuu/Astropath/issues/240`, dockkit tab
+  `github.com`; no binding created (no subtitle, board still mounted, view-tab row
+  clamped while the right sidebar is open); tab closed via the dockkit context menu
+  and the right sidebar re-collapsed afterwards;
+- session subtitle (`issue-bind-subtitle`): chip `#240`, full
+  `repo#N title` in the `title` attribute, `nowrap`+`ellipsis`, inside
+  `header[data-window-drag]`, its own row above the view tabs
+  (`subtitle.bottom 61 ≤ tabs.top 71`) and left-aligned with the session title
+  (row.x 300 == title.x 300);
+- latency (`projects-warm` / `projects-board`): **cold board 317 ms → 3699 ms**,
+  **warm re-open 27 ms → 72 ms**, `skeletonSeen:false` in both modes (module SWR
+  cache hit; one subtle background spinner allowed). Real-mode host timings logged
+  via CDP for `/config` 0–15 ms, warm `/items` 6–17 ms, `/issue` cold ≈1.2 s; the
+  cold `/items` (2 GraphQL pages) is inside the 3.1–3.7 s range reported by the
+  host owner, so the cold client number is at the contract's ≤3.5 s expectation
+  (3.70 s measured once, logged not asserted);
+- host contract (`console`): every 2xx `/projects`, `/items`, `/issue` response
+  carries a boolean `stale` (fixture `false`; real fresh-window `false`;
+  `stale:true` would be logged not failed); `/config` 200s logged, cold
+  `gh.error:"pending"` is legal and never treated as an error;
+- console: **0 errors / 0 exceptions / 0 warnings** in both modes (the Web-only
+  github.com `X-Frame-Options` iframe refusal is allowlisted but did not surface).
 
 Final artifact set (`artifacts/screenshots/`):
 
 | File | Source | Size |
 |---|---|---|
-| `01-tabs.png`, `02-projects-empty.png`, `03-projects-picker.png`, `04-projects-board.png`, `05-projects-list.png`, `06-projects-milestone.png`, `07-issue-empty.png`, `08-issue-detail.png` | harness, authoritative real-host run (v0.3.0 visual system) | 1280×800 |
-| `09-issue-comments.png` | harness real-host run `--extra-comments` (opt-in) | 1280×800 |
+| `01-tabs.png` … `09-issue-comments.png` | harness, authoritative real-host run (09 = `--extra-comments`) | 1280×800 |
 | `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead), never written by the harness | full app window |
-| `11-projects-wide.png` | harness, `projects-wide` stage (wide-layout + hidden-lane proof) | 2200×1300 |
+| `11-projects-wide.png` | harness, `projects-wide` (hidden lanes + full width) | 2200×1300 |
+| `12-browser-open.png` | harness, `projects-browser` (right-sidebar browser, address + refused iframe body in Web) | 1280×800 |
+| `13-issue-subtitle.png` | harness, `issue-bind-subtitle` (header subtitle row) | 1280×800 |
 
-The light theme was additionally verified manually during the v0.3.0 review
-(settings → 浅色; board/list/picker/issue shots rendered correctly via
-`color-mix` tints, zero console errors) — the automated harness runs the DSH
-default dark theme only.
-
-Earlier v1.x/v0.2.x screenshot numbers are removed automatically as stale
-numbered state shots at the start of every run. Older temp run directories under
-`/tmp/dsh-github-projects-e2e/` are development history and may be deleted.
+Earlier screenshot numbers from v1.x/v0.2.x/v0.3.0 are removed automatically as
+stale numbered state shots at the start of every run. Older temp run directories
+under `/tmp/dsh-github-projects-e2e/` are development history and may be deleted.
 
 ## File map
 
