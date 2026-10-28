@@ -211,7 +211,7 @@
 | 项目 | v1.0.0 |
 |---|---|
 | 包名 | `@local/dsh-github-projects` → **`@ceasarxuu/dsh-github-projects`**（公开 scoped 包） |
-| 发布 | npm `publish --access public`；源码仓库 <https://github.com/ceasarXuu/dsh-github-projects> |
+| 发布 | **已上线 npm** `@ceasarxuu/dsh-github-projects@1.0.0`（`dist-tags.latest`=1.0.0、access public）；GitHub release [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | 包内容 | 新增 `LICENSE`、`CHANGELOG.md`、`RELEASING.md`、`locale/{en,zh}.json`、`market/index.json`；`engines.dsh` + Node 门禁 |
 | Plugin Manager | 卡片显示名 *GitHub Projects & Issues* / **GitHub 项目与议题**，描述与图标来自包内 `locale/` 与 `icon.svg` |
 | 兼容性 | `engines.dsh >=0.2.1-rc.3 <0.3.0`、Node ≥ 22；仍只在 DSH 0.2.1-rc.3 实测 |
@@ -1468,7 +1468,7 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 
 ### 7.2 安装
 
-插件是 npm 公开包 **`@ceasarxuu/dsh-github-projects`**，装到 DSH 实际运行的 profile 里
+插件是**已发布到 npm 的公开包 `@ceasarxuu/dsh-github-projects@1.0.0`**（`latest`=1.0.0），装到 DSH 实际运行的 profile 里
 （本机 Desktop 的 profile 名为 `desktop`；跑 `web` / `headless` 用对应名字）。
 
 安装需要目标 profile 的写权限（Desktop 的 profile 由 Electron 应用持有）。
@@ -1499,8 +1499,10 @@ dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 ```
 
-普通用户请使用上面的 npm 包；干净 profile 的 npm 安装 smoke 证据见 8.7，早期本地 link 的现场
-安装验证保留在 8.5。
+普通用户请使用上面的 npm 包；干净 profile 的 registry 安装 smoke 证据见 8.7。
+
+> registry 里还列有一个内部 staging 版本 `0.0.0-stage`；安装时请显式 pin `@1.0.0`（`latest` 已是
+> 1.0.0）。
 
 ### 7.3 首次使用
 
@@ -1615,8 +1617,9 @@ v0.4.1 阶段（契约 §5）与截图的对应关系：
 
 ### 8.4 截图
 
-最终截图集共 14 张（v0.4.1）：`01`–`09` 与 `11`–`14` 由 e2e harness 产出（`01`–`09`、`12`–`14`
-为 1280×800；`11` 为 2200×1300），`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（2560×1370 全窗口，v0.4.1 重装后刷新）。
+最终截图集共 **15 张（v1.0.0）**：`01`–`09` 与 `11`–`15` 由 e2e harness 产出（`01`–`09`、`12`–`15`
+为 1280×800；`11` 为 2200×1300），`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（2560×1370
+全窗口，v0.4.1 重装后刷新）。其中 `01`–`14` 是 v0.4.1 功能证据，`15` 是 v1.0.0 发布安装证据。
 
 | 截图 | 来源 | 内容 | 可核对点 |
 |---|---|---|---|
@@ -1634,6 +1637,7 @@ v0.4.1 阶段（契约 §5）与截图的对应关系：
 | `artifacts/screenshots/12-browser-open.png` | harness @1280 | 点卡片 → 内置右侧浏览器 | 右侧 browser tab 打开 GitHub URL，未创建绑定（Web 版 X-Frame-Options 限制见说明） |
 | `artifacts/screenshots/13-issue-subtitle.png` | harness @1280 | **会话头部副标题** | `#240` chip + Issue 标题（单行省略，tooltip 全文） |
 | `artifacts/screenshots/14-sidebar-subtitle.png` | harness @1280 | **左侧栏会话行副标题（v0.4.1）** | 选中会话行第二行 `#240` chip + 标题（单行省略、tooltip 全文）；行高 32→41px；绑定变化经 `GET /bindings` 约 4s 轮询/绑定事件同步；点击副标题在内置浏览器打开 Issue 且不切换当前会话；未绑定行/工作区行无副标题 |
+| `artifacts/screenshots/15-published-install.png` | harness @1280（release smoke） | **已发布 npm 版本的干净 profile 安装** | v1.0.0 从 npm registry 安装到临时 `web` profile 后，新会话头部出现 `对话 / 轨迹 / projects / issue` 四个页签；干净 `DSH_HOME`、无测试 overlay；sha256 `3c846dae…34fc` |
 
 ![会话头部的两个页签](../artifacts/screenshots/01-tabs.png)
 ![projects 未绑定空态](../artifacts/screenshots/02-projects-empty.png)
@@ -1649,10 +1653,12 @@ v0.4.1 阶段（契约 §5）与截图的对应关系：
 ![卡片点击在内置右侧浏览器打开 GitHub](../artifacts/screenshots/12-browser-open.png)
 ![会话 Issue 副标题](../artifacts/screenshots/13-issue-subtitle.png)
 ![左侧栏会话行的 Issue 副标题](../artifacts/screenshots/14-sidebar-subtitle.png)
+![已发布 npm 版本的干净 profile 安装](../artifacts/screenshots/15-published-install.png)
 
 > `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 输出，Lead 维护，v0.4.1 重装后刷新为
-> 2560×1370 全窗口，sha256 `5347164c…`）；01–09、12–14 为 harness 的 1280×800 产出，
-> `11-projects-wide.png` 为 2200×1300 宽窗口产出。
+> 2560×1370 全窗口，sha256 `5347164c…`）；01–09、12–15 为 harness 的 1280×800 产出，
+> `11-projects-wide.png` 为 2200×1300 宽窗口产出。`15-published-install.png` 是 v1.0.0 发布后从
+> npm registry 安装到干净 `web` profile 的 release-smoke 截图。
 > `12` 的空白 iframe 是 Web 版 X-Frame-Options 限制所致，不是打开失败（Desktop 版 webview 正常）。
 > `14`（v0.4.1）：会话树中的 session 行显示已绑定 Issue 的副标题（`#240` + 标题，单行省略）；
 > 绑定变化通过 `GET /bindings` 约 4s 轮询/`binding-changed` 事件同步；点击副标题在内置浏览器打开
@@ -1718,23 +1724,23 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 
 ### 8.7 v1.0.0 发布门禁（release gate）
 
-> 状态：**发布前门禁已通过**。1.0.0 的功能代码与 0.4.1 一致，8.1–8.6 的 91/91、18/18 阶段、
-> 14 张截图结论继续适用；发布面的验证如下：改名包 e2e 重跑 PASS，打包 tarball 在干净 `web`
-> profile 安装 smoke 通过（`/plugin/github-projects/health` → 200）。npm registry 安装 smoke 的
-> 结果记录于仓库最新验收章节（npm 包内文档是发布时快照）。
+> 状态：**发布门禁已通过（npm 已上线）**。1.0.0 的功能代码与 0.4.1 一致，8.1–8.6 的 91/91、
+> 18/18 阶段、14 张功能截图结论继续适用；发布面新增：改名包 e2e PASS、npm registry 干净 profile
+> 安装 smoke PASS（见 P2）、`npm pack` 内容检查与 Plugin Manager 元数据；`15-published-install.png`
+> 为对应的干净安装截图。
 
 | # | 门禁项 | 状态 | 证据 |
 |---|---|---|---|
 | P1 | 改名包 `@ceasarxuu/dsh-github-projects` 下 e2e fixture/real 仍 PASS | ✅ 通过 | 改名包重跑 `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0（run dir `2026-10-28T00-29-38-905Z`）与 `--mode real --keep --extra-comments` → exit 0（run dir `2026-10-28T00-29-54-817Z`），阶段/截图与 8.3 一致 |
-| P2 | npm registry 安装 smoke：发布 1.0.0 后立即在干净 profile 执行 `dsh plugin --profile <profile> add @ceasarxuu/dsh-github-projects@1.0.0`，结果记录于仓库最新验收章节（npm 包内文档为发布时快照） | ✅ 发布前等价门禁通过 | 发布前用打包 tarball `ceasarxuu-dsh-github-projects-1.0.0.tgz` 在干净 `web` profile 安装：`/plugin/github-projects/health` → **200**，页签正常；registry 安装 smoke 的正式记录见仓库最新验收章节 |
+| P2 | npm registry 安装 smoke：发布 1.0.0 后立即在干净 profile 执行 `dsh plugin --profile <profile> add @ceasarxuu/dsh-github-projects@1.0.0`，结果记录于仓库最新验收章节（npm 包内文档为发布时快照） | ✅ 通过 | `node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.0 --keep` → **exit 0 / PASS**，run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T00-50-47-844Z`：干净临时 `DSH_HOME` + profile `web`；registry 安装 `+ @ceasarxuu/dsh-github-projects 1.0.0`（pnpm-lock integrity 与 registry `dist.integrity` 一致）；`dsh.profile.bundles` 含包名；无测试 overlay 启动；`/plugin/github-projects/health` → **200**（`available:true`、gh 2.96.0、ceasarXuu）；头部页签 `对话\|轨迹\|projects\|issue`；console **0/0/0**。registry tarball 14 文件 / 144 KB（含 `client.js`、`cordis.patch.yml`、`locale/*.json`、`LICENSE`）。registry 还列有内部 staging 版本 `0.0.0-stage`：安装必须显式 pin `@1.0.0`，`latest`=1.0.0；截图 `15-published-install.png` |
 | P3 | `npm pack --dry-run` 内容检查：文件清单完整、无私有数据；`name` / `version` / `engines` / `license` / `repository` 正确 | ✅ 通过 | `@ceasarxuu/dsh-github-projects@1.0.0`，**14 个文件 / 约 144 kB**（packed）；包含 `index.js`、`github.js`、`state.js`、`client.js`、`cordis.patch.yml`、`icon.svg`、README、LICENSE、CHANGELOG、`locale/*.json`、`docs/DESIGN.zh.md`；不含 `test/`、`scripts/`、`dev/` 或私有数据 |
 | P4 | Plugin Manager 元数据：名称/描述/图标来自 `locale/en.json` + `locale/zh.json` + `icon.svg` | ✅ 通过 | 包内 `locale/en.json` = *GitHub Projects & Issues*、`locale/zh.json` = **GitHub 项目与议题**，描述与图标（`icon.svg`，`exports["./icon"]`）随包发布；`market/index.json` 的 1.0.0 条目与之一致 |
 | P5 | 文档安装口径：README/DESIGN 以 npm/Plugin Manager 为主，本地 link 仅作开发场景 | ✅ 通过 | 本次文档更新（README Install / DESIGN §7.2） |
 
 历史 run dirs（`2026-10-27T22-59-08-920Z` / `2026-10-27T22-59-24-532Z`）保留为 0.4.1 发布前基线；
-改名包 run dirs（`2026-10-28T00-29-38-905Z` / `2026-10-28T00-29-54-817Z`）为上表 P1 证据。
-发布后如 verifier 产出 `15-published-install.png`，在仓库后续提交中补充到 8.4 截图表（npm 包内文档
-不要求包含该图）。
+改名包 e2e run dirs（`2026-10-28T00-29-38-905Z` / `2026-10-28T00-29-54-817Z`）为 P1 证据；registry
+安装 smoke run dir 为 P2 证据。`15-published-install.png` 已补充到 8.4；npm 包内文档是发布时的快照，
+因此该图与本节后续更新以仓库版本为准。
 
 ---
 

@@ -48,6 +48,8 @@ Screenshots are 1280×800 viewport PNGs written to
 issue subtitle, `14` is the left-sidebar session-row subtitle (whole window). The
 sidebar decoration is driven by `GET /bindings` (local state only, SWR poll ≈4 s),
 so the stage waits up to 6 s for the injected row after the bind action.
+`15-published-install.png` is produced by the separate post-publish
+`release-smoke.mjs` gate (registry install in a clean profile), not by `run.mjs`.
 Board screenshots reflect the v0.3.0 hidden-empty-No-status rule: fixture mode
 shows five lanes, real Project #9 shows four lanes with
 `data-ghp-hidden-lanes="no-status"`.
@@ -159,6 +161,42 @@ Common failures:
 | `projects-picker` / `issue-detail`: timeout waiting `ghp-*` content | client view regressed (skeleton never leaves / body never renders); failure dump + screenshot show the state. |
 | `boot` in real mode: `gh` unavailable / `gh-auth` | `gh auth status` not valid for the invoking user; fix `gh auth login` or use `--mode fixture`. |
 
+## Release gate: published-install smoke (`release-smoke.mjs`)
+
+`run.mjs` deliberately loads the plugin through a `--patch` overlay from this
+checkout. For a release, the plugin must also be proven as a **published npm
+package**: [`release-smoke.mjs`](./release-smoke.mjs) installs it from the
+registry into a throw-away profile and boots `dsh web` from that profile.
+
+```bash
+# after `npm publish` (clean temp DSH_HOME created by the script)
+node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.0
+# offline rehearsal with a local tarball / pre-existing temp home
+node scripts/e2e/release-smoke.mjs --spec=/abs/path/pkg.tgz
+node scripts/e2e/release-smoke.mjs --skip-install --home=/tmp/existing-home
+```
+
+What it does, as JSON-line steps then PASS/FAIL:
+1. `install` — `dsh plugin --profile <p> add <spec>` in a temp `DSH_HOME`
+   (default profile `web`), asserting the output names the package/version;
+2. `profile` — `<home>/profiles/<p>/package.json` has `dsh.profile.bundles`
+   containing `@ceasarxuu/dsh-github-projects` and the dependency pins the
+   expected version;
+3. `boot` — boots `dsh web` **without any overlay** from that profile and asserts
+   `/plugin/github-projects/health` answers 200 with the contract shape;
+4. `tabs` — clean profile: creates a session through the composer (offline mock
+   model, same as `run.mjs`) and asserts the header tabs `对话`, `轨迹`,
+   `projects`, `issue` exist, then captures
+   [`artifacts/screenshots/15-published-install.png`](../../artifacts/screenshots);
+5. `console` — zero unexpected browser console errors/exceptions and no plugin
+   HTTP errors in the clean profile.
+
+Options: `--spec=`, `--expected-version=`, `--profile=`, `--home=`,
+`--skip-install`, `--screenshot=`, `--keep`. Temp run directories live under
+`/tmp/dsh-github-projects-release-smoke/<timestamp>/` (kept on failure /
+`--keep`). `15-published-install.png` is release-gate evidence: it is **not**
+written by `run.mjs` and is preserved by its artifact cleanup.
+
 ## Known-benign console errors
 
 The `console` stage fails on every unexpected console error/exception. The only
@@ -197,64 +235,89 @@ allowlisted entry (matched by regex in `run.mjs` → `BENIGN_CONSOLE_ERRORS`) is
 - `02-projects-empty.png` includes the isolated temp workspace path by design
   (the empty state documents which workspace is being bound).
 
-## Current status (2026-10-28) — plugin v0.4.1 final acceptance (frozen)
+## Current status (2026-10-28) — v1.0.0 release gate
 
-Frozen inputs for the authoritative pair:
-`client.js` sha256 `e1ae2410f8e289c563561cdeb7140b7d957dc74975902a9a96ec450e18141879`,
-`index.js` sha256 `b52964f72c27691353b14b15b1cc8f52069879a30deb6f87350a5dd45bc19057`
-(`GET /bindings` added), `github.js` sha256 `a4d279f987054142b4537e3ab1122d749ae5c4241f017920f73c9a9a0eb75a5d`,
-`state.js` sha256 `484af66b19838088453351690b6789a64ad47c33fdf8bc3366ac66a886775304`
-(unchanged since v0.4.0).
+The package was renamed for the first public publish:
+`@ceasarxuu/dsh-github-projects@1.0.0` (was `@local/dsh-github-projects`).
+Functional code is unchanged; the browser module id, bundle patch row and docs
+references were renamed. Harness gate inputs:
+
+- `client.js` sha256 `43a794dca1556c1f830685d636c6fab366c406a7539c21ddc2adc40f3d261156`
+  (module id `@ceasarxuu/dsh-github-projects`)
+- `package.json` sha256 `4d01db4339aa01ddff18a6221ab6762acb383659b13f186fc97b546964feb077`
+- host halves unchanged from v0.4.1: `index.js` `b52964f7…d45bc19057`,
+  `github.js` `a4d279f9…0eb75a5d`, `state.js` `484af66b…675304`
+
+### Pre-publish gate (PASS — 2026-10-28)
 
 | Mode | Command | Exit | Run dir |
 |---|---|---|---|
-| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-08-920Z` |
-| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-27T22-59-24-532Z` |
+| fixture | `node scripts/e2e/run.mjs --mode fixture --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-28T00-29-38-905Z` |
+| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-28T00-29-54-817Z` |
 
-All 18 stages pass in both modes (boot, app, session, tabs, projects-empty,
-projects-picker, projects-board, projects-browser, projects-list,
-projects-milestone, projects-wide, issue-empty, issue-bind-subtitle,
-issue-detail, [issue-comments], sidebar-subtitle, projects-warm, console).
-`artifacts/screenshots/` holds the real-mode authoritative set.
+- 17/17 executed stages in fixture mode (issue-comments is opt-in), 18/18 in real
+  mode; console **0 errors / 0 exceptions / 0 warnings** in both.
+- **Rename assertion** (added to the `console` stage): the browser's resource
+  timings show
+  `…/plugins/??…,@ceasarxuu/dsh-github-projects/client.js,…` and no `@local/…`
+  bundle (`renamed:true, oldIdLoaded:false`); the stage fails otherwise.
+- All v0.4.1 evidence intact: 18 stages incl. tabs, board (hidden-lane rule),
+  milestone filter, wide layout (2200×1300, page 86.6% of window), built-in
+  browser open/close, header subtitle geometry, sidebar session-row subtitle
+  (row 41px, chip `#240`, click opens browser without changing the session) and
+  warm re-open (`skeletonSeen:false`; real 42 ms on this run). Real board had 196
+  items on this run (TODO 27 / In Progress 2 / In Review 1 / Done 166 — project
+  data moved by one item since v0.4.1; assertions are generic). Cold board
+  4415 ms in real mode (logged, above the ≤3.5 s expectation on a slow
+  GraphQL run; earlier runs 3.5–4.0 s).
+- Package pre-check (`npm pack --dry-run`): `@ceasarxuu/dsh-github-projects@1.0.0`,
+  14 files / ~142 KB, including `client.js`, `cordis.patch.yml`,
+  `locale/en.json`, `locale/zh.json`, `LICENSE`.
 
-v0.4.1 evidence (fixture → real):
-- sidebar session-row subtitle (`sidebar-subtitle`): exactly 1
-  `[data-ghp-sidebar-subtitle]` in the bound `session:<id>` row; chip `#240`,
-  full `repo#N title` in the `title` attribute; **row height 41px** (shipped single
-  line is 32), subtitle below the row title (`top 342 ≥ title.bottom 340 − 2`),
-  width 240 ≤ row 256, `nowrap`+`ellipsis` (overflowing), no subtitle on other
-  session/workspace rows; clicking it opened the built-in browser at
-  `https://github.com/ceasarXuu/Astropath/issues/240` **without changing the
-  selected session** (row key identical), then the tab was closed and the sidebar
-  re-collapsed;
-- `/bindings` (host v0.4.1): fixture 5 / real 7 observed responses, all 200 with
-  the `{sessions, updatedAt}` shape at 1–7 ms (local store, no `gh`); it is
-  intentionally excluded from the `stale` filter (it carries no `stale` field);
-- header subtitle (v0.4.0) unchanged: chip `#240`, own row above tabs
-  (`bottom 61 ≤ tabs.top 71`), left-aligned with the session title (x 300);
-- latency: cold board **313 ms → 3497 ms**, warm re-open **17 ms → 56 ms**,
-  `skeletonSeen:false` both modes; real host `/config` 1–16 ms, warm `/items`
-  7–33 ms, `/issue` cold 1.18 s;
-- host contract: boolean `stale` on every 2xx `/projects`, `/items`, `/issue`
-  (4 fixture / 7 real responses, 0 missing, 0 `stale:true`);
-- console: **0 errors / 0 exceptions / 0 warnings** both modes; built-in browser,
-  header subtitle, hidden-lane, milestone, wide-layout and warm assertions all
-  still green.
+### Post-publish gate (PASS — 2026-10-28, registry `@ceasarxuu/dsh-github-projects@1.0.0`)
 
-Final artifact set (`artifacts/screenshots/`, 14 files):
+Registry metadata resolved (`npm view …@1.0.0 version` = `1.0.0`, `dist-tags.latest`
+= `1.0.0`, `npm access get status` = `public`, tarball
+`https://registry.npmjs.org/@ceasarxuu/dsh-github-projects/-/dsh-github-projects-1.0.0.tgz`).
+`node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.0
+--keep` → **EXIT 0 / PASS**, run dir
+`/tmp/dsh-github-projects-release-smoke/2026-10-28T00-50-47-844Z`:
+
+- `install` — clean temp `DSH_HOME`: `dsh plugin --profile web add
+  @ceasarxuu/dsh-github-projects@1.0.0` installed `1.0.0` from the registry
+  (`pnpm-lock` resolution integrity `sha512-B2rqs2Bs…` equals
+  `npm view dist.integrity`; installed `client.js` sha
+  `43a794dc…` matches this checkout);
+- `profile` — `dsh.profile.bundles` = `@deepseek-ai/dsh-base`,
+  `@deepseek-ai/dsh-web-app`, `@ceasarxuu/dsh-github-projects`; dependency `1.0.0`;
+- `boot` — `dsh web` booted **from the installed profile, no overlay**;
+  `/plugin/github-projects/health` → 200 `available:true, gh 2.96.0, ceasarXuu`;
+- `tabs` — clean profile session header `对话 | 轨迹 | projects | issue`;
+  captured [`15-published-install.png`](../../artifacts/screenshots/15-published-install.png);
+- `console` — 0 errors / 0 exceptions / 0 warnings.
+- Registry tarball (`npm pack @ceasarxuu/dsh-github-projects@1.0.0 --dry-run`):
+  **14 files / 144 KB**, incl. `client.js`, `cordis.patch.yml`,
+  `locale/en.json`, `locale/zh.json`, `LICENSE`, `index.js`, `github.js`,
+  `state.js`, `package.json`, READMEs, `CHANGELOG.md`, `icon.svg`,
+  `docs/DESIGN.zh.md`.
+
+Final artifact set (`artifacts/screenshots/`):
 
 | File | Source | Size |
 |---|---|---|
-| `01-tabs.png` … `09-issue-comments.png` | harness, authoritative real-host run (09 = `--extra-comments`) | 1280×800 |
+| `01-tabs.png` … `09-issue-comments.png` | `run.mjs`, authoritative real-host run (09 opt-in) | 1280×800 |
 | `10-desktop-tabs.png` | **manual** Desktop-install evidence (Lead), never written by the harness | full app window |
-| `11-projects-wide.png` | harness, `projects-wide` | 2200×1300 |
-| `12-browser-open.png` | harness, `projects-browser` | 1280×800 |
-| `13-issue-subtitle.png` | harness, `issue-bind-subtitle` | 1280×800 |
-| `14-sidebar-subtitle.png` | harness, `sidebar-subtitle` (whole window: sidebar row subtitle + issue view) | 1280×800 |
+| `11-projects-wide.png` | `run.mjs`, `projects-wide` | 2200×1300 |
+| `12-browser-open.png` | `run.mjs`, `projects-browser` | 1280×800 |
+| `13-issue-subtitle.png` | `run.mjs`, `issue-bind-subtitle` | 1280×800 |
+| `14-sidebar-subtitle.png` | `run.mjs`, `sidebar-subtitle` | 1280×800 |
+| `15-published-install.png` | `release-smoke.mjs`, post-publish clean-profile registry install (PASS) | 1280×800 |
 
 Earlier screenshot numbers from previous versions are removed automatically as
-stale numbered state shots at the start of every run. Older temp run directories
-under `/tmp/dsh-github-projects-e2e/` are development history and may be deleted.
+stale numbered state shots at the start of every `run.mjs` run; `10` and `15` are
+preserved by that cleanup. Older temp run directories under
+`/tmp/dsh-github-projects-e2e/` and `/tmp/dsh-github-projects-release-smoke/` are
+development/release history and may be deleted.
 
 ## File map
 
@@ -266,4 +329,6 @@ scripts/e2e/
   lib/cdp.mjs          raw-WebSocket CDP client (evaluate/waitFor/screenshot, console capture)
   lib/app.mjs          DSH UI helpers (app shell, dialogs, tabs, composer, buttons)
   lib/mock-llm.mjs     local Anthropic-Messages SSE mock used to start an offline turn
+  release-smoke.mjs    post-publish gate: install from npm into a temp profile,
+                       boot `dsh web` from it, assert /health + tabs, capture 15
 ```

@@ -17,16 +17,18 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ## 1.0.0 发布说明（首个公开发布）
 
-**GitHub 项目与议题** v1.0.0 是首个公开发布版本，以 npm 包
-[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects) 分发。源码与问题反馈：
-<https://github.com/ceasarXuu/dsh-github-projects>。许可证 MIT（[LICENSE](LICENSE)）；版本变更见
-[CHANGELOG.md](CHANGELOG.md)。
+**GitHub 项目与议题** v1.0.0 是首个公开发布版本，**已上线 npm**：
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)
+（`latest` = 1.0.0，公开）。源码与问题反馈：<https://github.com/ceasarXuu/dsh-github-projects>；
+发布说明：<https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>。许可证 MIT
+（[LICENSE](LICENSE)）；版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 | | |
 |---|---|
 | npm 包 | `@ceasarxuu/dsh-github-projects`（公开 scoped 包） |
 | Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（来自 `locale/en.json` + `locale/zh.json`） |
 | 仓库 | <https://github.com/ceasarXuu/dsh-github-projects> |
+| 发布 | [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | 许可证 | MIT |
 | 宿主引擎 | `dsh >=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 运行时依赖 | 无（宿主半只用 `node:*`，浏览器半用宿主提供的 `react` / `react-dom`） |
@@ -138,9 +140,12 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | 点 Issue 卡片正文在内置右侧浏览器打开 GitHub，**不创建绑定**。Web 版用 iframe，github.com 的 `X-Frame-Options: DENY` 会拒绝内嵌（空白 pane，地址栏 URL 正确）；Desktop 版 Electron webview 正常渲染。绑定请用卡片上的「绑定」按钮 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 带全文，点击打开内置浏览器） |
 | ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | |
 | 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px）；绑定变化经 `/bindings` 约 4s 轮询/绑定事件同步；点击打开内置浏览器、不改变选中会话 | |
+| ![发布版安装](artifacts/screenshots/15-published-install.png) | |
+| 从 npm 安装已发布 `1.0.0` 到干净 `web` profile：新会话头部显示 `对话 / 轨迹 / projects / issue`（`15-published-install.png`，release smoke） | |
 
-截图 01–09、12–14 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800；`09` 需 `--extra-comments`）；`13` 是会话头部副标题、`14` 是左侧栏会话行副标题。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
+截图 01–09、12–15 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
+1280×800；`09` 需 `--extra-comments`）；`13` 是会话头部副标题、`14` 是左侧栏会话行副标题、
+`15` 是已发布 npm 版本的干净 profile 安装截图。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
 全宽布局证据。`10-desktop-tabs.png` 不同：它是 v0.4.1 重装后**真实 Desktop 应用**的 2560×1370
 全窗口手动截图（sha256 `5347164c…8226`），左侧栏两个已绑定会话行各显示第二行 `#240 [v1.2.0]…`
 副标题，打开会话的头部也显示同一副标题，另有四个页签。截图在 agent 工具绑定期间拍摄（测试绑定随后
@@ -169,7 +174,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ## 安装
 
-插件以 npm 包 **`@ceasarxuu/dsh-github-projects`** 分发。把它装到你实际运行的 DSH profile
+插件**已上线 npm**：**`@ceasarxuu/dsh-github-projects@1.0.0`**（`latest` = 1.0.0）。把它装到你实际运行的 DSH profile
 （默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。安装需要对
 profile 目录的写权限。
 
@@ -179,8 +184,8 @@ profile 目录的写权限。
 **命令行：**
 
 ```sh
-# 从 npm 安装到 desktop profile
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
+# 安装已发布版本到 desktop profile（显式 pin @1.0.0）
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.0
 
 # 确认已安装到该 profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -200,6 +205,9 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 ```
 
 这会记录为 `link:` 依赖（`link:` 前缀可省略）。仅用于开发；普通用户请使用上面的 npm 包。
+
+> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.0.0`（`latest` 已经是
+> 1.0.0）。
 
 ## 使用
 
@@ -342,7 +350,7 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | v0.4.1 已于 2026-10-28 通过验收（宿主测试 91/91、e2e fixture/real PASS、14 张截图）。v1.0.0 发布前门禁已通过：改名包 e2e PASS，打包 tarball 在干净 `web` profile 安装成功（`/plugin/github-projects/health` → 200）；npm registry 安装 smoke 记录于仓库最新验收章节（npm 包内文档为发布时快照） |
+| 验收 | v1.0.0 **已上线 npm 1.0.0**；干净 profile 安装 smoke **PASS**（registry 安装 `@ceasarxuu/dsh-github-projects@1.0.0` 到临时 `web` profile：`/plugin/github-projects/health` → 200、四个页签、console 0/0/0）；改名包 e2e PASS（宿主测试 91/91、18/18 阶段）；**15 张截图**——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了
 `conversation.view` slot、会话标准 props、头部/侧栏 DOM 锚点的 DSH 升级可能需要同步更新插件。

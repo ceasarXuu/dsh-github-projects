@@ -21,16 +21,19 @@ conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
 
 ## Release 1.0.0 — first public release
 
-**GitHub Projects & Issues** v1.0.0 is the first public release, distributed as the npm package
-[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects). Source and issue tracker:
-<https://github.com/ceasarXuu/dsh-github-projects>. Licensed MIT ([LICENSE](LICENSE)); notable changes
-per version: [CHANGELOG.md](CHANGELOG.md).
+**GitHub Projects & Issues** v1.0.0 is the first public release and is **live on npm** as
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)
+(`latest` = 1.0.0, public). Source and issue tracker:
+<https://github.com/ceasarXuu/dsh-github-projects>; release notes:
+<https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>. Licensed MIT
+([LICENSE](LICENSE)); notable changes per version: [CHANGELOG.md](CHANGELOG.md).
 
 | | |
 |---|---|
 | npm package | `@ceasarxuu/dsh-github-projects` (public scoped package) |
 | Plugin Manager name | *GitHub Projects & Issues* / **GitHub 项目与议题** (from `locale/en.json` + `locale/zh.json`) |
 | Repository | <https://github.com/ceasarXuu/dsh-github-projects> |
+| Release | [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | License | MIT |
 | Host engines | `dsh >=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Runtime dependencies | none (host half uses only `node:*`; browser half uses the host-provided `react` / `react-dom`) |
@@ -165,10 +168,13 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | Clicking an Issue card body opens GitHub in DSH's built-in right-sidebar browser — **no binding** is created. Web build: the iframe is refused by github.com's `X-Frame-Options: DENY` (blank pane, URL still shown); Desktop's Electron webview renders it. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens the built-in browser) |
 | ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | |
 | Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41px); binding changes sync via `/bindings` (~4 s poll + binding event); click opens the built-in browser without changing the selected session | |
+| ![Published install](artifacts/screenshots/15-published-install.png) | |
+| Published `1.0.0` installed from npm into a clean `web` profile: the fresh session header shows `对话 / 轨迹 / projects / issue` (`15-published-install.png`, release smoke) | |
 
-Screenshots 01–09 and 12–14 are captured by the isolated e2e harness in **real-host mode** against
+Screenshots 01–09 and 12–15 are captured by the isolated e2e harness in **real-host mode** against
 live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `13` is the
-conversation-header subtitle and `14` the sidebar session-row subtitle (v0.4.1). `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
+conversation-header subtitle, `14` the sidebar session-row subtitle (v0.4.1), and `15` the
+clean-profile install of the published npm release. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
 layout. `10-desktop-tabs.png` is different: it is a manual 2560×1370 full-window capture of the **real
 Desktop app** after the v0.4.1 install (sha256 `5347164c…8226`), showing two bound rows in the left
 sidebar with their second-line `#240 [v1.2.0]…` subtitles, the open session's header subtitle, and the
@@ -200,8 +206,8 @@ unbound; the user's own binding remains):
 
 ## Install
 
-The plugin is distributed as the npm package **`@ceasarxuu/dsh-github-projects`**. Install it into the
-DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
+The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.0`** (`latest` = 1.0.0).
+Install it into the DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
 `web` / `headless` if that is what you run). Installing needs write access to the profile directory.
 
 **Plugin Manager (recommended):** Plugins → Add → `@ceasarxuu/dsh-github-projects` → install and
@@ -211,8 +217,8 @@ and the plugin icon.
 **CLI:**
 
 ```sh
-# install from npm into the desktop profile
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
+# install the published release into the desktop profile (pin @1.0.0)
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.0
 
 # verify it is installed in that profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -233,6 +239,9 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 
 That records a `link:` dependency (the `link:` prefix may be omitted). Use this for development only;
 installed users should use the npm package above.
+
+> The registry also lists an internal staging version (`0.0.0-stage`) alongside 1.0.0. Install the
+> release explicitly with `@1.0.0`; `latest` already points at 1.0.0.
 
 ## Use
 
@@ -385,7 +394,7 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v0.4.1 accepted 2026-10-28 (91/91 host tests; e2e PASS in fixture and real modes; 14 screenshots). v1.0.0 pre-publish gate passed: renamed-package e2e PASS, and the packed tarball installed into a clean `web` profile with `/plugin/github-projects/health` → 200. The npm-registry install smoke is recorded in the repository’s latest acceptance chapter (the npm tarball ships docs as a publish-time snapshot) |
+| Acceptance | v1.0.0 is **live on npm 1.0.0**; clean-profile install smoke **PASS** (registry install of `@ceasarxuu/dsh-github-projects@1.0.0` into a temp `web` profile: `/plugin/github-projects/health` → 200, four tabs, console 0/0/0); renamed-package e2e PASS (91/91 host tests, 18/18 stages); **15 screenshots** — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 `engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
 range — or one that changes the `conversation.view` slot, session standard props, or the header/sidebar

@@ -26,7 +26,18 @@ node --check index.js && node --check client.js
 npm pack --dry-run                         # confirm files/size/no private data
 
 # 3. Publish (scoped packages are restricted by default)
-npm publish --access public
+#    This account uses 2FA for publishing and has no authenticator app, so use
+#    npm's browser verification from a pseudo-TTY (without a TTY npm exits EOTP
+#    immediately and prints only a redacted URL):
+script -q /tmp/npm-publish.log npm publish --access public
+#    npm prints "Authenticate your account at: https://www.npmjs.com/auth/cli/<id>"
+#    and waits. Open that URL (the command also offers ENTER to open it), approve
+#    in the browser, and npm continues: "Your package is being processed..." then
+#    "+ @ceasarxuu/dsh-github-projects@<version>". No OTP/authenticator is needed.
+#
+#    A plain `npm login --auth-type=web` token is NOT enough for publish (npm
+#    still returns EOTP); the browser verification must happen inside the waiting
+#    publish process as above.
 
 # 4. Source repository + tag
 git push
@@ -37,7 +48,9 @@ git push --tags
 Post-publish checks:
 
 - `npm view @ceasarxuu/dsh-github-projects version dist-tags` shows the new
-  version under `latest`.
+  version under `latest` (allow a few minutes for new packages; the registry
+  may list an internal `0.0.0-stage` alongside real versions — always pin the
+  published version explicitly).
 - Clean DSH profile: Plugin Manager → Add →
   `@ceasarxuu/dsh-github-projects`, or
   `dsh plugin --profile smoke add @ceasarxuu/dsh-github-projects`; after a
