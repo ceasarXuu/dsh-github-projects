@@ -785,9 +785,10 @@ function createApi({ gh, store, cache, health, logFault }) {
   }
 
   /**
-   * `GET /bindings` (v0.4.1): every durable session → Issue binding, for the
-   * client's sidebar decorator. Local store only — no `gh`, no SWR cache, no
-   * `stale` field — so it is cheap enough to poll every few seconds.
+   * `GET /bindings` (v0.4.1, extended v1.0.2): every durable session → Issue and
+   * workspace → Project binding, for the sidebar decorators (session subtitles
+   * and workspace project entry icons). Local store only — no `gh`, no SWR
+   * cache, no `stale` field — so it is cheap enough to poll every few seconds.
    */
   function readBindings() {
     const snapshot = store.snapshot()
@@ -798,8 +799,19 @@ function createApi({ gh, store, cache, health, logFault }) {
       if (summary.repo === '' || !Number.isInteger(summary.number) || summary.number <= 0) continue
       sessions[sessionId] = summary
     }
+    const workspaces = {}
+    for (const [workspaceId, entry] of Object.entries(snapshot.workspaces)) {
+      if (!isRecord(entry) || !isRecord(entry.project)) continue
+      const project = entry.project
+      if (typeof project.owner !== 'string' || project.owner === '') continue
+      if (!Number.isInteger(project.number) || project.number <= 0) continue
+      // Same object `/config` exposes as `workspace.project` (already detached
+      // by the store snapshot): the client only needs the icon/summary fields.
+      workspaces[workspaceId] = project
+    }
     return {
       sessions,
+      workspaces,
       updatedAt: typeof snapshot.updatedAt === 'string' && snapshot.updatedAt !== ''
         ? snapshot.updatedAt
         : new Date().toISOString(),

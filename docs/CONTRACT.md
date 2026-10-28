@@ -12,19 +12,20 @@ more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
 
 ## 1. Product shape
 
-- Two `conversation.view` slot entries, `scope: 'session'`, appended after the shipped views:
-  - `id: 'github-projects'`, order `20`, label `projects`
-  - `id: 'github-issue'`, order `21`, label `issue`
-- `projects` tab: shows the GitHub Project bound to the **workspace** of the current session. Default
-  view is a status swimlane board (`No status` / `TODO` / `In Progress` / `In Review` / `Done`,
-  left→right), with a toggle to the earlier grouped list; a milestone filter offers `全部`,
-  `Backlog` (no milestone) and every milestone present in the Project. Binding/replacing/unbinding
-  the workspace Project is done from this tab.
-- In `projects`, clicking an Issue/PR card or list row opens its GitHub page in DSH's **built-in
-  right sidebar browser**; binding is an explicit `绑定` action on the card/row (v0.4.0).
+- One `conversation.view` slot entry, `scope: 'session'`, appended after the shipped views:
+  `id: 'github-issue'`, order `21`, label `issue` (the `projects` tab was removed in the v1.0.2
+  redesign).
+- `projects` board: shows the GitHub Project bound to a **workspace**. Its entry is a small board
+  icon in the workspace row of the left sidebar; the board opens in DSH's **right sidebar** as a
+  custom tab (§4.7), not as a conversation view. Default view is a status swimlane board (`No status`
+  / `TODO` / `In Progress` / `In Review` / `Done`, left→right), with a toggle to the grouped list; a
+  milestone filter offers `全部`, `Backlog` (no milestone) and every milestone present in the
+  Project. Binding/replacing/unbinding the workspace Project is done from this board.
+- In the board, clicking an Issue/PR card or list row opens its GitHub page in the **system default
+  browser (new tab)**; binding is an explicit `绑定` action on the card/row (v0.4.0/v1.0.1).
 - `issue` tab: shows the Issue bound to the current **session** (header, body, labels, comments).
-  If unbound: empty state that offers `从项目选择` (switches to projects tab) or pasting an Issue
-  URL / `owner/repo#123`.
+  If unbound: empty state that offers `从项目选择` (opens the workspace board in the right sidebar
+  with its picker) or pasting an Issue URL / `owner/repo#123`.
 - A session with a bound Issue shows a **subtitle under the session title**: in the conversation
   header (v0.4.0) AND under the session row title in the left sidebar session tree (v0.4.1) — a
   `#228` label chip + issue title (single line, ellipsis), e.g. `#228 修复界面bug`.
@@ -110,7 +111,7 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 |---|---|---|
 | `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding}` |
-| `GET /bindings` | every durable Issue binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"updatedAt":ISO}` |
+| `GET /bindings` | every durable Issue + workspace Project binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"workspaces":{WorkspaceId:Project},"updatedAt":ISO}` |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
 | `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
@@ -197,6 +198,7 @@ type SessionBinding = {
 
 type BindingsResponse = {
   sessions: Record<SessionId, IssueSummary>   // only sessions that HAVE a binding
+  workspaces: Record<WorkspaceId, Project>    // only workspaces that HAVE a binding
   updatedAt: string
 }
 ```
@@ -226,8 +228,9 @@ Behaviour rules:
   from a `gh` read. With `ref` it must resolve and fetch the issue via `gh` (404 → `issue-not-found`,
   bad ref → `bad-request`).
 - `/bindings` reads the binding store only (no `gh`, no cache staleness): it returns every session
-  that currently has an Issue bound, so the client can decorate the sidebar without one request per
-  row. Cheap enough to poll every few seconds.
+  that has an Issue bound plus every workspace that has a Project bound, so the client can decorate
+  the sidebar (session subtitle + workspace project icon) without one request per row. Cheap enough
+  to poll every few seconds.
 - `/config` reads local bindings: `workspaceId`/`sessionId` come from the query; missing/unknown ids
   yield `project: null` / `issue: null` (not errors). It NEVER waits for GitHub: the `gh` field is the
   last cached health snapshot, or `{available:false,version:null,account:null,error:'pending'}` on a
@@ -591,6 +594,28 @@ session title:
   into `header[data-window-drag]` after the title row and re-ensures it after host re-renders
   (React portal). If the anchor is absent the feature degrades to no subtitle and never throws; it
   must not break sessions without a binding.
+
+### 4.7 Workspace project entry and right-sidebar board (v1.0.2)
+
+- Entry: every workspace row (`[data-row-key^="workspace:"]`) carries one small board icon
+  (`[data-ghp-workspace-entry]`) inserted before the row's hover actions (`…`, `+`). It is visible
+  even when the row is not hovered, highlights when the workspace has a bound Project
+  (`data-ghp-workspace-entry-bound="1"`), and `click`/Enter opens the board without toggling the
+  workspace's expansion (`stopPropagation`, `preventDefault`).
+- Target: a custom right-sidebar tab type registered by this plugin
+  (`ctx.sidebarRightTabs.register({ id: '@ceasarxuu/dsh-github-projects/project', kind:
+  'github-project', title })` + a keyed `sidebar.right.pane.tab` body). Opening uses
+  `ctx.sidebarRight.openTab('github-project', { params: { workspaceId, pick? } })`; the body reads
+  `tab.navigation.params.workspaceId` (and `pick` to open the picker immediately). Re-click focuses
+  the existing tab instead of adding another (page tabs dedupe).
+- The board body reuses the existing projects view (unbound state / picker / board / list /
+  milestone / refresh / bind / unbind) inside the right sidebar, adapted to the narrow pane
+  (toolbar wraps, board scrolls horizontally, list remains usable). Binding from the board updates
+  the session subtitle and the `issue` tab, but does not switch the conversation view.
+- The issue tab's unbound `从项目选择` action opens the same sidebar board with `pick: true`
+  instead of switching to a removed conversation tab.
+- Compatibility: if `sidebarRight`/`sidebarRightTabs` are unavailable the workspace icon is not
+  injected (no throw); the `issue` tab and subtitles keep working.
 
 ### 4.6 Sidebar session subtitle (v0.4.1)
 

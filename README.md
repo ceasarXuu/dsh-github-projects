@@ -1,28 +1,74 @@
 # dsh-github-projects
 
-**v1.0.1 — bug-fix release.** The GitHub Project and Issue bound to your DSH session, one tab away.
+**v1.0.2 — current release.** The GitHub Project and Issue bound to your DSH session: the board in
+the right sidebar, the Issue one tab away.
 
-This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
-bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
-filter — and `issue` shows the Issue bound to the **session**, with a one-line **issue subtitle**
-under the session title in the conversation header **and** under the session row in the left sidebar
-session tree (v0.4.1). Clicking a card or the header subtitle opens GitHub in your **system default
-browser** (new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row
-just opens that session. A separate **Bind** action binds the Issue to the session, and the model can
-do the same through three agent tools. Everything is read-only against GitHub — it is a viewing
-surface, not a writer.
+This DSH plugin appends the `issue` view to the conversation header — it shows the Issue bound to the
+**session**, with a one-line **issue subtitle** under the session title in the conversation header
+**and** under the session row in the left sidebar session tree (v0.4.1). The **project board** — the
+GitHub Project bound to the **workspace**, as a status swimlane board by default with a list view and
+a milestone filter — moved in v1.0.2 out of the conversation header into DSH's **right sidebar**: one
+small board icon in every workspace row of the left sidebar opens it (highlighted when that workspace
+is bound). Clicking a card or the header subtitle opens GitHub in your **system default browser**
+(new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row just opens
+that session. A separate **Bind** action binds the Issue to the session, and the model can do the
+same through three agent tools. Everything is read-only against GitHub — it is a viewing surface, not
+a writer.
 
 ```
-conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
+conversation header:  [ 对话 ] [ 轨迹 ] [ issue ] [ … ]
+left sidebar:         workspace row  ▣  →  right sidebar tab  [ 项目 / Project ]
 ```
 
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
 
-![Session header with the projects and issue tabs](artifacts/screenshots/01-tabs.png)
+![Session header with the `issue` tab, and the board in the right sidebar (v1.0.2 e2e)](artifacts/screenshots/01-tabs.png)
+
+## Release 1.0.2 — board in the right sidebar, picker replay fix
+
+Current release, published as `1.0.2`. The board leaves the conversation header and becomes a
+right-sidebar tab opened from the left sidebar; the ProjectPicker replay bug is fixed.
+
+| | |
+|---|---|
+| npm package | `@ceasarxuu/dsh-github-projects@1.0.2` (public scoped package) |
+| Release | [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) |
+| Changes | right-sidebar board + workspace-row entry icon; `workspaces` in `/bindings`; ProjectPicker no longer reopens |
+| Compatibility | no DSH change (`engines.dsh` `>=0.2.1-rc.3 <0.3.0`, tested on 0.2.1-rc.3); no new runtime dependencies |
+
+- **Project board in the right sidebar.** The `projects` conversation tab is removed; `issue` is the
+  plugin's only conversation-header view. Each left-sidebar workspace row now has a small board icon
+  (`[data-ghp-workspace-entry]`) that opens that workspace's Project as a right-sidebar tab — always
+  visible, highlighted when the workspace has a bound Project
+  (`data-ghp-workspace-entry-bound="1"`), and click/Enter does not expand/collapse the workspace row.
+  Re-clicking focuses the existing tab instead of adding a duplicate. The pane adapts to the narrow
+  sidebar (toolbar wraps, board scrolls horizontally, the list stays usable), and the `issue` tab's
+  unbound **从项目选择** opens the same board with its picker. If the host has no `sidebarRight`
+  services the icon is not injected (no errors); the `issue` tab and both subtitles keep working.
+- **`GET /bindings` includes the workspace map.** The local endpoint now returns
+  `{sessions, workspaces, updatedAt}` (`workspaces: {<workspaceId>: Project}`, read from
+  `state.json` — no `gh` call) so the workspace icon knows which rows are bound.
+- **Fixed: the Project picker reopened by itself (user report).** After choosing or dismissing the
+  picker — and then switching sessions, returning, collapsing/expanding the sidebar, or any remount —
+  the one-shot `pick` navigation intent was replayed and the picker came back on a workspace that was
+  already bound. The client now captures the request locally and consumes it by rewriting the same
+  tab's navigation to `{ workspaceId }` only. Verified: an explicit **从项目选择** opens exactly
+  once; choosing/dismissing closes it; session switch/return, collapse/expand and repeated remounts
+  do not replay it; bindings survive; one sidebar tab.
+- **Acceptance — pre-publish gate green.** Frozen `client.js` sha256
+  `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`; host tests **92/92** pass; the
+  fix passed an independent 6-check picker-replay verifier; the authoritative v1.0.2 repo-e2e run is
+  **PASS** — fixture **18/18** executed stages (run dir `2026-10-28T22-18-34-867Z`) and real **19/19**
+  stages (run dir `2026-10-28T22-20-03-025Z`), console **0/0/0** in both modes, including the new
+  `project-picker-replay` stage and the refreshed screenshot set (`01`–`14`; `11` is the maximized
+  right-sidebar pane at 2200×1300). Only post-publish items remain — npm `1.0.2` live (dist-tag
+  `latest`), the clean-profile `release-smoke` install and the tag/release confirmation — recorded in
+  [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) after publication.
 
 ## Release 1.0.1 — sidebar clicks, system-browser links, no overflow
 
-Bug-fix release for four user-reported issues (three fixes); **published as `1.0.1`** (npm `latest` = 1.0.1).
+Bug-fix release for four user-reported issues (three fixes); **published as `1.0.1`** (superseded by
+1.0.2).
 
 | | |
 |---|---|
@@ -36,8 +82,9 @@ Bug-fix release for four user-reported issues (three fixes); **published as `1.0
 - **Issue links open in your system default browser (new tab).** Card/list-row clicks, the
   conversation-header subtitle and the Issue view's GitHub link use
   `window.open(url, '_blank', 'noopener,noreferrer')`, the same mechanism as DSH's "Open in system
-  browser". The plugin no longer uses the built-in right-sidebar browser (and no longer needs the
-  optional `sidebarRight` client services).
+  browser". The plugin no longer uses the built-in right-sidebar browser (`sidebarRight` services are
+  not involved in link opening; v1.0.2 reuses `sidebarRight` / `sidebarRightTabs` only for the new
+  board tab).
 - **No horizontal overflow in the sidebar.** The subtitle uses
   `flex:1 1 100%; max-width:100%; overflow:hidden` with a 20px leading indent, so long Issue titles
   stay inside the session row; the stray horizontal scrollbar rectangle above the sidebar
@@ -46,7 +93,7 @@ Bug-fix release for four user-reported issues (three fixes); **published as `1.0
 
 ## Release 1.0.0 — first public release
 
-**GitHub Projects & Issues** v1.0.0 was the first public release (the current release is **1.0.1**
+**GitHub Projects & Issues** v1.0.0 was the first public release (the current release is **1.0.2**
 above), and is **live on npm** as
 [`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects).
 Source and issue tracker: <https://github.com/ceasarXuu/dsh-github-projects>; release notes:
@@ -58,7 +105,7 @@ Source and issue tracker: <https://github.com/ceasarXuu/dsh-github-projects>; re
 | npm package | `@ceasarxuu/dsh-github-projects` (public scoped package; 1.0.0 first published version) |
 | Plugin Manager name | *GitHub Projects & Issues* / **GitHub 项目与议题** (from `locale/en.json` + `locale/zh.json`) |
 | Repository | <https://github.com/ceasarXuu/dsh-github-projects> |
-| Releases | [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
+| Releases | [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) · [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | License | MIT |
 | Host engines | `dsh >=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Runtime dependencies | none (host half uses only `node:*`; browser half uses the host-provided `react` / `react-dom`) |
@@ -73,17 +120,19 @@ Binding is two levels deep, matching how GitHub context actually lives:
 
 | Level | Bound to | Chosen from | Persisted |
 |---|---|---|---|
-| Project | a **workspace** (shared by all its sessions) | `projects` tab → project picker | `state.json` in your DSH profile |
+| Project | a **workspace** (shared by all its sessions) | workspace-row board icon → right-sidebar board → project picker | `state.json` in your DSH profile |
 | Issue | one **session** | an Issue card/row **Bind** button, an **agent tool**, or paste a link in the `issue` tab | `state.json` in your DSH profile |
 
-The `projects` tab reads the Project's items once (`GET /items`) and derives everything on the
-client: the swimlane columns from the Projects v2 `Status` field, the milestone filter from the
-`milestone` field, the text/status filters and their counts. Clicking an Issue/PR **card body or list
-row** opens its GitHub page in your **system default browser** as a new tab (it does **not** bind); the
-explicit **Bind** action on the card/row binds that Issue to the current session, switches to the
-`issue` tab and adds the issue subtitle under the session title. `issue` renders the title, state,
-body, labels and comments. Neither tab replaces the shipped views: remove the plugin and the header
-returns to normal.
+The board reads the Project's items once (`GET /items`) and derives everything on the client: the
+swimlane columns from the Projects v2 `Status` field, the milestone filter from the `milestone` field,
+the text/status filters and their counts. It opens as a right-sidebar tab from the board icon in the
+workspace row of the left sidebar (v1.0.2; it was a conversation-header `projects` tab through
+v1.0.1), so it stays visible next to the conversation instead of taking a header slot. Clicking an
+Issue/PR **card body or list row** opens its GitHub page in your **system default browser** as a new
+tab (it does **not** bind); the explicit **Bind** action on the card/row binds that Issue to the
+current session, updates the `issue` tab and adds the issue subtitle under the session title. `issue`
+renders the title, state, body, labels and comments. Neither the board nor the `issue` view replaces
+the shipped views: remove the plugin and the interface returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
@@ -92,7 +141,9 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
 > Historical: these describe the 0.x behavior at the time. **1.0.1 supersedes** the sidebar click and
 > link-opening behavior below — Issue links now open in the system default browser, and the sidebar
-> subtitle is non-interactive (row clicks open the session).
+> subtitle is non-interactive (row clicks open the session). **1.0.2** additionally moved the board
+> out of the conversation header into the right sidebar; any `projects` tab references below are
+> pre-1.0.2 history.
 
 ### What's new in 0.4.1 — issue subtitle in the sidebar session tree
 
@@ -182,43 +233,46 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
 ## Screens
 
+All screenshots below are the **v1.0.2 authoritative e2e set** (refreshed 2026-10-29: fixture 18/18 and
+real 19/19 stages PASS, console 0/0/0). `01`–`09` and `12`–`14` are 1280×800 harness captures, `11` is
+the maximized right-sidebar pane at **2200×1300**, `10` is a manual real-Desktop capture and `15` is
+regenerated by the post-publish release smoke. Stage definitions and the screenshot list live in
+[`scripts/e2e/README.md`](scripts/e2e/README.md).
+
 | | |
 |---|---|
-| ![projects tab, unbound](artifacts/screenshots/02-projects-empty.png) | ![project picker](artifacts/screenshots/03-projects-picker.png) |
-| Unbound workspace: pick a Project | Project picker: grouped by owner, filterable |
-| ![swimlane board](artifacts/screenshots/04-projects-board.png) | ![list view](artifacts/screenshots/05-projects-list.png) |
-| Real Project #9: status colors, and the empty `No status` lane hidden (4 lanes: TODO 27 / In Progress 1 / In Review 1 / Done 166 = 195) | List view: status-colored sections + chips |
-| ![milestone filter](artifacts/screenshots/06-projects-milestone.png) | ![issue empty state](artifacts/screenshots/07-issue-empty.png) |
-| Milestone `v1.2.0` filter active (195→19); `No status` stays hidden | Unbound session: choose from a Project or paste a link |
-| ![issue detail](artifacts/screenshots/08-issue-detail.png) | ![issue comments](artifacts/screenshots/09-issue-comments.png) |
-| Bound Issue: green Open badge, sticky header, body, labels | Comments with author, relative time and links |
-| ![wide layout](artifacts/screenshots/11-projects-wide.png) | |
-| 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed) | |
-| ![external browser](artifacts/screenshots/12-external-open.png) | ![issue subtitle](artifacts/screenshots/13-issue-subtitle.png) |
-| Clicking an Issue card body opens GitHub in your **system default browser, new tab** — **no binding** is created. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens it in the system browser) |
-| ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | |
-| Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41px, no horizontal overflow); the subtitle is **non-interactive** — clicking the row opens that session; binding changes sync via `/bindings` (~4 s poll + binding event) | |
-| ![Published install](artifacts/screenshots/15-published-install.png) | |
-| Published `1.0.1` installed from npm into a clean `web` profile: the fresh session header shows `对话 / 轨迹 / projects / issue` (`15-published-install.png`, release smoke) | |
+| ![session header](artifacts/screenshots/01-tabs.png) | ![unbound sidebar board](artifacts/screenshots/02-projects-empty.png) |
+| Conversation header keeps `对话 / 轨迹 / issue` (the `projects` tab is gone); the workspace row carries the board icon. | Clicking the board icon opens the right-sidebar `项目` pane: unbound state with **选择 Project**. |
+| ![project picker](artifacts/screenshots/03-projects-picker.png) | ![swimlane board](artifacts/screenshots/04-projects-board.png) |
+| Project picker inside the right-sidebar pane (grouped by owner, filterable). | Real Project #9 board inside the pane: status colors, empty `No status` lane hidden (4 lanes: TODO 27 / In Progress 1 / In Review 1 / Done 166 = 195). |
+| ![list view](artifacts/screenshots/05-projects-list.png) | ![milestone filter](artifacts/screenshots/06-projects-milestone.png) |
+| List view: status-colored sections + chips (inside the pane). | Milestone `v1.2.0` filter active (195→19); `No status` stays hidden. |
+| ![issue empty state](artifacts/screenshots/07-issue-empty.png) | ![issue detail](artifacts/screenshots/08-issue-detail.png) |
+| Unbound session: choose from the board or paste a link. | Bound Issue: green Open badge, sticky header, body, labels. |
+| ![issue comments](artifacts/screenshots/09-issue-comments.png) | ![maximized sidebar board](artifacts/screenshots/11-projects-wide.png) |
+| Comments with author, relative time and links. | **2200×1300**: maximized right-sidebar board — pane 2199 px = 100 % of the window, `.ghp-page` 2191 px = 99.6 % of the pane, lanes equal. |
+| ![external browser](artifacts/screenshots/12-external-open.png) | ![header subtitle](artifacts/screenshots/13-issue-subtitle.png) |
+| Clicking an Issue card body opens GitHub in your **system default browser, new tab** — **no binding** is created. Bind via the card button. | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis; click opens it in the system browser). |
+| ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | ![manual Desktop capture](artifacts/screenshots/10-desktop-tabs.png) |
+| Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41 px, no horizontal overflow); the subtitle is **non-interactive** — clicking the row opens that session; bindings sync via `/bindings`. | Manual capture of the **real Desktop app** after install: three bound rows with their second-line issue subtitles (`#240 …` / `#289 …` / `#240 …`, clipped inside the row) and a clean footer/avatar area (`1438×1370`, sha256 `3860f7b9…988c`; header tabs `对话 / 轨迹 / issue`). |
+| ![published install](artifacts/screenshots/15-published-install.png) | |
+| Regenerated by the post-publish release smoke (the current file is the v1.0.1 history image until then). | |
 
-Screenshots 01–09 and 12–15 are captured by the isolated e2e harness in **real-host mode** against
-live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `13` is the
-conversation-header subtitle, `14` the sidebar session-row subtitle (v0.4.1), and `15` the
-clean-profile install of the published npm release (1.0.1). `12` shows the system-browser open
-(v1.0.1). `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
-layout. `10-desktop-tabs.png` is different: it is a manual **1438×1370** capture of the **real Desktop app**
-after the v1.0.1 install (sha256 `3860f7b9…988c`), showing three bound rows in the left sidebar with
-their second-line issue subtitles (`#240 …` / `#289 …` / `#240 …`, clipped inside the row) and a clean
-footer/avatar area — no stray scrollbar rectangle. This frame has no conversation-header subtitle;
-`13-issue-subtitle.png` is the header-subtitle evidence. The four tabs are visible:
-
-![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
+`01`–`09` and `12`–`14` are captured by the isolated e2e harness in **real-host mode** against live
+`gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `11` is the same
+harness at **2200×1300** with the right sidebar maximized. `10-desktop-tabs.png` is a manual capture of
+the real Desktop app (not harness output). `15-published-install.png` is regenerated after the v1.0.2
+publish, so it shows the previous release until then. The board/picker shots (`02`–`06`, `12`) capture
+the v1.0.2 right-sidebar pane; `07`/`08`/`13`/`14` are captured with the right sidebar collapsed (plain
+conversation), as before.
 
 ## Requirements
 
 - **DeepSeek Harness 0.2.1-rc.3** (Web or Desktop; this is the version tested — see
   [Compatibility](#compatibility)). The plugin uses the `conversation.view` slot and the session
-  standard props, which are host APIs and may change between DSH versions.
+  standard props, plus (for the v1.0.2 right-sidebar board) the optional `sidebarRight` /
+  `sidebarRightTabs` client services and guarded left-sidebar DOM decoration. These are host APIs and
+  may change between DSH versions.
 - **GitHub CLI (`gh`)** — a release whose `gh project` commands support GitHub Projects v2 with JSON
   output (`gh project list --format json`, `gh project item-list --format json`); verified with
   **2.96.0** (2026-07-02). It must be on the `PATH` of the DSH process, or configured via
@@ -237,7 +291,7 @@ footer/avatar area — no stray scrollbar rectangle. This frame has no conversat
 
 ## Install
 
-The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.1`** (`latest` = 1.0.1).
+The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.2`** (`latest` = 1.0.2).
 Install it into the DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
 `web` / `headless` if that is what you run). Installing needs write access to the profile directory.
 
@@ -248,8 +302,8 @@ and the plugin icon.
 **CLI:**
 
 ```sh
-# install the published release into the desktop profile (pin @1.0.1)
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.1
+# install the published release into the desktop profile (pin @1.0.2)
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.2
 
 # verify it is installed in that profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -260,7 +314,8 @@ dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 
 Installing records the package in the profile and appends it to `dsh.profile.bundles`; the running
 Desktop app hot-recomposes and loads both halves without a restart (the window reloads and may return
-to the workspace home; sessions are untouched — reopen a session and the tabs are there).
+to the workspace home; sessions are untouched — reopen a session and its `issue` tab and the sidebar
+board entry are there).
 
 **Development — local checkout:** to run from this repository instead of npm, link the checkout:
 
@@ -272,11 +327,13 @@ That records a `link:` dependency (the `link:` prefix may be omitted). Use this 
 installed users should use the npm package above.
 
 > The registry also lists an internal staging version (`0.0.0-stage`). Install the release explicitly
-> with `@1.0.1`; `latest` already points at 1.0.1.
+> with `@1.0.2`; `latest` already points at 1.0.2.
 
 ## Use
 
-1. Open a session and click the `projects` tab.
+1. Open a session and click the small **board icon** in its workspace row in the left sidebar (or, in
+   an unbound `issue` tab, click **从项目选择**). The board opens as a tab in the **right sidebar**;
+   clicking the workspace icon again focuses that tab instead of opening a duplicate.
 2. **Choose a Project** → pick a Project from your account and organizations (or bind manually by
    `owner` + `number` when `gh project list` can't see it).
 3. The bound Project opens as a **swimlane board** (default): scan the five status columns, or click
@@ -285,8 +342,7 @@ installed users should use the npm package above.
    filter — counts update in both board and list.
 5. Click a card body/list row to open the Issue or PR in your **system default browser** as a new tab
    (this does not change the binding). Click the card/row **Bind** button to bind the Issue to the
-   current session — the view switches to the `issue` tab and the issue subtitle appears under the
-   session title.
+   current session — the `issue` tab updates and the issue subtitle appears under the session title.
 6. Alternatively, in an unbound `issue` tab paste a GitHub Issue URL or `owner/repo#123` and click
    **Bind**. Or just ask the model: “bind https://github.com/acme/web/issues/228 to this session”,
    “switch this session to acme/web#240”, “unbind this session's Issue” (agent tools).
@@ -358,10 +414,11 @@ so restate every key you need.
 | `gh-auth` (“run gh auth login first”) | Not logged in, or missing `project` scope | `gh auth login`; `gh auth refresh -s project` (add `read:org` for org Projects) |
 | `gh-failed` (“GitHub read failed”) | Network, GitHub error, or a rate limit | Retry; check `gh project list --owner <you>` in a terminal; wait if rate-limited |
 | `timeout` | Slow network / very large Project | Retry; raise `requestTimeoutMs` |
-| `projects` tab says “This session is not in a workspace” | Project bindings belong to a workspace; this session has none | Move the session into a workspace, then bind |
+| Board (or the `issue` tab's 从项目选择) says “This session is not in a workspace” | Project bindings belong to a workspace; this session has none | Move the session into a workspace, then bind |
+| Board icon missing in workspace rows | Host build without the `sidebarRight` / `sidebarRightTabs` client services, or a changed sidebar DOM | Update DSH/plugin; the `issue` tab and subtitles keep working; see [Known limitations](#known-limitations) |
 | “This is a Pull Request” | The bound reference points at a PR, not an Issue | Bind the Issue instead; PR rows open on GitHub |
-| Desktop returns to the workspace home right after install | Normal HMR profile recompose | Reopen a session; its data is untouched and the tabs are there |
-| Tabs missing after install | Bundle not enabled in the profile, or DSH not recomposed | Check `dsh.profile.bundles`, enable via plugin manager, reload |
+| Desktop returns to the workspace home right after install | Normal HMR profile recompose | Reopen a session; its data is untouched and the `issue` tab + sidebar board entry are there |
+| Tabs/board entry missing after install | Bundle not enabled in the profile, or DSH not recomposed | Check `dsh.profile.bundles`, enable via plugin manager, reload |
 | A “gh CLI unavailable” warning flashes right after opening | Cold start: `/config` never waits for `gh` and returns the `error:"pending"` placeholder while a background probe runs | Harmless; it clears once the probe finishes (read `/config` again or reopen the tab) |
 | Stale list | 60-second cache | Click **Refresh** |
 | “Binding save failed” | `statePath` unwritable (permissions/disk) | Check the path and permissions; or set `statePath` to a writable file |
@@ -385,7 +442,7 @@ Layout:
 | `index.js` | Cordis host plugin: HTTP API, request gating, cache/single-flight |
 | `github.js` | `gh` CLI adapter, normalizers, Issue-ref parser |
 | `state.js` | Durable binding store (atomic JSON writes) |
-| `client.js` | Browser half: `conversation.view` entries, React views, safe Markdown renderer |
+| `client.js` | Browser half: `conversation.view` entry (`issue`) + right-sidebar board tab, workspace-row entry icon, React views, safe Markdown renderer |
 | `dev/mock-host.js` | Contract-shaped mock host for UI/e2e without `gh` |
 | `test/` | Host unit tests + captured `gh` fixtures |
 | `artifacts/screenshots/` | e2e acceptance screenshots |
@@ -400,7 +457,7 @@ The browser half talks to the plugin over a loopback-only JSON API (prefix
 |---|---|
 | `GET /health` | `gh` availability |
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (never waits on `gh`) |
-| `GET /bindings` | every durable session→Issue binding (local only; polled ~4 s for the sidebar subtitle) |
+| `GET /bindings` | every durable session→Issue and workspace→Project binding (local only; polled ~4 s for the sidebar subtitle and workspace entry icon) |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner (SWR, `stale` flag) |
 | `GET /items?owner=&number=&refresh=1` | one Project's items (paginated GraphQL, `stale` flag) |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments (`stale` flag) |
@@ -420,18 +477,19 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | **1.0.1** (bug-fix release on top of 1.0.0; functionality otherwise unchanged from 0.4.1) |
+| Plugin version | **1.0.2** (right-sidebar project board + ProjectPicker replay fix on top of 1.0.1) |
 | Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v1.0.1 is **live on npm 1.0.1** (`latest`) with clean-profile install smoke **PASS** (registry install into a temp `web` profile, `/plugin/github-projects/health` → 200, four tabs, console 0/0/0); fixture 17/17 + real 18/18 e2e stages PASS, 91/91 host tests, console 0/0/0; **15 screenshots**; external-open (1 `window.open`, no sidebar browser) and sidebar non-interactive/no-overflow assertions verified — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v1.0.2 pre-publish gate **GREEN**: frozen `client.js` sha256 `684f2953…384e2`; host tests **92/92**; independent picker-replay verifier **6/6 checks**; authoritative repo-e2e **PASS** — fixture **18/18** executed stages (run dir `2026-10-28T22-18-34-867Z`), real **19/19** stages (run dir `2026-10-28T22-20-03-025Z`), console **0/0/0**, new `project-picker-replay` stage PASS, refreshed authoritative screenshot set `01`–`14` (`11` at 2200×1300, `10` manual). Remaining post-publish only: npm 1.0.2 live (dist-tag `latest`), clean-profile release-smoke install and tag/release confirmation — recorded in [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) after publication. v1.0.1 shipped with clean-profile install smoke **PASS**, fixture 17/17 + real 18/18 e2e stages PASS, 91/91 host tests and 15 screenshots. |
 
 `engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
-range — or one that changes the `conversation.view` slot, session standard props, or the header/sidebar
-DOM anchors — may require a plugin update.
+range — or one that changes the `conversation.view` slot, session standard props, the
+`sidebarRight` / `sidebarRightTabs` client services, or the workspace/session sidebar DOM anchors —
+may require a plugin update.
 
 ## Known limitations
 
@@ -442,13 +500,19 @@ DOM anchors — may require a plugin update.
   items — so the number of lanes changes with your milestone/text filters.
 - **Color is supplementary:** status/type colors are backed by text labels (dots are decorative);
   body text and titles stay neutral, and no information is conveyed by color alone.
-- **Board layout:** since 0.2.1 the page has no width cap — board, list and issue pages fill the
-  conversation body. Columns have a 176px minimum width, so windows narrower than ~960px scroll
-  horizontally; wide windows spread the five lanes across the full width. A status the board doesn't
-  know gets its own read-only extra column on the right; an empty column keeps its header, a 0 count
-  and a “No items” placeholder.
-- **Host layout is untouched:** DSH's own composer keeps the shell's centred width; this fix only
-  widens the plugin page, not the host frame (sidebar, tab bar, composer).
+- **Board layout:** since v1.0.2 the board renders in DSH's **right sidebar**, so it adapts to that
+  narrow pane: the toolbar wraps, the board scrolls horizontally and the list stays usable. Columns
+  have a 176px minimum width. A status the board doesn't know gets its own read-only extra column on
+  the right; an empty column keeps its header, a 0 count and a “No items” placeholder. (Through
+  v1.0.1 the board was a full-width conversation tab with no page width cap; the `issue` page still
+  fills the conversation body width.)
+- **Host layout is untouched:** the right-sidebar board lives in the host's own sidebar pane; the
+  `issue` page fills the conversation body, but DSH's composer keeps the shell's centred width.
+- **Right-sidebar board needs the optional host services:** the v1.0.2 board registers a custom tab
+  through `sidebarRightTabs` and opens it through `sidebarRight.openTab`, and the workspace icon is
+  injected into `[data-row-key^="workspace:"]` rows. If a host build lacks those services the icon is
+  simply not injected (no errors) and the board cannot be opened; the `issue` tab and both subtitles
+  keep working. A DSH upgrade that changes the sidebar DOM or the custom-tab API needs re-checking.
 - **Milestone filter scope:** options and counts come from the loaded items only (capped by
   `maxProjectItems`); milestones of items beyond the cap are not listed.
 - **View mode is a local preference:** switching between board and list is remembered per client and
@@ -460,11 +524,12 @@ DOM anchors — may require a plugin update.
 - **Caps:** up to `maxProjectItems` items (GraphQL pagination stops at the cap) and `maxComments`
   comments (oldest first) per read; there is no client "load more". Long issue bodies are truncated at
   100,000 characters.
-- **Issue subtitle is host-DOM fragile in two places:** the shipped header has no subtitle slot, so
-  the plugin inserts a guarded portal row under the title; the sidebar has no slot either, so a
-  guarded decorator injects a second line into `[data-row-key^="session:"]` rows (`:has()` height
-  override + MutationObserver). If a DSH upgrade changes either DOM, that subtitle degrades to hidden
-  (no errors, nothing else breaks) and needs re-checking.
+- **Issue subtitle and workspace entry are host-DOM fragile:** the shipped header has no subtitle
+  slot, so the plugin inserts a guarded portal row under the title; the sidebar has no slot either,
+  so guarded decorators inject a second line into `[data-row-key^="session:"]` rows (`:has()` height
+  override + MutationObserver) and one board icon into `[data-row-key^="workspace:"]` rows. If a DSH
+  upgrade changes these DOMs, the subtitle/icon degrades to hidden (no errors, nothing else breaks)
+  and needs re-checking.
 - **Sidebar subtitle updates on a ~4 s poll:** the header/sidebar listen to a local `binding-changed`
   event for the plugin's own actions, but agent-tool changes may take up to ~4 s to show in the
   sidebar. Bound rows grow from 32px to ~41px while a subtitle is present; unbound rows stay 32px.

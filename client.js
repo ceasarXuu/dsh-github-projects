@@ -1,15 +1,12 @@
 // GitHub Projects — browser half.
 //
-// Two Conversation Views (`conversation.view` slot entries) for the installed
-// DSH web client (0.2.1): `projects` and `issue`.
+// One session view slot entry for the installed DSH web client (0.2.1):
+// `issue`. The workspace project board opens in DSH's right sidebar as a
+// custom tab type (v1.0.2 preview, docs/CONTRACT.md §4.7) instead.
 //
-//   projects — the GitHub Project bound to the **workspace** of the current
-//              session: a status-grouped, filterable item list. Picking an
-//              Issue binds it to the current **session** and switches to the
-//              `issue` tab.
-//   issue    — the Issue bound to the current **session**: header, body,
-//              labels and comments, rendered through a deliberately small,
-//              safe Markdown subset (React elements only — no HTML injection).
+//   issue — the Issue bound to the current **session**: header, body,
+//           labels and comments, rendered through a deliberately small,
+//           safe Markdown subset (React elements only — no HTML injection).
 //
 // Only `react` / `react-dom` from the platform module table are required. The
 // HTTP contract lives in the host half (`/plugin/github-projects`, see
@@ -256,6 +253,33 @@ window.__ModuleLoader__.load({
       } catch (_blocked) { /* popup blocked — no-op */ }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* 1d. Right-sidebar project tab (v1.0.2 preview, §4.7).               */
+    /* ------------------------------------------------------------------ */
+
+    const PROJECT_TAB_ID = '@ceasarxuu/dsh-github-projects/project'
+    const PROJECT_TAB_KIND = 'github-project'
+    let sidebarRightFace = null
+
+    /** Open (or focus) the workspace project board in DSH's right sidebar. */
+    function openProjectTab(workspaceId, options = {}) {
+      const id = textOf(workspaceId)
+      if (id === '') return false
+      const face = sidebarRightFace
+      if (face === null || face === undefined || typeof face.openTab !== 'function') return false
+      try {
+        const params = { workspaceId: id }
+        if (options.pick === true) {
+          params.pick = true
+          params.pickToken = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        }
+        face.openTab(PROJECT_TAB_KIND, { params })
+        return true
+      } catch (_openFailed) {
+        return false
+      }
+    }
+
     /** Warm `/issue` for a session's bound Issue so the tab opens instantly. */
     function prefetchIssueDetail(issue) {
       if (!isPlainObject(issue)) return
@@ -274,6 +298,8 @@ window.__ModuleLoader__.load({
 
     /** SessionId → IssueSummary for every bound session (local state only). */
     const sessionIssueBindings = new Map()
+    /** WorkspaceId → ProjectSummary for every bound workspace (v1.0.2). */
+    const workspaceProjectBindings = new Map()
     const bindingMapListeners = new Set()
     let bindingMapInflight = null
 
@@ -281,6 +307,12 @@ window.__ModuleLoader__.load({
       if (typeof sessionId !== 'string' || sessionId === '') return null
       const issue = sessionIssueBindings.get(sessionId)
       return isPlainObject(issue) ? issue : null
+    }
+
+    function workspaceBindingOf(workspaceId) {
+      if (typeof workspaceId !== 'string' || workspaceId === '') return null
+      const project = workspaceProjectBindings.get(workspaceId)
+      return isPlainObject(project) ? project : null
     }
 
     function sameIssueSummary(left, right) {
@@ -291,6 +323,15 @@ window.__ModuleLoader__.load({
         && left.title === right.title
         && left.url === right.url
         && left.state === right.state
+    }
+
+    function sameProjectSummary(left, right) {
+      if (left === null || left === undefined) return right === null || right === undefined
+      if (right === null || right === undefined) return false
+      return left.owner === right.owner
+        && left.number === right.number
+        && left.title === right.title
+        && left.url === right.url
     }
 
     function notifyBindingMapListeners() {
@@ -304,36 +345,71 @@ window.__ModuleLoader__.load({
       return () => { bindingMapListeners.delete(listener) }
     }
 
-    /** Replace the map from a `/bindings.sessions` object; notify only on change. */
-    function applyBindingsSnapshot(sessions) {
-      const next = new Map()
+    /** Replace both maps from `/bindings`; notify once when either changed. */
+    function applyBindingsSnapshot(sessions, workspaces) {
+      const nextSessions = new Map()
       if (isPlainObject(sessions)) {
         for (const [sessionId, issue] of Object.entries(sessions)) {
-          if (typeof sessionId === 'string' && sessionId !== '' && isPlainObject(issue)) next.set(sessionId, issue)
+          if (typeof sessionId === 'string' && sessionId !== '' && isPlainObject(issue)) nextSessions.set(sessionId, issue)
         }
       }
-      let changed = next.size !== sessionIssueBindings.size
+      const nextWorkspaces = new Map()
+      if (isPlainObject(workspaces)) {
+        for (const [workspaceId, project] of Object.entries(workspaces)) {
+          if (typeof workspaceId === 'string' && workspaceId !== '' && isPlainObject(project)) nextWorkspaces.set(workspaceId, project)
+        }
+      }
+      let changed = nextSessions.size !== sessionIssueBindings.size || nextWorkspaces.size !== workspaceProjectBindings.size
       if (!changed) {
-        for (const [sessionId, issue] of next) {
+        for (const [sessionId, issue] of nextSessions) {
           if (!sameIssueSummary(sessionIssueBindings.get(sessionId) ?? null, issue)) {
             changed = true
             break
           }
         }
       }
+      if (!changed) {
+        for (const [workspaceId, project] of nextWorkspaces) {
+          if (!sameProjectSummary(workspaceProjectBindings.get(workspaceId) ?? null, project)) {
+            changed = true
+            break
+          }
+        }
+      }
       sessionIssueBindings.clear()
-      for (const [sessionId, issue] of next) sessionIssueBindings.set(sessionId, issue)
+      for (const [sessionId, issue] of nextSessions) sessionIssueBindings.set(sessionId, issue)
+      workspaceProjectBindings.clear()
+      for (const [workspaceId, project] of nextWorkspaces) workspaceProjectBindings.set(workspaceId, project)
       if (changed) notifyBindingMapListeners()
       return changed
     }
 
+    function sessionBindingsObject() {
+      const sessions = {}
+      for (const [sessionId, issue] of sessionIssueBindings) sessions[sessionId] = issue
+      return sessions
+    }
+
+    function workspaceBindingsObject() {
+      const workspaces = {}
+      for (const [workspaceId, project] of workspaceProjectBindings) workspaces[workspaceId] = project
+      return workspaces
+    }
+
     /** Optimistic local update from our own successful bind/unbind writes. */
     function setSessionIssueBinding(sessionId, issue) {
-      const next = {}
-      for (const [id, value] of sessionIssueBindings) next[id] = value
-      if (issue === null || issue === undefined) delete next[sessionId]
-      else next[sessionId] = issue
-      applyBindingsSnapshot(next)
+      const sessions = sessionBindingsObject()
+      if (issue === null || issue === undefined) delete sessions[sessionId]
+      else sessions[sessionId] = issue
+      applyBindingsSnapshot(sessions, workspaceBindingsObject())
+    }
+
+    function setWorkspaceProjectBinding(workspaceId, project) {
+      if (typeof workspaceId !== 'string' || workspaceId === '') return
+      const workspaces = workspaceBindingsObject()
+      if (project === null || project === undefined) delete workspaces[workspaceId]
+      else workspaces[workspaceId] = project
+      applyBindingsSnapshot(sessionBindingsObject(), workspaces)
     }
 
     /** Refresh the binding map from GET /bindings (single-flight, no gh). */
@@ -341,7 +417,7 @@ window.__ModuleLoader__.load({
       if (bindingMapInflight !== null) return bindingMapInflight
       const promise = apiGet('/bindings')
         .then((data) => {
-          applyBindingsSnapshot(isPlainObject(data) ? data.sessions : null)
+          applyBindingsSnapshot(isPlainObject(data) ? data.sessions : null, isPlainObject(data) ? data.workspaces : null)
           return sessionIssueBindings
         })
         .finally(() => {
@@ -393,6 +469,8 @@ window.__ModuleLoader__.load({
       'common.unbindFailed': '解绑失败',
       'common.refreshFailed': '刷新失败',
 
+      'projects.sidebarTab': '项目',
+      'projects.openEntry': '打开 GitHub Project',
       'projects.unboundTitle': '绑定 GitHub Project',
       'projects.unboundText': '将工作区关联到一个 GitHub Project，之后每个会话都能在这里浏览它按状态分组的 Issue、PR 与 Draft。',
       'projects.unboundAction': '选择 Project',
@@ -448,7 +526,7 @@ window.__ModuleLoader__.load({
       'issue.refAria': 'Issue 链接或 owner/repo#123',
       'issue.invalidRef': '请输入有效的 Issue 链接或 owner/repo#123',
       'issue.bindFailed': '绑定 Issue 失败',
-      'issue.unboundHint': '也可以切到 projects 页签，在列表里点击 Issue 的「绑定」。',
+      'issue.unboundHint': '也可以点击工作区行右侧的项目图标，在右侧栏看板里绑定 Issue。',
       'subtitle.openAria': '在浏览器中打开 {ref}',
       'card.openAria': '在浏览器中打开：{title}',
       'issue.commentCount': '{count} 条评论',
@@ -508,6 +586,8 @@ window.__ModuleLoader__.load({
       'common.unbindFailed': 'Failed to unbind',
       'common.refreshFailed': 'Failed to refresh',
 
+      'projects.sidebarTab': 'Project',
+      'projects.openEntry': 'Open GitHub Project',
       'projects.unboundTitle': 'Bind a GitHub Project',
       'projects.unboundText': 'Link this workspace to a GitHub Project; every session can then browse its Issues, PRs and Drafts grouped by status here.',
       'projects.unboundAction': 'Choose a Project',
@@ -563,7 +643,7 @@ window.__ModuleLoader__.load({
       'issue.refAria': 'Issue URL or owner/repo#123',
       'issue.invalidRef': 'Enter a valid Issue URL or owner/repo#123',
       'issue.bindFailed': 'Failed to bind the Issue',
-      'issue.unboundHint': 'You can also switch to the projects tab and click “Bind” on an Issue.',
+      'issue.unboundHint': 'You can also click the project icon on a workspace row and bind from the board in the right sidebar.',
       'subtitle.openAria': 'Open {ref} in the browser',
       'card.openAria': 'Open in browser: {title}',
       'issue.commentCount': '{count} comments',
@@ -1366,7 +1446,46 @@ window.__ModuleLoader__.load({
         }))
     }
 
+    /** `/config` answers `gh.error === 'pending'` while the first gh probe runs. */
+    function isPendingHealth(gh) {
+      return isPlainObject(gh) && gh.available === false && textOf(gh.error) === 'pending'
+    }
+
+    /**
+     * While health is still pending, re-read the cheap local `/config` once or
+     * twice (~1.5s) so the real gh status replaces the placeholder; the banner
+     * stays hidden until a real failure arrives.
+     */
+    function useGhPendingRetry(gh, sessionId, workspaceId, setGh) {
+      const attemptsRef = useRef(0)
+      useEffect(() => {
+        if (!isPendingHealth(gh)) {
+          attemptsRef.current = 0
+          return undefined
+        }
+        if (attemptsRef.current >= 2) return undefined
+        let cancelled = false
+        let timer = 0
+        const tick = () => {
+          if (cancelled) return
+          attemptsRef.current += 1
+          readConfigNow(sessionId, workspaceId)
+            .then((data) => {
+              if (cancelled || !isPlainObject(data) || !isPlainObject(data.gh)) return
+              setGh(data.gh)
+            })
+            .catch(() => { /* keep suppressing the placeholder banner */ })
+        }
+        timer = window.setTimeout(tick, 1500)
+        return () => {
+          cancelled = true
+          window.clearTimeout(timer)
+        }
+      }, [gh, sessionId, workspaceId, setGh])
+    }
+
     function GHWarning({ t, gh }) {
+      if (isPendingHealth(gh)) return null
       if (!isPlainObject(gh) || gh.available !== false) return null
       const detail = textOf(gh.error)
       return h('div', { className: 'ghp-banner ghp-banner-warn', role: 'status' },
@@ -1399,7 +1518,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Contain the view inside the conversation viewport. The shipped shell
+     * Contain the view inside the conversation body viewport. The shipped shell
      * renders Views inside a column whose scroll parent also hosts the
      * composer; measuring that pair once gives the view its own fixed-height
      * scrollport (falling back to the CSS `height: 100%` when the shell does
@@ -1978,6 +2097,222 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* ------------------------------------------------------------------ */
+    /* 8c. Workspace project entry + right-sidebar board (v1.0.2 preview). */
+    /* ------------------------------------------------------------------ */
+
+    const SVG_NS = 'http://www.w3.org/2000/svg'
+
+    function workspaceEntryGlyph() {
+      const svg = document.createElementNS(SVG_NS, 'svg')
+      svg.setAttribute('viewBox', '0 0 16 16')
+      svg.setAttribute('width', '14')
+      svg.setAttribute('height', '14')
+      svg.setAttribute('fill', 'none')
+      svg.setAttribute('stroke', 'currentColor')
+      svg.setAttribute('stroke-width', '1.3')
+      svg.setAttribute('aria-hidden', 'true')
+      svg.setAttribute('focusable', 'false')
+      const bars = [
+        { x: '2.2', y: '2.4', width: '3.2', height: '11.2' },
+        { x: '6.4', y: '2.4', width: '3.2', height: '7.4' },
+        { x: '10.6', y: '2.4', width: '3.2', height: '9.4' },
+      ]
+      for (const bar of bars) {
+        const rect = document.createElementNS(SVG_NS, 'rect')
+        rect.setAttribute('x', bar.x)
+        rect.setAttribute('y', bar.y)
+        rect.setAttribute('width', bar.width)
+        rect.setAttribute('height', bar.height)
+        rect.setAttribute('rx', '1')
+        svg.appendChild(rect)
+      }
+      return svg
+    }
+
+    function workspaceEntryNodeFor(t) {
+      const node = document.createElement('button')
+      node.type = 'button'
+      node.className = 'ghp-workspace-entry'
+      node.setAttribute('data-ghp-workspace-entry', '')
+      node.setAttribute('data-ghp-workspace-entry-bound', '0')
+      node.setAttribute('title', t('projects.openEntry'))
+      node.setAttribute('aria-label', t('projects.openEntry'))
+      node.appendChild(workspaceEntryGlyph())
+      node.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const workspaceId = node.__ghpWorkspaceId
+        if (typeof workspaceId === 'string' && workspaceId !== '') openProjectTab(workspaceId)
+      })
+      node.__ghpWorkspaceId = ''
+      return node
+    }
+
+    function removeWorkspaceEntries() {
+      for (const node of document.querySelectorAll('[data-ghp-workspace-entry]')) node.remove()
+    }
+
+    /**
+     * Guarded workspace-row decorator (§4.7): one always-visible project icon
+     * before the hover actions; clicking opens the right-sidebar board. Installed
+     * only when sidebarRight/sidebarRightTabs are available.
+     */
+    function installWorkspaceEntries(ctx, t) {
+      ctx.effect(() => {
+        let stopped = false
+        let scheduled = false
+        let observer = null
+        let observedTree = null
+
+        const findTree = () => {
+          const sampleRow = document.querySelector('[data-row-key^="workspace:"]')
+          if (sampleRow === null) return null
+          const tree = sampleRow.closest('[role="tree"]')
+          if (tree !== null) return tree
+          const parent = sampleRow.parentElement
+          return parent === null ? null : parent.parentElement ?? parent
+        }
+
+        const ensureObserver = () => {
+          if (stopped) return
+          if (observedTree !== null && observedTree.isConnected) return
+          if (observer === null) observer = new MutationObserver(() => schedule())
+          observer.disconnect()
+          observedTree = findTree()
+          if (observedTree !== null) observer.observe(observedTree, { childList: true, subtree: true })
+        }
+
+        const actionSpanOf = (row) => {
+          const children = [...row.children]
+          for (let index = children.length - 1; index >= 0; index -= 1) {
+            const child = children[index]
+            if (child instanceof HTMLElement && child.tagName === 'SPAN' && child.querySelector('button') !== null) return child
+          }
+          return null
+        }
+
+        const sweep = () => {
+          scheduled = false
+          if (stopped) return
+          if (sidebarRightFace === null || sidebarRightFace === undefined) {
+            removeWorkspaceEntries()
+            return
+          }
+          ensureObserver()
+          const rows = document.querySelectorAll('[data-row-key^="workspace:"]')
+          for (const row of rows) {
+            if (!(row instanceof HTMLElement)) continue
+            const rowKey = row.getAttribute('data-row-key') ?? ''
+            if (!rowKey.startsWith('workspace:')) continue
+            const workspaceId = rowKey.slice('workspace:'.length)
+            const existing = row.querySelector(':scope > [data-ghp-workspace-entry]')
+            if (workspaceId === '' || workspaceId === 'ungrouped') {
+              if (existing !== null) existing.remove()
+              continue
+            }
+            const actions = actionSpanOf(row)
+            if (actions === null) continue
+            let node = existing
+            if (node === null) {
+              node = workspaceEntryNodeFor(t)
+              actions.parentElement.insertBefore(node, actions)
+            }
+            node.__ghpWorkspaceId = workspaceId
+            const bound = workspaceBindingOf(workspaceId) === null ? '0' : '1'
+            if (node.getAttribute('data-ghp-workspace-entry-bound') !== bound) {
+              node.setAttribute('data-ghp-workspace-entry-bound', bound)
+            }
+          }
+        }
+
+        const schedule = () => {
+          if (stopped || scheduled) return
+          scheduled = true
+          window.requestAnimationFrame(sweep)
+        }
+
+        schedule()
+        const timer = window.setInterval(() => { ensureObserver(); schedule() }, 1500)
+        const unsubscribe = subscribeBindingMap(schedule)
+        const offEvent = onBindingChanged(schedule)
+        window.addEventListener('resize', schedule)
+        return () => {
+          stopped = true
+          if (observer !== null) observer.disconnect()
+          window.clearInterval(timer)
+          unsubscribe()
+          offEvent()
+          window.removeEventListener('resize', schedule)
+          removeWorkspaceEntries()
+        }
+      }, 'github-projects: workspace project entries')
+    }
+
+    /**
+     * Body of the keyed `sidebar.right.pane.tab` seat: the existing projects view
+     * inside the right sidebar, driven by the tab's navigation params.
+     */
+    function SidebarProjectView(props) {
+      const { t, sessionId, useTabInfo } = props
+      const tabInfo = typeof useTabInfo === 'function' ? useTabInfo() : null
+      const tab = isPlainObject(tabInfo) && isPlainObject(tabInfo.tab) ? tabInfo.tab : null
+      const navigation = tab !== null && isPlainObject(tab.navigation) ? tab.navigation : null
+      const params = isPlainObject(navigation) && isPlainObject(navigation.params) ? navigation.params : {}
+      const workspaceId = textOf(params.workspaceId)
+      const pick = params.pick === true
+      const pickToken = textOf(params.pickToken)
+      const pickKey = pick ? (pickToken === '' ? 'pick' : pickToken) : ''
+      const paneId = isPlainObject(tabInfo) && isPlainObject(tabInfo.panel) ? textOf(tabInfo.panel.id) : ''
+      const tabActions = tab !== null && isPlainObject(tab.actions) ? tab.actions : null
+      // The first render must already know about the requested picker, otherwise
+      // consuming the intent before ProjectsView mounts would swallow it.
+      const [viewRequest, setViewRequest] = useState(() => (pick ? { view: 'github-projects', focus: 'pick' } : null))
+      const handledPickRef = useRef(pickKey)
+      const consumedPickRef = useRef('')
+      const completeViewRequest = useCallback(() => {}, [])
+
+      /** Clear the one-shot `pick` intent from the tab navigation (fix A). */
+      const consumePick = useCallback(() => {
+        if (tabActions === null || typeof tabActions.openTab !== 'function') return false
+        try {
+          tabActions.openTab(PROJECT_TAB_KIND, {
+            ...(paneId === '' ? {} : { paneId }),
+            params: { workspaceId },
+            revealIfOpened: false,
+          })
+          return true
+        } catch (_consumeFailed) {
+          return false
+        }
+      }, [tabActions, paneId, workspaceId])
+
+      useEffect(() => {
+        if (!pick) return
+        const key = pickToken === '' ? 'pick' : pickToken
+        if (handledPickRef.current !== key) {
+          // A newer explicit request: capture it before clearing navigation so
+          // this picker still opens even if the consume call re-renders us.
+          handledPickRef.current = key
+          setViewRequest({ view: 'github-projects', focus: 'pick' })
+        }
+        if (consumedPickRef.current !== key && consumePick()) consumedPickRef.current = key
+      }, [pick, pickToken, workspaceId, consumePick])
+
+      return h('div', { className: 'ghp-sidebar-project', 'data-ghp-sidebar-project': workspaceId === '' ? undefined : workspaceId },
+        h(ProjectsView, {
+          key: workspaceId,
+          sessionId,
+          t,
+          workspaceIdOverride: workspaceId,
+          openView: null,
+          completeViewRequest,
+          viewRequest,
+          useWorkspaces: null,
+          sidebar: true,
+        }))
+    }
+
     /* 8. `projects` view.                                                 */
     /* ------------------------------------------------------------------ */
 
@@ -2366,11 +2701,11 @@ window.__ModuleLoader__.load({
         h('p', { className: 'ghp-empty-text' }, t('projects.unboundText')),
         h('div', { className: 'ghp-empty-actions' },
           h(Button, { variant: 'primary', onClick: onChoose }, t('projects.unboundAction'))),
-        h('p', { className: 'ghp-empty-hint' },
-          title === ''
-            ? t('projects.workspaceHint', { title: '—' })
-            : t('projects.workspaceHint', { title }),
-          path === '' ? null : h('span', { className: 'ghp-empty-path' }, t('projects.workspacePath', { path }))))
+        title === ''
+          ? null
+          : h('p', { className: 'ghp-empty-hint' },
+            t('projects.workspaceHint', { title }),
+            path === '' ? null : h('span', { className: 'ghp-empty-path' }, t('projects.workspacePath', { path }))))
     }
 
     function ProjectsNoWorkspace({ t }) {
@@ -2380,14 +2715,28 @@ window.__ModuleLoader__.load({
         h('p', { className: 'ghp-empty-text' }, t('projects.noWorkspaceText')))
     }
 
-    function ProjectsView({ sessionId, t, openView, completeViewRequest, viewRequest, useWorkspaces }) {
+    function useNoWorkspaceSource() { return null }
+
+    function ProjectsView({
+      sessionId,
+      t,
+      openView,
+      completeViewRequest,
+      viewRequest,
+      useWorkspaces,
+      workspaceIdOverride,
+      sidebar = false,
+    }) {
       const rootRef = useRef(null)
       const viewportHeight = useContainedViewport(rootRef)
       const ackedRequestRef = useRef(null)
       const mountedRef = useRef(true)
       useEffect(() => () => { mountedRef.current = false }, [])
 
-      const workspace = useWorkspaces((snapshot) => {
+      // A mounted instance keeps one workspace source forever (hook order stays
+      // stable); the sidebar body has no workspaces service and passes an override.
+      const workspaceSource = typeof useWorkspaces === 'function' ? useWorkspaces : useNoWorkspaceSource
+      const workspace = workspaceSource((snapshot) => {
         if (snapshot === null || snapshot === undefined) return null
         const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot) ? snapshot : [])
         return items.find((candidate) => candidate !== null
@@ -2395,8 +2744,14 @@ window.__ModuleLoader__.load({
           && Array.isArray(candidate.sessionIds)
           && candidate.sessionIds.includes(sessionId)) ?? null
       })
-      const workspaceId = workspace === null || workspace === undefined ? null : textOf(workspace.workspaceId)
-      const workspacePath = workspace === null || workspace === undefined ? null : textOf(workspace.path)
+      const overrideWorkspaceId = textOf(workspaceIdOverride)
+      const workspaceId = overrideWorkspaceId !== ''
+        ? overrideWorkspaceId
+        : (workspace === null || workspace === undefined ? null : textOf(workspace.workspaceId))
+      const workspacePath = overrideWorkspaceId !== ''
+        ? null
+        : (workspace === null || workspace === undefined ? null : textOf(workspace.path))
+      const rootClass = `ghp-root${sidebar ? ' ghp-root-sidebar' : ''}`
 
       // Warm mount: paint the SWR caches immediately (no skeleton); the effects
       // below only revalidate in the background.
@@ -2420,6 +2775,7 @@ window.__ModuleLoader__.load({
         ? bootstrapConfig.session.issue
         : null))
       const [gh, setGh] = useState(() => (isPlainObject(bootstrapConfig) && isPlainObject(bootstrapConfig.gh) ? bootstrapConfig.gh : null))
+      useGhPendingRetry(gh, sessionId, workspaceId, setGh)
       const [configTick, setConfigTick] = useState(0)
       const [updating, setUpdating] = useState(() => bootstrapConfig !== null)
 
@@ -2582,6 +2938,17 @@ window.__ModuleLoader__.load({
           })
         }
         update()
+        // The right-sidebar pane slides in/out without a window resize event, so
+        // keep tracking for the first animation frames as well.
+        let disposed = false
+        let frames = 0
+        const track = () => {
+          if (disposed) return
+          update()
+          frames += 1
+          if (frames < 45) window.requestAnimationFrame(track)
+        }
+        window.requestAnimationFrame(track)
         window.addEventListener('resize', update)
         root.addEventListener('scroll', update, { passive: true })
         let observer = null
@@ -2590,6 +2957,7 @@ window.__ModuleLoader__.load({
           observer.observe(root)
         }
         return () => {
+          disposed = true
           window.removeEventListener('resize', update)
           root.removeEventListener('scroll', update)
           if (observer !== null) observer.disconnect()
@@ -2633,6 +3001,7 @@ window.__ModuleLoader__.load({
             // surfaces any read problem on its own.
           }
         }
+        setWorkspaceProjectBinding(workspaceId, nextProject)
         rememberProject(workspaceId, nextProject)
         setPickerOpen(false)
         setItemsQuery((current) => ({ n: current.n + 1, refresh: false }))
@@ -2650,6 +3019,7 @@ window.__ModuleLoader__.load({
           setProject(null)
           setSessionIssue(null)
           setSessionIssueBinding(sessionId, null)
+          setWorkspaceProjectBinding(workspaceId, null)
           setItemsState({ status: 'idle', data: null, error: null })
           reloadConfig()
           dispatchBindingChanged()
@@ -2695,15 +3065,15 @@ window.__ModuleLoader__.load({
       }, children)
 
       if (configState.status === 'no-workspace') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
+        return h('div', { className: rootClass, ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(ProjectsNoWorkspace({ t }), true))
       }
       if (configState.status === 'loading') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
+        return h('div', { className: rootClass, ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(h(ProjectsSkeleton)))
       }
       if (configState.status === 'error') {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
+        return h('div', { className: rootClass, ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(h('div', { className: 'ghp-empty' },
             h(ErrorCard, {
               t,
@@ -2714,7 +3084,7 @@ window.__ModuleLoader__.load({
       }
 
       if (!isPlainObject(project)) {
-        return h('div', { className: 'ghp-root', ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
+        return h('div', { className: rootClass, ref: rootRef, style: rootStyle, 'data-ghp-view-mode': viewMode },
           renderPage(ProjectsEmpty({ t, workspace, onChoose: () => setPickerOpen(true) }), true),
           pickerOpen
             ? h(ProjectPicker, {
@@ -3015,6 +3385,7 @@ window.__ModuleLoader__.load({
         : { status: 'loading', error: null }))
       const [summary, setSummary] = useState(() => bootstrapSummary)
       const [gh, setGh] = useState(() => (isPlainObject(bootstrapConfig) && isPlainObject(bootstrapConfig.gh) ? bootstrapConfig.gh : null))
+      useGhPendingRetry(gh, sessionId, workspaceId, setGh)
       const [configTick, setConfigTick] = useState(0)
       const [updating, setUpdating] = useState(() => bootstrapConfig !== null)
 
@@ -3218,7 +3589,7 @@ window.__ModuleLoader__.load({
             onSubmit: submitRef,
             busy: bindState.busy,
             error: bindState.error,
-            onChoose: () => openView('github-projects', 'pick'),
+            onChoose: () => openProjectTab(workspaceId, { pick: true }),
             workspaceId,
           }), true))
       }
@@ -3351,7 +3722,7 @@ window.__ModuleLoader__.load({
    theme-independent; every tint is derived with color-mix from the active
    DSH theme tokens, so light and dark both resolve correctly.
    ========================================================================== */
-.ghp-root, .ghp-overlay, .ghp-session-subtitle, .ghp-sidebar-subtitle {
+.ghp-root, .ghp-overlay, .ghp-session-subtitle, .ghp-sidebar-subtitle, .ghp-workspace-entry {
   --ghp-accent-no-status: var(--dsw-alias-label-tertiary, #8a8a8a);
   --ghp-accent-todo: var(--dsw-static-blue-500, #3b82f6);
   --ghp-accent-in-progress: var(--dsw-static-amber-500, #f59e0b);
@@ -4506,6 +4877,63 @@ a.ghp-board-card { text-decoration: none; }
   white-space: nowrap;
 }
 
+/* Workspace project entry (§4.7, v1.0.2 preview): an always-visible board icon
+   before the workspace row's hover actions. */
+.ghp-workspace-entry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #8a8a8a);
+  cursor: pointer;
+}
+.ghp-workspace-entry:hover {
+  color: var(--dsw-alias-label-secondary, #a3a3a3);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .08));
+}
+.ghp-workspace-entry:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--ghp-accent-brand, #4f7cff));
+  outline-offset: 1px;
+}
+.ghp-workspace-entry[data-ghp-workspace-entry-bound="1"] { color: var(--ghp-accent-brand); }
+.ghp-workspace-entry svg { display: block; width: 14px; height: 14px; }
+
+/* Right-sidebar project board (v1.0.2 preview, §4.7): the existing projects
+   view adapted to the narrow pane. */
+.ghp-sidebar-project {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ghp-sidebar-project > .ghp-root {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.ghp-sidebar-project .ghp-page {
+  padding: 12px 12px 16px;
+  gap: 10px;
+  min-height: 0;
+}
+.ghp-sidebar-project .ghp-page-board { min-height: 0; }
+.ghp-sidebar-project .ghp-toolbar { padding: 12px; gap: 10px; }
+.ghp-sidebar-project .ghp-toolbar-main { flex: 1 1 100%; }
+.ghp-sidebar-project .ghp-toolbar-actions { justify-content: flex-start; }
+.ghp-sidebar-project .ghp-body-board { min-height: 0; overflow-x: auto; }
+.ghp-sidebar-project .ghp-board { min-height: 200px; padding-bottom: 6px; gap: 6px; }
+.ghp-sidebar-project .ghp-board-column { min-width: 148px; }
+.ghp-sidebar-project .ghp-filters-row { gap: 8px; }
+
 /* Session issue subtitle (§4.5): a second, quieter line under the session title. */
 .ghp-session-subtitle {
   box-sizing: border-box;
@@ -4572,8 +5000,28 @@ a.ghp-board-card { text-decoration: none; }
     /* ------------------------------------------------------------------ */
 
     function apply(ctx) {
+      const t = ctx.locale.bind(NS)
       installBindingMap(ctx)
       installSidebarSubtitles(ctx)
+
+      // v1.0.2 preview: the workspace board lives in DSH's right sidebar as a
+      // custom tab type (§4.7), not as a session tab.
+      ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
+        sidebarRightFace = scope.sidebarRight
+        scope.effect(() => scope.sidebarRightTabs.register({
+          id: PROJECT_TAB_ID,
+          kind: PROJECT_TAB_KIND,
+          title: () => t('projects.sidebarTab'),
+        }), 'github-projects: right-sidebar tab type')
+        scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+          name: 'sidebar.right.pane.tab',
+          key: PROJECT_TAB_ID,
+          locale: NS,
+          inject: (sessionId) => ({ sessionId }),
+        }, SidebarProjectView)), 'github-projects: right-sidebar pane body')
+        installWorkspaceEntries(scope, t)
+        scope.effect(() => () => { sidebarRightFace = null }, 'github-projects: sidebarRight face')
+      })
 
       ctx.effect(() => {
         const tag = document.createElement('style')
@@ -4585,14 +5033,6 @@ a.ghp-board-card { text-decoration: none; }
       }, 'github-projects: stylesheet')
 
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'github-projects: dictionaries')
-
-      ctx.slots.inject('conversation.view', () => ctx.slots.register({
-        name: 'conversation.view',
-        id: 'github-projects',
-        order: 20,
-        locale: NS,
-        label: () => 'projects',
-      }, ProjectsView))
 
       // Hidden helper (renders null in the actions row) that owns the session
       // issue subtitle line under the conversation title (§4.5).

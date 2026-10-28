@@ -1,21 +1,21 @@
 # dsh-github-projects 设计文档
 
-> 把 GitHub Project 和 Issue 嵌进 DSH 会话界面：给工作区绑定一个 GitHub Project，
-> 在会话头部多出 `projects` 页签；给每个会话绑定一个 Issue，在 `issue` 页签直接读它。
+> 把 GitHub Project 和 Issue 嵌进 DSH 会话界面：给工作区绑定一个 GitHub Project，在左侧栏工作区行
+> 点看板图标、于 DSH 右侧栏浏览项目看板；给每个会话绑定一个 Issue，在 `issue` 页签直接读它。
 > 全链路只读，不写 GitHub。
 
 | 项目 | 值 |
 |---|---|
 | 插件包名 | `@ceasarxuu/dsh-github-projects`（公开 npm scoped 包） |
-| 插件版本 | **1.0.1（缺陷修复）**；首个公开发布为 1.0.0，功能与 0.4.1 一致 |
-| 发布渠道 | npm `@ceasarxuu/dsh-github-projects@1.0.1`（`latest`=1.0.1，public）；仓库 <https://github.com/ceasarXuu/dsh-github-projects> |
+| 插件版本 | **1.0.2（当前版本：右侧栏项目看板 + ProjectPicker 重放修复）**；1.0.1 为缺陷修复，首个公开发布为 1.0.0 |
+| 发布渠道 | npm `@ceasarxuu/dsh-github-projects@1.0.2`（`latest`=1.0.2，public）；仓库 <https://github.com/ceasarXuu/dsh-github-projects> |
 | 许可证 | MIT（[LICENSE](../LICENSE)） |
 | Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（包内 `locale/en.json`、`locale/zh.json`） |
 | 目标宿主 | DeepSeek Harness 0.2.1-rc.3（`engines.dsh >=0.2.1-rc.3 <0.3.0`；Desktop 与 `dsh web` 同一套客户端；唯一实测版本） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
-| 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
+| 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口；§4.7 为 v1.0.2 右侧栏看板） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v1.0.1 缺陷修复 + v1.0.0 发布门禁与 0.x 历史验收见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v1.0.2 发布前门禁 **GREEN**（fixture 18/18、real 19/19 e2e PASS，console 0/0/0；§8.9）+ v1.0.1/v1.0.0 发布门禁与 0.x 历史验收见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -47,11 +47,14 @@
 | Project | GitHub Projects v2 里的一个项目 | 保留英文，避免与"工作区项目"混淆 |
 | Issue | GitHub Issue | 保留英文；首次出现可理解为"议题" |
 | 页签（tab） | 会话头部的视图切换标签 | 出厂页签为"对话 / 轨迹" |
+| 右侧栏页签（right-sidebar tab） | DSH 右侧栏里的自定义页签 | v1.0.2 起项目看板的宿主位置；由 `sidebarRightTabs` 注册、`sidebarRight.openTab` 打开 |
 | 绑定（bind）/ 解绑（unbind） | 把 Project 记到工作区、把 Issue 记到会话，或撤销 | 只存在本地，不改变 GitHub 上的任何关系 |
 | 宿主半（host half） | 跑在 DSH 宿主 Node 进程里的插件部分 | `index.js` + `github.js` + `state.js` |
 | 浏览器半（client half） | 跑在 Web/Desktop 界面里的 React 部分 | `client.js` |
 
-页签标签保持字面量 `projects` / `issue`（小写、不翻译），这是产品决定：标签是用户请求里的原词，跟出厂页签并列时也最短。
+会话头部页签标签保持字面量 `issue`（小写、不翻译），这是产品决定：标签是用户请求里的原词，跟出厂
+页签并列时也最短。`projects` 在 v1.0.2 起不再是会话头部页签，改为右侧栏页签（标题按语言本地化为
+「项目」/ *Project*，`id`/`kind` 固定）。
 
 ---
 
@@ -71,20 +74,25 @@
 2. **会话 ↔ Issue 是任务关系。** 一次对话往往围绕一个具体 Issue 展开；用户希望绑定后随时回看标题、正文、标签和讨论，不必切浏览器，也不必把 Issue 内容复制进对话。
 3. **不能破坏现有界面。** 出厂的"对话 / 轨迹"页签是主工作区，插件页签只能追加，不能替换或遮挡。
 
-对应到数据：Project 里本来就有 Issue/PR/Draft 条目，所以 `projects` 页签天然可以当 Issue 的"选择器"；`issue` 页签则是选中之后的详情页。两个页签因此共享一套数据链路，而不是各接一套 GitHub 客户端。
+对应到数据：Project 里本来就有 Issue/PR/Draft 条目，所以项目看板天然可以当 Issue 的"选择器"；`issue`
+页签则是选中之后的详情页。两者因此共享一套数据链路，而不是各接一套 GitHub 客户端。看板在 v1.0.2
+从会话头部移到右侧栏（见 §1.13），"看板负责挑、issue 负责读"的分工不变。
 
 ### 1.3 目标（可验证）
 
 | 编号 | 目标 | 验证方式 |
 |---|---|---|
-| G1 | 会话头部在出厂页签之后出现 `projects`、`issue` 两个页签，标签为小写字面量 | e2e 断言 + 截图 `01-tabs.png` |
+| G1 | 会话头部在出厂页签之后出现插件的 `issue` 页签，标签为小写字面量 | e2e 断言 + 截图 `13-issue-subtitle.png` |
 | G2 | 工作区 → Project 绑定持久化，重开 DSH 后仍在 | 单元测试 + e2e + 检查 `state.json` |
-| G3 | `projects` 页签默认以**泳道看板**展示 Project 条目（五列固定状态，未知状态扩展列），并可切换回分组列表 | e2e 断言 + 截图 `04-projects-board.png`、`05-projects-list.png` |
-| G4 | 在泳道卡片或列表行上"绑定"一个 Issue，即可绑定到当前会话并跳到 `issue` 页签 | e2e 交互断言 |
+| G3 | 项目看板默认以**泳道看板**展示 Project 条目（五列固定状态，未知状态扩展列），并可切换回分组列表 | e2e 断言 + 截图 `04-projects-board.png`、`05-projects-list.png` |
+| G4 | 在泳道卡片或列表行上"绑定"一个 Issue，即可绑定到当前会话并在 `issue` 页签看到它 | e2e 交互断言 |
 | G5 | `issue` 页签展示绑定 Issue 的标题、状态、正文、标签与评论；未绑定时可粘贴链接绑定 | 截图 `08-issue-detail.png` |
 | G6 | 只读、零 npm 运行时依赖、无遥测、不向 GitHub 写任何数据 | 代码审查 + 依赖清单 |
 | G7 | 泳道五列顺序固定为 No status / TODO / In Progress / In Review / Done；自定义状态不被丢弃，追加到右侧扩展列 | e2e 断言 + 截图 `04-projects-board.png` |
 | G8 | milestone 过滤支持 `全部` / `Backlog`（无 milestone）/ 各 milestone 标题，带计数与自然排序，失效时回退 `全部` | e2e 断言 + 截图 `06-projects-milestone.png` |
+
+> G1/G3 的"页签"表述是 v1/0.x 的历史目标：v1.0.2 起 `projects` 不再是会话头部页签，改由左侧栏
+> 工作区行的看板图标在右侧栏打开（见 §1.13、§2.1）；`issue` 仍是会话头部页签。
 
 ### 1.4 非目标（v1 明确不做）
 
@@ -100,10 +108,13 @@
 
 ### 1.5 设计原则
 
-- **追加而非替换。** 两个页签是 `conversation.view` 上的新 `id`，不遮蔽任何出厂 entry；移除插件后界面与出厂状态完全一致。
+- **追加而非替换。** 插件的 `issue` 页签是 `conversation.view` 上的新 `id`，右侧栏看板是
+  `sidebarRightTabs` 上的新页签类型，都不遮蔽任何出厂 entry；移除插件后界面与出厂状态完全一致。
 - **两层绑定各归其位。** Project 绑在工作区，Issue 绑在会话；不把"会话里选过的 Project"混进工作区绑定。
 - **只读优先。** v1 不申请任何 GitHub 写权限，安全面最小；未来写回也必须是显式的、逐次确认的动作。
-- **复用宿主能力。** 认证交给 `gh` CLI（token 留在系统钥匙串），主题复用 DSH 的 CSS token，界面复用宿主声明的 `conversation.view` slot。
+- **复用宿主能力。** 认证交给 `gh` CLI（token 留在系统钥匙串），主题复用 DSH 的 CSS token，界面复用
+  宿主声明的 `conversation.view` slot 与右侧栏页签 API（`sidebarRightTabs` / `sidebarRight`）；
+  宿主服务缺失时优雅降级。
 - **失败必须可解释。** 每个错误码都映射到一句用户能行动的中文提示，而不是把 `gh` 的 stderr 直接甩给界面。
 
 ### 1.6 v1.1 变更摘要
@@ -237,20 +248,52 @@
 配套变化：e2e 阶段 `projects-browser` → `projects-external-open`，截图重命名为 `12-external-open.png`；`sidebar-subtitle` 阶段增加“无横向溢出 + 点行进入会话”断言；harness 不再启用
 `ui-sidebar-browser` overlay，也不需要 `X-Frame-Options` 控制台白名单。
 
+### 1.13 v1.0.2 变更摘要（右侧栏看板 + 选择器重放修复）
+
+1.0.2 把项目看板从会话头部移到 DSH 右侧栏，并修复用户报告的 ProjectPicker 重复弹出（P-001）。
+宿主 API 只扩展 `/bindings` 响应，不新增端点；`engines.dsh`、配置键与数据模型均不变；无新增运行时
+依赖。
+
+| 变化 | v1.0.1 | v1.0.2 |
+|---|---|---|
+| 项目看板位置 | 会话头部 `projects` 页签（`conversation.view`，order 20） | **DSH 右侧栏自定义页签**（`sidebarRightTabs` 注册 + `sidebar.right.pane.tab` body） |
+| 看板入口 | 会话头部页签 | 左侧栏**每个工作区行**的看板图标（`[data-ghp-workspace-entry]`，常显；已绑定时高亮） |
+| 会话头部插件页签 | `projects` + `issue` 两个 | 只有 `issue`（order 21） |
+| 打开语义 | 切页签 | 点图标/Enter 打开右侧栏页签（不展开工作区）；重复点击聚焦已有页签，不重复添加 |
+| `GET /bindings` | `{sessions, updatedAt}` | `{sessions, workspaces, updatedAt}`（多工作区→Project 映射，纯本地） |
+| 选择器意图 | `pick`/`pickToken` 一次性导航意图可被重放 | 客户端本地捕获请求，并把同一页签导航改写为 `{ workspaceId }` 消费意图 |
+| 兼容/降级 | — | 无 `sidebarRight` 服务时**不注入图标**（不报错），`issue` 页签与副标题照常工作；`issue` 未绑定的「从项目选择」改为打开右侧栏看板 + `pick:true` |
+
+修复细节（P-001，case file `coe/2026-10-29-00-31-picker-replay.md`）：会话作用域的右侧栏 body 每次
+重新挂载都会重建一次性的 `pick` 导航意图，导致已绑定工作区在"切换会话再返回 / 折叠展开侧栏 / 反复
+重挂载"后再次弹出选择器。客户端改为：第一次渲染时本地捕获请求，随后用
+`openTab(kind, { params: { workspaceId } })` 重写同一页签的导航，从而消费 `pick`/`pickToken`；
+选择器只在显式请求时打开。
+
+发布前验收（详见 §8.9）：冻结 `client.js` sha256
+`684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`；宿主单测 **92/92**；
+独立 picker-replay 验证器 **6/6 项检查**通过；**权威 e2e 门禁 GREEN**——fixture **18/18**、
+real **19/19** 阶段 PASS（console 0/0/0，新增 `project-picker-replay` 阶段），权威截图 `01`–`14`
+已重采（`11` 为最大化右侧栏 2200×1300）。仅剩发布后 npm 上线 + release-smoke 与 tag/release 确认
+（§8.9）。
+
 ---
 
 ## 2. 产品设计
 
-### 2.1 页签总览
+### 2.1 页签与看板入口总览
 
-| 页签 | 位置 | 作用域 | 绑定对象 | 数据来源 | 主要操作 |
+| 视图/入口 | 宿主位置 | 作用域 | 绑定对象 | 数据来源 | 主要操作 |
 |---|---|---|---|---|---|
 | 对话（出厂） | 会话头部第 1 个 | 会话 | — | 宿主 | — |
 | 轨迹（出厂） | 会话头部第 2 个 | 会话 | — | 宿主 | — |
-| `projects` | 出厂页签之后（`order: 20`） | 会话 + 其工作区 | 工作区 → Project | `GET /config`、`GET /projects`、`GET /items` | 选择/更换/解绑 Project、泳道/列表切换、milestone 与文本筛选、把 Issue 绑到会话 |
-| `issue` | 最后（`order: 21`） | 会话 | 会话 → Issue | `GET /config`、`GET /issue` | 从项目选择、粘贴链接绑定、解除绑定、跳转 GitHub |
+| `issue`（插件） | 会话头部最后（`order: 21`） | 会话 | 会话 → Issue | `GET /config`、`GET /issue` | 从项目选择、粘贴链接绑定、解除绑定、跳转 GitHub |
+| 项目看板（插件） | **左侧栏工作区行图标 → 右侧栏自定义页签**（`id`/`kind` 固定，标题本地化为「项目」/ *Project*） | 工作区（由 `workspaceId` 定位） | 工作区 → Project | `GET /config`、`GET /projects`、`GET /items` | 选择/更换/解绑 Project、泳道/列表切换、milestone 与文本筛选、把 Issue 绑到会话 |
 
-两个页签都是 `scope: 'session'`，因此都能拿到当前 `sessionId`；`projects` 通过 `sessionId → workspaceId` 反查工作区绑定。切页签不改变会话内容，也不会打断正在运行的对话。
+会话头部只保留一个插件页签（`issue`，`scope: 'session'`）；项目看板不再是会话头部页签（v1.0.2 起），
+而是左侧栏每个工作区行上的一个小看板图标打开的右侧栏页签，其 body 通过 tab navigation 的
+`workspaceId` 定位工作区、通过 `pick` 标志决定是否直接打开选择器。切页签/开合右侧栏都不改变会话内容，
+也不会打断正在运行的对话。
 
 ### 2.2 概念模型：两层绑定
 
@@ -273,7 +316,12 @@ flowchart LR
 
 ```text
 左侧栏（Sidebar session tree）
-├─ 工作区分组 → 会话行 [data-row-key="session:<id>"]
+├─ 工作区行 [data-row-key^="workspace:<id>"]
+│  ├─ 原有内容：工作区标题/路径 · hover 操作（… / +）
+│  ├─ 工作区看板图标（v1.0.2，[data-ghp-workspace-entry]；位于 hover 操作之前、常显）
+│  │  └─ click / Enter → 在右侧栏打开该工作区的项目看板（不展开/折叠工作区行）
+│  └─ 已绑定 Project 时高亮（data-ghp-workspace-entry-bound="1"）
+├─ 会话行 [data-row-key="session:<id>"]
 │  ├─ 第一行：状态点 · 会话标题 · 时间 · pin · 操作（保持原样）
 │  └─ Issue 副标题（v0.4.1，仅已绑定会话；选中/未选中均显示）
 │     ├─ #N chip + Issue 标题（单行省略，title 属性带全文）
@@ -286,41 +334,43 @@ flowchart LR
 │  └─ 点击 → 系统默认浏览器新标签页打开 Issue 页面
 ├─ 对话（出厂）
 ├─ 轨迹（出厂）
-├─ projects（插件，order 20）
-│  ├─ 无工作区空态（会话不属于任何工作区时）
-│  ├─ 未绑定空态（显示工作区标题/路径）
-│  │  └─ 选择 Project → Project 选择器（视图内覆盖层）
-│  │     ├─ 按 owner 分组的远端 Project 列表（过滤 + 30 行上限 + 当前绑定徽章）
-│  │     └─ 手动绑定行（owner + number）
-│  └─ 已绑定视图
-│     ├─ 工具栏：Project 标题（外链）· owner/number · 条目数
-│     │        · 视图切换「泳道 / 列表」· milestone 过滤 · 刷新 · 更换 · 解绑
-│     ├─ 文本筛选（两种视图共用）
-│     ├─ 泳道看板（默认）
-│     │  ├─ 规范列：No status · TODO · In Progress · In Review · Done
-│     │  │        （No status 空时隐藏；自定义状态仅非空时追加到右侧）
-│     │  │        每列：状态色点 · 名称 · 计数 pill · 色带
-│     │  └─ 卡片：标题（2 行截断）· repo#number · 标签（2 + +N）· milestone chip
-│     │            · 已绑定徽章
-│     │            · 卡片主体点击 → 系统默认浏览器新标签页打开 GitHub 页面
-│     │            · 显式「绑定」按钮 → 绑定到当前会话并跳 issue 页签
-│     │            （PR/Draft 无绑定按钮，点击打开 GitHub）
-│     └─ 列表视图（可切换）
-│        ├─ 组头：Status 名 + 计数
-│        ├─ 行：类型图标 · repo#number · 标题 · 标签 · milestone · 行点击→系统浏览器 · 显式「绑定」按钮
-│        └─ 状态 chips（全部 / 各 Status）
 └─ issue（插件，order 21）
    ├─ 未绑定空态
-   │  ├─ 从项目选择（跳到 projects 页签）
+   │  ├─ 从项目选择（打开右侧栏看板并直接进入 Project 选择器）
    │  └─ 粘贴引用输入框（Issue URL 或 owner/repo#123）
    └─ 已绑定详情
       ├─ 头部卡片：repo · #number · 状态徽章 · 标题 · 作者/时间/评论数 · 标签
       ├─ 操作行：刷新 · 解绑 · 在 GitHub 打开
       ├─ 正文（安全 Markdown 子集）
       └─ 评论列表（按时间正序 + 截断页脚）
+右侧栏（v1.0.2，插件自定义页签）
+└─ 项目看板（标题「项目」/ Project；同一工作区只保留一个页签，重复点击聚焦）
+   ├─ 无工作区空态（workspaceId 缺失/无效时）
+   ├─ 未绑定空态（显示工作区标题/路径）
+   │  └─ 选择 Project → Project 选择器（面板内覆盖层；pick 意图只在显式请求时出现）
+   │     ├─ 按 owner 分组的远端 Project 列表（过滤 + 30 行上限 + 当前绑定徽章）
+   │     └─ 手动绑定行（owner + number）
+   └─ 已绑定视图
+      ├─ 工具栏：Project 标题（外链）· owner/number · 条目数
+      │        · 视图切换「泳道 / 列表」· milestone 过滤 · 刷新 · 更换 · 解绑
+      ├─ 文本筛选（两种视图共用）
+      ├─ 泳道看板（默认；窄栏下工具栏换行、整板横向滚动）
+      │  ├─ 规范列：No status · TODO · In Progress · In Review · Done
+      │  │        （No status 空时隐藏；自定义状态仅非空时追加到右侧）
+      │  │        每列：状态色点 · 名称 · 计数 pill · 色带
+      │  └─ 卡片：标题（2 行截断）· repo#number · 标签（2 + +N）· milestone chip
+      │            · 已绑定徽章
+      │            · 卡片主体点击 → 系统默认浏览器新标签页打开 GitHub 页面
+      │            · 显式「绑定」按钮 → 绑定到当前会话（issue 页签/副标题更新，不切走会话视图）
+      │            （PR/Draft 无绑定按钮，点击打开 GitHub）
+      └─ 列表视图（可切换；窄栏下仍可用）
+         ├─ 组头：Status 名 + 计数
+         ├─ 行：类型图标 · repo#number · 标题 · 标签 · milestone · 行点击→系统浏览器 · 显式「绑定」按钮
+         └─ 状态 chips（全部 / 各 Status）
 ```
 
-页签内部滚动、页面本身不滚动；最外层视图固定 `height: 100%`，避免把会话输入框顶出视口。
+页签/看板内部滚动、页面本身不滚动；最外层视图固定 `height: 100%`，避免把会话输入框顶出视口。
+右侧栏看板适配窄宽度：工具栏自动换行，泳道整体横向滚动，列表视图保持单列可用。
 
 ### 2.4 关键流程
 
@@ -328,7 +378,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["进入会话 / 点 projects 页签"] --> B{"该工作区已绑定 Project？"}
+    A["点左侧栏工作区行的看板图标 / 右侧栏看板页签"] --> B{"该工作区已绑定 Project？"}
     B -- "否" --> C["空态：绑定 GitHub Project<br/>显示工作区标题/路径"]
     C --> D["点「选择 Project」"]
     D --> E["GET /projects<br/>（host 聚合 user + org，逐个 owner 读）"]
@@ -347,20 +397,21 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["projects 页签已绑定视图"] --> B["找到 Issue（卡片或列表行，可先筛选）"]
+    A["右侧栏看板（已绑定视图）"] --> B["找到 Issue（卡片或列表行，可先筛选）"]
     B --> C{"点击哪里"}
     C -- "卡片主体 / 列表行" --> D["window.open(url, '_blank',<br/>'noopener,noreferrer')<br/>系统默认浏览器打开 GitHub"]
     C -- "卡片/行上的「绑定」按钮" --> E["POST /bind-issue<br/>{sessionId, workspaceId, issue}"]
     E --> F["state.json 记录会话绑定"]
-    F --> G["openView('github-issue', 'bound') + 会话副标题出现"]
+    F --> G["binding-changed / 轮询 → 会话副标题 + issue 页签更新（不切换会话视图）"]
     G --> H["issue 页签读取 GET /issue，渲染详情"]
     D -. "不创建绑定" .-> B
 ```
 
 v0.4.0 起「点击」与「绑定」分离：卡片/行点击只是查看，不会改变会话绑定；只有显式的「绑定 / 已绑定」
-按钮才会写绑定并跳转。v1.0.1 起查看统一走**系统默认浏览器的新标签页**（`window.open(url, '_blank',
+按钮才会写绑定。v1.0.1 起查看统一走**系统默认浏览器的新标签页**（`window.open(url, '_blank',
 'noopener,noreferrer')`，与 DSH「在系统浏览器中打开」一致），不再使用内置右侧浏览器。PR/Draft 没有
-绑定动作，点击同样在系统浏览器打开。
+绑定动作，点击同样在系统浏览器打开。v1.0.2 起绑定从右侧栏看板发起：只更新会话副标题与 `issue` 页签，
+**不会切换会话当前视图**（看板本身就在右侧栏，不存在"跳到 issue 页签"的动作）。
 
 `/items` 返回的条目天然带 Projects v2 的 `status` 与 `milestone` 字段，泳道分列与 milestone 过滤都基于这两项在浏览器端完成；条目的开闭状态（open/closed）不在 `/items` 载荷里，因此卡片/行不展示它，真实状态以 `issue` 页签的 REST 读取为准。是否有「已绑定」徽章由 `/config` 的当前会话绑定决定。
 
@@ -369,7 +420,7 @@ v0.4.0 起「点击」与「绑定」分离：卡片/行点击只是查看，不
 ```mermaid
 flowchart TD
     A["issue 页签未绑定"] --> B{"使用哪种入口"}
-    B -- "从项目选择" --> C["openView('github-projects', 'pick')"]
+    B -- "从项目选择" --> C["打开右侧栏看板（pick:true → 直接进入选择器）"]
     B -- "粘贴链接" --> D["输入 Issue URL / owner/repo#123"]
     D --> E["POST /bind-issue {ref}"]
     E --> F{"host 解析引用"}
@@ -386,10 +437,10 @@ flowchart TD
 
 | 操作 | 入口 | 行为 | 影响范围 |
 |---|---|---|---|
-| 更换 Project | `projects` 工具栏「更换」 | 打开选择器，选中后覆盖该工作区的绑定 | 该工作区所有会话 |
-| 解绑 Project | `projects` 工具栏「解绑」 | 二次确认后清除工作区绑定 | 该工作区所有会话回到空态；**已绑定的 Issue 不受影响**（Issue 绑定独立存在） |
+| 更换 Project | 右侧栏看板工具栏「更换」 | 打开选择器，选中后覆盖该工作区的绑定 | 该工作区所有会话 |
+| 解绑 Project | 右侧栏看板工具栏「解绑」 | 二次确认后清除工作区绑定 | 该工作区所有会话回到空态；**已绑定的 Issue 不受影响**（Issue 绑定独立存在） |
 | 解绑 Issue | `issue` 工具栏「解绑」 | 清除当前会话的 Issue 绑定 | 仅当前会话回到空态 |
-| 刷新 | 两个页签的「刷新」 | 带 `refresh=1` 重新读取 GitHub，走新鲜读取（`stale:false`） | 不改变绑定 |
+| 刷新 | 看板与 `issue` 页签的「刷新」 | 带 `refresh=1` 重新读取 GitHub，走新鲜读取（`stale:false`） | 不改变绑定 |
 
 #### 2.4.5 Agent 工具改绑与界面同步
 
@@ -423,22 +474,27 @@ sequenceDiagram
 
 | 视图 | 状态 | 触发 | 界面表现 | 可执行操作 |
 |---|---|---|---|---|
-| projects | loading | 首次挂载 / 切换工作区 | 骨架占位 | — |
-| projects | error | 读取失败（如 `gh-missing`） | 错误卡片 + 中文提示 + 重试 | 重试 |
-| projects | no-workspace | 会话不属于任何工作区 | 空态：「当前会话不属于任何工作区」+ 说明（绑定以工作区为归属） | 先把会话放进工作区 |
-| projects | unbound | 工作区无绑定 | 居中空态：图标、标题「绑定 GitHub Project」、说明、主按钮「选择 Project」、工作区标题/路径提示 | 选择 Project |
-| projects | bound（泳道，默认） | 有绑定、首次挂载或选中泳道 | 工具栏 + milestone 过滤 + 泳道看板（No status 空时隐藏；四个规范列常驻；未知状态列仅非空） | 刷新/更换/解绑/切列表/milestone 过滤/文本筛选/卡片绑定 Issue |
-| projects | bound（列表） | 选中列表视图 | 工具栏 + milestone 过滤 + 文本筛选 + 状态 chips + 分组列表 | 刷新/更换/解绑/切泳道/过滤/行内绑定 Issue |
-| projects | milestone-filtered | 选中某个 milestone / Backlog | 两种视图的条目与列/段计数同步收缩；工具栏高亮当前选项 | 切回「全部」/换 milestone |
-| projects | milestone-fallback | 刷新后选中的 milestone 不再存在 | 自动回退「全部」并显示提示 | — |
-| projects | column-empty | 四个常驻规范列在当前过滤下没有条目 | 列头保留、计数显示 0、正文显示「无条目」（不隐藏列） | 继续浏览 |
-| projects | hidden-lane | `No status` 或未知状态列过滤后为空 | `No status` 隐藏并由 `data-ghp-hidden-lanes` 暴露；空的自定义状态列不渲染 | 继续浏览 |
-| projects | browsing | 点卡片主体或列表行 | 系统默认浏览器新标签页打开 GitHub 页面（不改变绑定） | 在系统浏览器查看 |
-| projects | refreshing | 点刷新/更换后重新拉取 | 保留旧数据 + 轻量加载指示（有缓存时先渲染缓存） | 继续浏览 |
-| projects | truncated | 条目数超过 `maxProjectItems` | 列表/看板底部提示"仅显示前 shown 条（共 total 条）" | — |
+| 左侧栏工作区入口 | workspace-entry-visible | 有 `sidebarRight` 服务 | 每个工作区行注入一个常显看板图标（`[data-ghp-workspace-entry]`，hover 操作之前）；未绑定时中性色 | click/Enter → 打开/聚焦右侧栏看板 |
+| 左侧栏工作区入口 | workspace-entry-bound | 工作区已绑定 Project（来自 `/bindings.workspaces`） | 图标高亮（`data-ghp-workspace-entry-bound="1"`，品牌 accent） | 同上 |
+| 左侧栏工作区入口 | workspace-entry-degraded | 宿主缺少 `sidebarRight` / `sidebarRightTabs` 服务，或工作区行锚点缺失 | 不注入图标（不抛错）；`issue` 页签与副标题不受影响 | 升级 DSH/插件 |
+| 项目看板（右侧栏） | loading | 首次挂载 / 切换 `workspaceId` | 骨架占位 | — |
+| 项目看板（右侧栏） | error | 读取失败（如 `gh-missing`） | 错误卡片 + 中文提示 + 重试 | 重试 |
+| 项目看板（右侧栏） | no-workspace | tab navigation 缺少/无效 `workspaceId` | 空态：「当前会话不属于任何工作区」+ 说明（绑定以工作区为归属） | 从有效工作区重新打开 |
+| 项目看板（右侧栏） | unbound | 工作区无绑定 | 居中空态：图标、标题「绑定 GitHub Project」、说明、主按钮「选择 Project」、工作区标题/路径提示 | 选择 Project |
+| 项目看板（右侧栏） | picker-open | 显式请求（工作区图标不会打开选择器；`issue` 的「从项目选择」或空态按钮会） | Project 选择器覆盖层打开一次；选中后关闭并绑定，`Esc`/遮罩/关闭按钮关闭 | 选择 / 关闭 |
+| 项目看板（右侧栏） | picker-no-replay | 选择/关闭后切换会话、返回、折叠展开侧栏、body 重挂载 | 选择器**不再**自动打开（`pick`/`pickToken` 已被消费并改写为 `{ workspaceId }`） | 需要时重新显式打开 |
+| 项目看板（右侧栏） | bound（泳道，默认） | 有绑定、首次挂载或选中泳道 | 工具栏 + milestone 过滤 + 泳道看板（No status 空时隐藏；四个规范列常驻；未知状态列仅非空）；窄栏下工具栏换行、整板横向滚动 | 刷新/更换/解绑/切列表/milestone 过滤/文本筛选/卡片绑定 Issue |
+| 项目看板（右侧栏） | bound（列表） | 选中列表视图 | 工具栏 + milestone 过滤 + 文本筛选 + 状态 chips + 分组列表（窄栏下仍可用） | 刷新/更换/解绑/切泳道/过滤/行内绑定 Issue |
+| 项目看板（右侧栏） | milestone-filtered | 选中某个 milestone / Backlog | 两种视图的条目与列/段计数同步收缩；工具栏高亮当前选项 | 切回「全部」/换 milestone |
+| 项目看板（右侧栏） | milestone-fallback | 刷新后选中的 milestone 不再存在 | 自动回退「全部」并显示提示 | — |
+| 项目看板（右侧栏） | column-empty | 四个常驻规范列在当前过滤下没有条目 | 列头保留、计数显示 0、正文显示「无条目」（不隐藏列） | 继续浏览 |
+| 项目看板（右侧栏） | hidden-lane | `No status` 或未知状态列过滤后为空 | `No status` 隐藏并由 `data-ghp-hidden-lanes` 暴露；空的自定义状态列不渲染 | 继续浏览 |
+| 项目看板（右侧栏） | browsing | 点卡片主体或列表行 | 系统默认浏览器新标签页打开 GitHub 页面（不改变绑定） | 在系统浏览器查看 |
+| 项目看板（右侧栏） | refreshing | 点刷新/更换后重新拉取 | 保留旧数据 + 轻量加载指示（有缓存时先渲染缓存） | 继续浏览 |
+| 项目看板（右侧栏） | truncated | 条目数超过 `maxProjectItems` | 列表/看板底部提示"仅显示前 shown 条（共 total 条）" | — |
 | issue | loading | 首次挂载 / 切到该页签 | 骨架占位 | — |
 | issue | error | 读取失败 | 错误卡片 + 中文提示 + 重试 | 重试 |
-| issue | unbound | 会话无绑定 | 标题「为当前会话绑定 Issue」+「从项目选择」+ 粘贴输入框 | 从项目选择 / 粘贴绑定 |
+| issue | unbound | 会话无绑定 | 标题「为当前会话绑定 Issue」+「从项目选择」+ 粘贴输入框 | 从项目选择（打开右侧栏看板 + picker）/ 粘贴绑定 |
 | issue | bound | 有绑定 | 头部卡片 + 正文 + 评论 | 刷新/解绑/在 GitHub 打开 |
 | issue | refreshing | 点刷新 | 保留旧数据 + 轻量指示 | — |
 | 会话头部 | subtitle-visible | 会话已绑定 Issue（来自 UI 或 agent 工具） | 标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 全文）；≤4s 内自动出现/更新 | 点击 → 系统默认浏览器新标签页 |
@@ -455,9 +511,11 @@ sequenceDiagram
 
 #### 2.6.1 Project 选择器
 
-- **视图内覆盖层，不是宿主级对话框**：内容通过 React portal 挂到 `document.body` 并按 `projects`
-  视图自身的 rect 定位，避免被祖先的 `overflow`/层叠上下文裁剪；视觉上仍是盖在条目列表上的面板，
-  会话头部页签与输入框保持原样。
+- **面板内覆盖层，不是宿主级对话框**：内容通过 React portal 挂到 `document.body`，按看板视图自身的
+  rect 定位（v1.0.2 起看板在右侧栏内），避免被祖先的 `overflow`/层叠上下文裁剪；视觉上仍是盖在条目
+  列表上的面板，右侧栏其它区域/会话头部保持原样。选择器只在显式请求时打开：工作区图标只打开看板，
+  `issue` 页签的「从项目选择」与空态主按钮带 `pick:true`；`pick`/`pickToken` 在首次渲染时被本地捕获，
+  随后同一页签导航被改写为 `{ workspaceId }`，因此会话切换/侧栏折叠/body 重挂载都不会重放（P-001，v1.0.2）。
 - 关闭方式：`Esc`（捕获阶段监听，避免被宿主的快捷键吞掉）、点遮罩、关闭按钮；
   `role="dialog"` + `aria-modal="true"` + `aria-labelledby`，打开时自动聚焦筛选框。
   没有实现完整的焦点陷阱（Tab 仍可能移出面板），这是当前版本的无障碍取舍。
@@ -494,21 +552,21 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
   保留列头、0 计数与正文占位「无条目」。
 - 每列内部纵向滚动，卡片自上而下排列；列总宽超出视口时**整个看板横向滚动**（列最小宽度 176px）；
   看板整体最小高度 220px。
-- **布局宽度（v1.1.1 起）**：`projects` 页（泳道与列表）和 `issue` 页都使用 `width: 100%`、
-  `max-width: none`、`margin: 0`，**铺满会话主体宽度**，不设页面级宽度上限、不做居中固定列。
-  宽屏下五列按 `flex: 1 1 0` 均分整个可用宽度；176px 只是列宽的横向滚动下限（窗口窄于约 960px 时
-  出现横向滚动），不是页面宽度上限。页面内边距为 `24px 32px 28px`（窄于 760px 时降为 `16px`），
-  空态说明文字等 copy 元素保留自身的可读宽度（如 470px），但页面容器本身不再限宽。
-  0.2.0 的 1000px 居中列是回归缺陷；e2e `projects-wide`（2200×1300）断言页面宽度 ≥ 可用 body 宽度的 85%。
-  注意：**DSH 自身的输入框（composer）仍遵循宿主 shell 的居中宽度**——本次修复只让插件页面铺满
-  会话主体，不会也不应该改变宿主既有布局。
+- **布局宽度**：`issue` 页（v1.1.1 起）使用 `width: 100%`、`max-width: none`、`margin: 0`，
+  **铺满会话主体宽度**，不设页面级宽度上限、不做居中固定列。项目看板在 v1.0.2 改到右侧栏后不再占
+  会话主体，而是**自适应窄栏**：工具栏自动换行，泳道整体横向滚动（列最小宽度 176px 不变），列表
+  单列可用；空态说明文字保留自身可读宽度。v1.0.1 及更早的看板是会话头部页签、同样铺满会话主体，
+  0.2.0 的 1000px 居中列是当时已修复的回归缺陷（见 §1.7）。
+  注意：**DSH 自身的输入框（composer）仍遵循宿主 shell 的居中宽度**——插件只控制自己的页面/右侧栏
+  面板，不会也不应该改变宿主既有布局。
 - **只读**：不支持拖拽卡片改状态、不支持自定义排序，也不会写回 GitHub。
 - 卡片内容：标题（最多 2 行，超出省略）、`repo#number`、labels（最多 2 个，其余 `+N`）、
   milestone chip；当前会话已绑定的 Issue 带「已绑定」徽章。
 - **点击 = 查看，绑定 = 显式按钮（v0.4.0；链接打开方式在 v1.0.1 更新）**：点卡片主体
   （`[data-ghp-card-action="open"]`）用 `window.open(url, '_blank', 'noopener,noreferrer')` 在
   **系统默认浏览器新标签页**打开该 Issue/PR 的 GitHub 页面，不会改变会话绑定；Issue 卡片另有显式「绑定」按钮
-  （`[data-ghp-card-action="bind"]`，已绑定时显示「已绑定」），点击才写入绑定并跳到 `issue` 页签。
+  （`[data-ghp-card-action="bind"]`，已绑定时显示「已绑定」），点击才写入绑定（会话副标题与 `issue`
+  页签随之更新；v1.0.2 的右侧栏看板内不切换会话视图）。
   PR/Draft 卡片没有绑定按钮，点击同样在浏览器中打开。卡片可键盘操作：Enter/Space = 浏览器打开，
   绑定按钮保留独立的焦点与 `focus-visible` 轮廓。
 
@@ -526,7 +584,7 @@ milestone 过滤、`刷新`、`更换`、`解绑`。
   选项计数都反映当前筛选结果。
 - 筛选行右侧显示 `matched / total`：`total` 是 milestone 过滤后的条目数（不是全部已加载条目），
   `matched` 再叠加文本筛选（列表模式还叠加状态 chip）。
-- `gh` 不可用时，两个页签顶部都显示「gh CLI 不可用」警告条，已绑定摘要仍可见。
+- `gh` 不可用时，看板与 `issue` 页顶部都显示「gh CLI 不可用」警告条，已绑定摘要仍可见。
 - 刷新时保留旧数据（两种视图一致），出现细小的加载提示；`truncated` 时页脚提示只显示前 shown 条
   （读取上限默认 200），建议在 GitHub 侧收窄 Project 视图。
 - 空 Project 显示「这个 Project 还没有条目」空态；筛选无结果时按视图区分：列表视图显示
@@ -643,7 +701,8 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
 ### 2.8 文案与国际化
 
 - locale 命名空间 `githubProjects`，同时注册中文与英文两套字典；界面文案中文优先、英文完整。
-- 页签标签固定为 `projects` / `issue`，不随语言变化。
+- 会话头部页签标签固定为 `issue`，不随语言变化；右侧栏看板页签标题来自 locale（中文「项目」/
+  英文 *Project*），但注册的 `id` / `kind` 固定，不受语言影响。
 - 泳道列名固定为产品术语 `No status` / `TODO` / `In Progress` / `In Review` / `Done`（与 GitHub 状态拼写一致，
   不随界面语言翻译）；自定义状态列显示原始名称；空列占位为「无条目」/「No items」。
 - 视图切换：中文 `泳道` / `列表`，英文 `Swimlane` / `List`。
@@ -747,20 +806,19 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
 DSH 插件可以同时提供**宿主半**和**浏览器半**：宿主半是 Cordis 插件（Node 进程），浏览器半是一个 Web 客户端模块（浏览器进程）。两者通过本机 HTTP 路由通信，浏览器半不直接访问 GitHub。
 
 ```text
-┌────────────────────────────── DSH Desktop / dsh web 进程 ──────────────────────────────┐
-│                                                                                        │
-│  Cordis 宿主进程                                                   浏览器（WebView）    │
-│  ┌───────────────────────────────┐      HTTP（回环）     ┌────────────────────────────┐ │
-│  │ github-projects（宿主半）      │◄─────────────────────►│ github-projects（浏览器半） │ │
-│  │ index.js + github.js + state.js│  /plugin/github-     │ client.js                  │ │
-│  │                                │  projects/*          │  · conversation.view 注册  │ │
-│  │ · webServer prefix 路由        │                      │  · projects / issue 视图    │ │
-│  │ · TTL 缓存 + 单飞              │                      │  · fetch 封装 + 渲染        │ │
-│  │ · state.json 绑定存储          │                      │                            │ │
-│  └──────────────┬─────────────────┘                      └────────────────────────────┘ │
+┌────────────────────────────────────────────────────────────────────────────────────────────┐
+│  Cordis 宿主进程                                                     浏览器（WebView）     │
+│  ┌───────────────────────────────┐      HTTP（回环）     ┌────────────────────────────┐    │
+│  │ github-projects（宿主半）      │◄─────────────────────►│ github-projects（浏览器半） │  │
+│  │ index.js + github.js + state.js│  /plugin/github-     │ client.js                  │    │
+│  │                                │  projects/*          │  · conversation.view(issue) │    │
+│  │ · webServer prefix 路由        │                      │  · sidebarRightTabs 看板    │    │
+│  │ · TTL 缓存 + 单飞              │                      │  · fetch 封装 + 渲染        │    │
+│  │ · state.json 绑定存储          │                      │                             │    │
+│  └──────────────┬─────────────────┘                      └────────────────────────────┘    │
 │                 │ execFile                                                                 │
 │                 ▼                                                                          │
-│          gh CLI（子进程）──► GitHub GraphQL / REST                                        │
+│          gh CLI（子进程）──► GitHub GraphQL / REST                                         │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 
 数据只走两条链路：宿主半 ↔ gh ↔ GitHub（出站），浏览器半 ↔ 宿主半（本机回环，不入公网）。
@@ -771,7 +829,7 @@ DSH 插件可以同时提供**宿主半**和**浏览器半**：宿主半是 Cord
 | 运行环境 | Node ≥ 22（DSH 宿主进程） | DSH Web 客户端（Desktop WebView / 浏览器） |
 | 入口 | `index.js`：`export const name` + `export function apply(ctx, config)` | `client.js`：`window.__ModuleLoader__.load({ id, factory })` |
 | 可依赖 | 仅 `node:*` 内建模块与本仓库文件 | 仅 `react` / `react-dom`（平台模块表） |
-| 注册内容 | `webServer` 前缀路由、`ctx.effect` 生命周期 | locale 字典、CSS、`conversation.view` slot entry |
+| 注册内容 | `webServer` 前缀路由、`ctx.effect` 生命周期 | locale 字典、CSS、`conversation.view` entry（`issue`）、`sidebarRightTabs` 页签类型 + `sidebar.right.pane.tab` body、左侧栏工作区图标 decorator |
 | 与 GitHub 的关系 | 唯一出口：`execFile(gh ...)`，只读命令 | 不直接访问 GitHub，也不持有 token |
 | 加载声明 | `package.json` → `dsh.bundle.patch` | `package.json` → `dsh.client` |
 
@@ -801,7 +859,9 @@ DSH 插件可以同时提供**宿主半**和**浏览器半**：宿主半是 Cord
 - **`dsh.client`** 告诉宿主这个包还带一个浏览器半：`platform: web`、`immediately: true`（页面启动时立即加载）、
   `inject` 声明它需要会话 UI 与 locale 服务已就绪。
 - 浏览器半由 `window.__ModuleLoader__.load({ id: '@ceasarxuu/dsh-github-projects', factory })` 异步装配；
-  factory 的返回值声明依赖（`inject: ['slots', 'locale']`）并导出 `apply(ctx)`。
+  factory 的返回值声明依赖（`inject: ['slots', 'locale']`）并导出 `apply(ctx)`。v1.0.2 的右侧栏看板
+  还会在 `apply` 内用 `ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => …)` 注入**可选**服务：
+  宿主没有这些服务时整段注册不执行，插件其余功能不受影响。
 - **生命周期**：宿主半的路由注册包在 `ctx.effect(() => webServer.register(...))` 里，浏览器半的
   locale/CSS/slot 注册也包在 `ctx.effect` 中。插件被停用或重载时，effect 逆序释放：路由被移除、slot
   entry 消失、页签与样式一起回退，出厂界面不受影响。
@@ -811,20 +871,15 @@ DSH 插件可以同时提供**宿主半**和**浏览器半**：宿主半是 Cord
 - **补丁优先级**：profile 自己的 `cordis.patch.yml` 对同一 `id` 的补丁会覆盖 bundle 内的 `config`；
   因此覆盖配置时要把需要的键**全部重述**（见 3.8），而不是只写差异项。
 
-### 3.3 slot 注册：`conversation.view`
+### 3.3 slot 注册：会话页签与右侧栏看板
 
-会话头部页签是 `conversation.view` slot：list 基数、`scope: 'session'`、由 `conversation.session` 声明并渲染。
-插件不 import 任何会话组件，而是向这个 slot 追加两个 entry：
+会话头部页签是 `conversation.view` slot：list 基数、`scope: 'session'`、由 `conversation.session` 声明
+并渲染。v1.0.2 起插件只向这个 slot 追加一个 entry（`issue`），项目看板改由 `sidebarRightTabs` 注册为
+右侧栏自定义页签，并通过 `sidebar.right.pane.tab` slot 提供 keyed body（依赖可选的 `sidebarRight`
+客户端服务）：
 
 ```js
-ctx.slots.inject('conversation.view', () => ctx.slots.register({
-  name: 'conversation.view',
-  id: 'github-projects',
-  order: 20,
-  locale: 'githubProjects',
-  label: () => 'projects',
-}, ProjectsView))
-
+// 1) 会话头部：唯一的插件页签（projects 页签在 v1.0.2 移除）
 ctx.slots.inject('conversation.view', () => ctx.slots.register({
   name: 'conversation.view',
   id: 'github-issue',
@@ -832,11 +887,33 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
   locale: 'githubProjects',
   label: () => 'issue',
 }, IssueView))
+
+// 2) 右侧栏：注册自定义页签类型 + keyed body；服务缺失时整段不执行（优雅降级）
+ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
+  scope.effect(() => scope.sidebarRightTabs.register({
+    id: '@ceasarxuu/dsh-github-projects/project',
+    kind: 'github-project',
+    title: () => t('projects.sidebarTab'),   // 「项目」/ Project
+  }), 'github-projects: right-sidebar tab type')
+  scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+    name: 'sidebar.right.pane.tab',
+    key: '@ceasarxuu/dsh-github-projects/project',
+    locale: 'githubProjects',
+    inject: (sessionId) => ({ sessionId }),
+  }, SidebarProjectView)), 'github-projects: right-sidebar pane body')
+})
 ```
 
-- `order` 决定追加顺序（出厂页签在前，20/21 在后）；`id` 保证可被 `openView` 定址。
+- `order` 决定会话头部追加顺序（出厂页签在前，`issue` 在最后）；`id` 保证可被 `openView` 定址。
+- 打开右侧栏看板：工作区图标或 `issue` 空态按钮调用
+  `ctx.sidebarRight.openTab('github-project', { params: { workspaceId, pick? } })`；body 读取
+  `tab.navigation.params.workspaceId`，`pick === true` 时首次渲染即带选择器请求。同一工作区再次打开时
+  宿主页签去重（聚焦已有页签，不重复添加）。
+- `pick`/`pickToken` 是一次性意图：`SidebarProjectView` 在首次渲染时捕获它，并在 effect 里用
+  `tab.actions.openTab(kind, { paneId, params: { workspaceId } })` 把同一页签的导航改写成只含
+  `workspaceId`，从而**消费**该意图（v1.0.2 的 P-001 修复）。
 - `locale` 声明后，组件会额外收到 `t` 函数（字典来自 `ctx.locale.register('githubProjects', …)`）。
-- slot 的 `session` scope 让组件拿到 `sessionId`；工作区通过标准 props 反查：
+- `conversation.view` 的 `session` scope 让 `issue` 组件拿到 `sessionId`；工作区通过标准 props 反查：
 
   ```js
   const workspace = useWorkspaces(snapshot =>
@@ -844,20 +921,22 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
   ```
 
   `workspaceId` 用于 `/config`、`/bind-workspace`；`workspace.path`/`title` 用于空态提示。
-- 视图组件的关键 props（DSH 0.2.1-rc.3 实测）：
+  右侧栏看板不依赖当前会话所属工作区，而是直接用 tab navigation 里的 `workspaceId`。
+- `conversation.view` 视图组件的关键 props（DSH 0.2.1-rc.3 实测）：
 
   | prop | 来源 | 用途（★ = 本插件实际使用） |
   |---|---|---|
   | `sessionId` | session scope | ★ 绑定 Issue / 读取绑定 |
   | `useWorkspaces` | 全局标准 props | ★ 反查会话所属工作区（`sessionIds.includes(sessionId)`） |
   | `t` | `locale` 声明 | ★ 文案国际化 |
-  | `openView(view, focus)` | owner share | ★ 绑定成功后跳到 `github-issue` 页签 |
+  | `openView(view, focus)` | owner share | 绑定成功后跳 `issue` 页签（v1.0.2 起右侧栏看板内为 `null`，绑定不再切换会话视图） |
   | `viewRequest`、`completeViewRequest()` | owner share | ★ 响应"带目标切换页签"的请求并确认 |
   | `useSession`、`useProjection`、`useConversation`、`useSessions` | session / 全局标准 props | 该 slot 也可用；本插件不读取对话内容，未使用 |
 
-- **页签间跳转**：Issue 绑定成功后调用 `openView('github-issue', 'bound')` 并切换到详情；
-  `issue` 视图挂载时读取 `props.viewRequest`，若目标是自己则先应用状态、再 `completeViewRequest()`
-  释放宿主请求。`focus` 值对插件是不透明字符串（这里仅作标记），真实状态从 `/config` 重新读取。
+- **页签间跳转**：Issue 绑定成功后（仅会话头部视图内）调用 `openView('github-issue', 'bound')` 并切换
+  到详情；`issue` 视图挂载时读取 `props.viewRequest`，若目标是自己则先应用状态、再
+  `completeViewRequest()` 释放宿主请求。`focus` 值对插件是不透明字符串（这里仅作标记），真实状态从
+  `/config` 重新读取。右侧栏看板内的绑定只更新会话副标题与 `issue` 页签数据，不切换会话视图。
 
 ### 3.4 宿主 HTTP API
 
@@ -872,7 +951,7 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
 |---|---|---|
 | `GET /health` | `gh` 可用性 | `{ok, gh: {available, version, account, error}}` |
 | `GET /config?sessionId=&workspaceId=` | 当前绑定 + `gh` 健康快照（见下） | `{gh, workspace: {workspaceId, project}, session: {sessionId, issue, workspaceId}}` |
-| `GET /bindings` (v0.4.1) | 全部会话绑定（侧栏副标题装饰用；纯本地） | `{"sessions":{sessionId:IssueSummary},"updatedAt":ISO}` |
+| `GET /bindings` (v0.4.1；v1.0.2 扩展) | 全部会话→Issue + 工作区→Project 绑定（侧栏副标题与工作区图标装饰用；纯本地） | `{"sessions":{sessionId:IssueSummary},"workspaces":{workspaceId:Project},"updatedAt":ISO}` |
 | `GET /projects?refresh=1` | 可访问的 Project，按 owner 分组 | `{owners, projects, fetchedAt, errors}` |
 | `GET /items?owner=&number=&refresh=1` | 一个 Project 的条目 | `{project, items, fetchedAt, truncated}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | 一个 Issue 详情 + 评论 | `{issue, fetchedAt}` |
@@ -881,10 +960,11 @@ ctx.slots.inject('conversation.view', () => ctx.slots.register({
 | `POST /bind-issue` | 把 Issue 绑到会话（`issue` 摘要或 `ref` 二选一） | `{ok, session: {sessionId, issue, workspaceId}}` |
 | `POST /unbind-issue` | 清除会话绑定 | `{ok}` |
 
-`/bindings` 的行为（v0.4.1）：它**纯本地只读、不调用 `gh`**，直接读绑定存储快照，返回当前 profile
-内所有 `sessionId → IssueSummary` 映射与 `updatedAt`；没有 SWR 缓存、也没有 `stale` 字段。客户端用它渲染左侧栏副标题：
-约 4s 轮询一次（SWR），并在 `binding-changed` 事件时立即刷新；这是该端点的唯一用途，不参与页面
-主数据流。
+`/bindings` 的行为（v0.4.1，v1.0.2 扩展）：它**纯本地只读、不调用 `gh`**，直接读绑定存储快照，
+返回当前 profile 内所有 `sessionId → IssueSummary` 映射、`workspaceId → Project` 映射与 `updatedAt`；
+`workspaces` 只包含确实有 Project 绑定的工作区（用于工作区图标高亮，只取 `owner`/`number` 等摘要
+字段）。没有 SWR 缓存、也没有 `stale` 字段。客户端用它渲染左侧栏副标题与工作区看板图标：约 4s
+轮询一次（SWR），并在 `binding-changed` 事件时立即刷新；这是该端点的唯一用途，不参与页面主数据流。
 
 `/config` 的行为（v0.4.0 起）：它**只读本地绑定，永远不等待 `gh`**。响应里的 `gh` 字段是最近
 一次健康快照；冷启动时直接返回占位 `{available:false, version:null, account:null, error:"pending"}`，
@@ -929,7 +1009,9 @@ POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 `data-ghp-milestone-option`、`data-ghp-session-subtitle`、`data-ghp-subtitle-chip`、
 `data-ghp-subtitle-title`、`data-ghp-sidebar-subtitle`、`data-ghp-sidebar-subtitle-chip`、
 `data-ghp-sidebar-subtitle-title` 等）由契约 §4.2.1/§4.6 固定。v0.4.1 新增的 `GET /bindings`
-只服务侧栏副标题装饰，属于本地端点，不改变页面主数据接口。
+只服务侧栏副标题装饰，属于本地端点，不改变页面主数据接口；v1.0.2 在同一端点增加 `workspaces`
+映射，并新增 `[data-ghp-workspace-entry]` / `[data-ghp-sidebar-project]` 选择器与
+`sidebarRightTabs` / `sidebar.right.pane.tab` 注册（契约 §4.7）。
 
 #### 3.4.1 Agent 工具注册（v0.4.0）
 
@@ -954,13 +1036,13 @@ POST 请求体为 JSON，上限 64 KiB。`/bind-issue` 接受两种形态：
 sequenceDiagram
     autonumber
     participant U as 用户
-    participant V as projects 视图
+    participant V as 项目看板（右侧栏）
     participant H as 宿主 /plugin/github-projects
     participant C as SWR 缓存（内存 + 磁盘）
     participant G as gh CLI
     participant X as GitHub GraphQL
 
-    U->>V: 切到 projects 页签
+    U->>V: 点工作区行看板图标（或从 issue 空态「从项目选择」）
     V->>H: GET /config（纯本地，不等 gh）
     H-->>V: 绑定状态 + 缓存健康快照
     V->>H: GET /projects、GET /items 并行
@@ -1001,7 +1083,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant U as 用户
-    participant PV as projects 视图
+    participant PV as 项目看板（右侧栏）
     participant H as 宿主
     participant S as state.json
     participant IV as issue 视图
@@ -1011,11 +1093,14 @@ sequenceDiagram
     H->>S: 串行队列写入（tmp + rename 原子替换）
     H-->>PV: {ok, session}
     PV->>H: GET /config（刷新当前绑定）
-    PV->>IV: openView('github-issue', 'bound')
-    IV->>H: GET /config，再 GET /issue（repo, number）
+    Note over PV,IV: 右侧栏内 openView 为 null：binding-changed/轮询更新会话副标题与 issue 页签数据，不切换会话视图
+    IV->>H: 下一轮 /config 与 GET /issue（repo, number）
     H-->>IV: issue 详情（命中缓存则直接返回）
     IV-->>U: 渲染 Issue 详情
 ```
+
+（会话头部 `issue` 视图内直接绑定时仍会 `openView('github-issue', 'bound')` 跳到详情；v1.0.2 的
+右侧栏看板不触发这个跳转。）
 
 #### 3.5.3 规范化层
 
@@ -1032,7 +1117,7 @@ v0.4.0 起 `/projects` 与 `/items` 的数据来自 GraphQL payload（Issue 详�
 - 引用解析：`parseIssueRef` 接受 `https://github.com/o/r/issues/n`（含 `http`、尾斜杠、query）、
   `github.com/o/r/issues/n`、`o/r#n`、`o/r n`，返回 `{repo, number}` 或 `null`。
 
-#### 3.5.4 侧栏副标题的数据流（v0.4.1）
+#### 3.5.4 侧栏副标题与工作区图标的数据流（v0.4.1 / v1.0.2）
 
 ```mermaid
 sequenceDiagram
@@ -1044,19 +1129,21 @@ sequenceDiagram
 
     C->>H: GET /bindings（轮询 ~4s / binding-changed 事件后立即）
     H->>S: 读本地绑定（不调 gh）
-    S-->>H: sessions: {sessionId: IssueSummary}
-    H-->>C: {sessions, updatedAt}
+    S-->>H: sessions: {sessionId: IssueSummary}, workspaces: {workspaceId: Project}
+    H-->>C: {sessions, workspaces, updatedAt}
     C->>C: 更新 module binding map
-    alt map 有绑定 / 绑定变化
+    alt 会话有 Issue 绑定 / 绑定变化
         C->>D: 扫描 [data-row-key^="session:"] 注入/更新副标题
-    else 未绑定 / 已解绑
+    else 会话未绑定 / 已解绑
         C->>D: 移除对应副标题，行恢复 32px
     end
+    C->>D: 扫描 [data-row-key^="workspace:"] 注入看板图标并设置 data-ghp-workspace-entry-bound（workspaces 命中=1）
     D-->>D: MutationObserver 在宿主重渲染后再次确保元素存在
 ```
 
 关键点：`/bindings` 是纯本地端点，轮询不产生 GitHub 调用；`binding-changed` 事件让本插件自己的
-绑定/解绑立即生效，agent 工具的改绑最迟在下一轮轮询（≤4s）反映到侧栏。
+绑定/解绑立即生效，agent 工具的改绑最迟在下一轮轮询（≤4s）反映到侧栏。v1.0.2 起同一轮询同时驱动
+工作区行的看板图标（绑定态高亮）；宿主缺少 `sidebarRight` 服务时不安装工作区图标 decorator。
 
 ### 3.6 缓存、SWR、磁盘缓存与延迟（v0.4.0）
 
@@ -1176,7 +1263,7 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 | `index.js` | Cordis 宿主插件入口：`resolveConfig`、路由注册、10 个端点（含 v0.4.1 `GET /bindings`）、请求门禁、SWR/磁盘缓存与单飞编排、3 个 agent 工具注册 |
 | `github.js` | `gh` 适配器：`execFile` 封装与错误分类、GraphQL 查询（Projects、分页 items）、Issue REST 查询、规范化器、`parseIssueRef` |
 | `state.js` | 绑定存储：原子 JSON 写入、串行队列、损坏文件容错、`bind*/unbind*/get*` |
-| `client.js` | 浏览器半：两个视图、slot 注册、locale 字典、CSS、fetch 封装、SWR 缓存、安全 Markdown 渲染、会话头部副标题 portal、**侧栏副标题 DOM decorator（v0.4.1；v1.0.1 起纯展示）**、系统浏览器打开（`window.open(..., '_blank', 'noopener,noreferrer')`） |
+| `client.js` | 浏览器半：`conversation.view` entry（`issue`）、右侧栏看板页签（`sidebarRightTabs` + `sidebar.right.pane.tab` 的 `SidebarProjectView`）、左侧栏工作区看板图标 decorator（v1.0.2）、locale 字典、CSS、fetch 封装、SWR 缓存、安全 Markdown 渲染、会话头部副标题 portal、**侧栏副标题 DOM decorator（v0.4.1；v1.0.1 起纯展示）**、系统浏览器打开（`window.open(..., '_blank', 'noopener,noreferrer')`） |
 | `cordis.patch.yml` | bundle 补丁（宿主行 + 默认配置） |
 | `package.json` | 包声明：`dsh.bundle.patch`、`dsh.client`、脚本 |
 | `icon.svg` | 插件图标（继承 `currentColor`，随主题着色） |
@@ -1192,8 +1279,10 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
   `react` / `react-dom`（选择器覆盖层用 `ReactDOM.createPortal` 挂载）。
 - `package.json` 声明 `engines.dsh >=0.2.1-rc.3 <0.3.0` 与 `engines.node >=22`：插件依赖 DSH 0.2.1-rc.3
   的客户端 slot 与 locale API；超出范围或 slot/标准 props 变化时需同步适配（仍只在 0.2.1-rc.3 实测）。
+  v1.0.2 不改变该范围：右侧栏看板使用 DSH 0.2.1-rc.3 已提供的可选 `sidebarRight` / `sidebarRightTabs`
+  客户端服务；服务不存在时优雅降级（不注入图标），因此不提高最低宿主版本。
 - 零 npm 运行时依赖：宿主半只 import `node:*`，浏览器半只 `require('react')` / `require('react-dom')`
-  （两者由宿主平台模块表提供，不随插件安装）；不存在 npm 供应链依赖面。
+  （两者由宿主平台模块表提供，不随插件安装）；不存在 npm 供应链依赖面。v1.0.2 未新增依赖。
 
 ---
 
@@ -1493,7 +1582,7 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 
 ### 7.2 安装
 
-插件是**已发布到 npm 的公开包 `@ceasarxuu/dsh-github-projects@1.0.1`**（`latest`=1.0.1），装到 DSH 实际运行的 profile 里
+插件是**已发布到 npm 的公开包 `@ceasarxuu/dsh-github-projects@1.0.2`**（`latest`=1.0.2），装到 DSH 实际运行的 profile 里
 （本机 Desktop 的 profile 名为 `desktop`；跑 `web` / `headless` 用对应名字）。
 
 安装需要目标 profile 的写权限（Desktop 的 profile 由 Electron 应用持有）。
@@ -1505,7 +1594,7 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 
 ```sh
 # 从 npm 安装指定发布版本到 profile
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.1
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.2
 
 # 确认已加入 profile（依赖 + dsh.profile.bundles）
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -1524,21 +1613,24 @@ dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 ```
 
-普通用户请使用上面的 npm 包；干净 profile 的 registry 安装 smoke 证据见 8.7。
+普通用户请使用上面的 npm 包；干净 profile 的 registry 安装 smoke 证据见 8.7（v1.0.0）与 8.8（v1.0.1）；
+v1.0.2 的安装 smoke 在发布后记录于 8.9。
 
-> registry 里还列有一个内部 staging 版本 `0.0.0-stage`；安装时请显式 pin `@1.0.1`（`latest` 已是
-> 1.0.1）。
+> registry 里还列有一个内部 staging 版本 `0.0.0-stage`；安装时请显式 pin `@1.0.2`（`latest` 已是
+> 1.0.2）。
 
 ### 7.3 首次使用
 
-1. 打开任意会话，点会话头部的 `projects` 页签。
+1. 打开任意会话，点左侧栏该会话所属工作区行上的小**看板图标**（或未绑定 `issue` 页签里的
+   「从项目选择」）。项目看板在**右侧栏**打开；再次点击图标聚焦已有页签，不会重复打开。
 2. 点「选择 Project」，在列表里选一个 Project（也可以手动填 owner + number 绑定）。
 3. 绑定后默认看到五列泳道看板（No status / TODO / In Progress / In Review / Done）；
    用工具栏「列表」可切回分组列表，「泳道」切回看板。
 4. 用工具栏的 milestone 下拉按 `全部` / `Backlog` / 具体 milestone 过滤（可与文本筛选叠加）。
 5. 找到要处理的 Issue，点卡片（或列表行的「绑定」）：泳道卡片整卡可点，Issue 绑定到当前会话，
-   PR/Draft 则打开 GitHub。
-6. 界面自动跳到 `issue` 页签并展示该 Issue；下次回到该会话时仍然是这个 Issue。
+   PR/Draft 则打开 GitHub。绑定后 `issue` 页签与会话副标题更新，但不切换当前会话视图（看板在
+   右侧栏，可继续浏览）。
+6. 会话头部 `issue` 页签展示该 Issue；下次回到该会话时仍然是这个 Issue。
 7. 其他入口：在 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」。
 
 ### 7.4 配置覆盖
@@ -1547,7 +1639,8 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 
 ### 7.5 卸载与重置
 
-- **停用插件**：Plugin Manager 停用/移除；两个页签消失，出厂界面恢复，绑定文件保留。
+- **停用插件**：Plugin Manager 停用/移除；`issue` 页签与右侧栏看板/工作区图标消失，出厂界面恢复，
+  绑定文件保留。
 - **彻底移除**：`dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects`（同时删除依赖与 bundle 列表项）。
 - **重置绑定**：删除 `~/.dsh/plugin-data/github-projects/state.json`（或删除当前 profile 的 `statePath`）。
   建议在 DSH 退出时操作；最坏情况是下一次读取时得到空 store。
@@ -1556,11 +1649,13 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> **v1.0.1（当前版本）** 只改浏览器半的交互：系统浏览器打开、侧栏副标题不可交互且无横向溢出。
-> 冻结输入 `client.js` sha256 `e6a3b2c9…`；宿主半未变（`index.js` `b52964f7…`、`github.js`
-> `a4d279f9…`、`state.js` `484af66b…`）。**§8.8 是 v1.0.1 的最终回归 + 发布验收**；8.1–8.7 的
-> 数字与截图来自 v0.4.1/v1.0.0 运行，作为历史基线保留（v1.0.0 发布门禁见 8.7，v0.4.1 及更早
-> 见 8.6）。
+> **v1.0.2（当前版本）** 把项目看板移到右侧栏（`sidebarRightTabs` 自定义页签 + 左侧栏工作区行入口
+> 图标），扩展 `GET /bindings` 的 `workspaces` 映射，并修复 ProjectPicker 重放（P-001）。冻结输入
+> `client.js` sha256 `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`；宿主单测
+> **92/92**。**§8.9 是 v1.0.2 的最终回归与发布前验收（已 GREEN：fixture 18/18、real 19/19 阶段
+> PASS，console 0/0/0，权威截图 01–14 已重采）**；8.1–8.8 的数字与截图来自
+> v0.4.1/v1.0.0/v1.0.1 运行，作为历史基线保留（v1.0.1 最终验收见 8.8，v1.0.0 发布门禁见 8.7，
+> v0.4.1 及更早见 8.6）。
 
 ### 8.1 验收清单（v0.4.1 功能验收历史记录）
 
@@ -1599,6 +1694,13 @@ node --test test/host/*.test.mjs
 `ctx.tools`/`exec.agent.session`，不联网）。
 
 ### 8.3 e2e
+
+> **v1.0.2 权威 e2e 已通过（发布前，2026-10-29）**：fixture **18/18 executed stages PASS**（exit 0，
+> run dir `2026-10-28T22-18-34-867Z`）、real **19/19 stages PASS**（exit 0，run dir
+> `2026-10-28T22-20-03-025Z`），两模式 console **0/0/0**；新增阶段 `project-picker-replay`，
+> `projects-wide` 改为最大化右侧栏（2200×1300），`projects-warm` 改为关闭/重开 `项目` 页签。权威
+> 阶段定义与截图清单见 [`scripts/e2e/README.md`](../scripts/e2e/README.md)；结果汇总与断言摘要在 §8.9。
+> 下表是 **v1.0.1** 的阶段集与断言，仅作历史基线保留。
 
 ```sh
 node scripts/e2e/run.mjs --mode fixture --keep
@@ -1641,6 +1743,17 @@ node scripts/e2e/run.mjs --mode real --keep --extra-comments
 `artifacts/screenshots/` 中 01–09、11–14 来自 real 运行；`10-desktop-tabs.png` 为 Desktop 手动截图。
 
 ### 8.4 截图
+
+**v1.0.2 权威截图集（2026-10-29 已重采，`artifacts/screenshots/`）**：`01-tabs`、`02-projects-empty`、
+`03-projects-picker`、`04-projects-board`、`05-projects-list`、`06-projects-milestone`、`07-issue-empty`、
+`08-issue-detail`、`12-external-open`、`13-issue-subtitle`、`14-sidebar-subtitle` 为 harness real 模式
+1280×800；`09-issue-comments` 为 real + `--extra-comments`；`11-projects-wide` 为 **2200×1300**（最大化
+右侧栏看板：pane 2199px = 窗口 100%、`.ghp-page` 2191px = pane 99.6%、列宽均分）；`10-desktop-tabs.png`
+仍为真实 Desktop 手动截图（非 harness 产出，保持不变）；`15-published-install.png` 由发布后的
+release-smoke 重生成（当前仍是 v1.0.1 历史图）。逐图核对点见 8.9 与
+[`scripts/e2e/README.md`](../scripts/e2e/README.md)。
+
+> 下表是 **v1.0.1** 的官方截图集（历史基线，保留作版本对比；v1.0.2 下同号文件已按上一段重采）。
 
 最终截图集共 **15 张（v1.0.1）**：`01`–`09` 与 `11`–`15` 由 e2e harness 产出（`01`–`09`、`12`–`15`
 为 1280×800；`11` 为 2200×1300），`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（2560×1370
@@ -1790,6 +1903,76 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 缺陷均有直接断言（外部浏览器打开、侧栏非交互、无横向溢出、无多余滚动条矩形）；npm 1.0.1 已上线并
 通过干净 profile 安装 smoke；15 张截图齐全。
 
+### 8.9 v1.0.2 回归与发布前验收（2026-10-29，最终）
+
+> 冻结输入：`client.js` sha256
+> `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`（`shasum -a 256 client.js`）；
+> `package.json` 1.0.2；2026-10-29 工作树。1.0.2 同时改动宿主半（`/bindings` 增加 `workspaces`，
+> `index.js`）与浏览器半。**发布前门禁已 GREEN**：fixture/real 两模式 e2e PASS、宿主单测 92/92、
+> 权威截图 01–14 已重采；仅剩发布后条目见本节末尾。
+
+**权威 e2e（repo harness `scripts/e2e/run.mjs`；阶段定义与截图清单见
+[`scripts/e2e/README.md`](../scripts/e2e/README.md)）**
+
+| 模式 | 命令 / exit | 运行目录 | 结果 |
+|---|---|---|---|
+| fixture（mock host，无 `gh`） | `node scripts/e2e/run.mjs --mode fixture --keep` / exit 0 (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-28T22-18-34-867Z` | **18/18 executed stages `ok:true`**；`console` 阶段 **0 console errors / 0 exceptions / 0 warnings / 0 plugin HTTP errors**；新增 `project-picker-replay` PASS；`projects-wide` 最大化右侧栏 2200×1300；`projects-warm` 关闭/重开 `项目` 页签无骨架 **19 ms**；截图 01–14（09 为 opt-in，未执行） |
+| real（真实 `index.js` + 本地只读 `gh` 2.96.0，账号 `ceasarXuu`，真实 Project #9） | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` / exit 0 (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-28T22-20-03-025Z` | **19/19 stages `ok:true`**（含 opt-in `issue-comments`）；console **0/0/0**；`project-picker-replay` PASS；`projects-wide` 2200×1300：pane **2199 px = 窗口 100%**、`.ghp-page` **2191 px = pane 99.6%**、列宽均分；`projects-warm` 无骨架 **42 ms**；截图 01–14 |
+
+关键断言（两模式一致，除非注明）：
+
+- `tabs`：会话头部 `["对话","轨迹","issue"]`，被移除的 `projects` 会话页签**不存在**；左侧栏工作区行
+  暴露可见的 `[data-ghp-workspace-entry]` 看板图标（`data-ghp-workspace-entry-bound="0"`），此时无
+  右侧栏 pane。
+- `projects-empty` / `projects-picker` / `projects-board` / `projects-list` / `projects-milestone` /
+  `projects-external-open`：全部在右侧栏 keyed pane
+  `.ghp-sidebar-project[data-ghp-sidebar-project=<workspaceId>]` 内断言；real 冷启动看板
+  **3659 ms**（fixture 312 ms，均为记录值）；real Project #9 四列且 `data-ghp-hidden-lanes="no-status"`。
+- `issue-bind-subtitle` / `sidebar-subtitle`：从右侧栏看板绑定后 `issue` 会话视图保持激活（侧栏绑定
+  不切换会话视图）；头部副标题 chip `#240`、自带一行位于 tabs 之上；侧栏副标题为纯展示 `span`、行高
+  41 px、chip `#240`、`title` 带 `repo#N title`、无横向溢出，真实鼠标点击 **0** 次 `window.open`
+  且不切会话。
+- `project-picker-replay`：显式 `从项目选择` 只打开一次；选择/关闭收起并消费意图；会话切换/返回、
+  侧栏折叠/展开均不重放；第二次显式打开仍只一次并可关闭；绑定保持、唯一右侧栏页签。
+- `projects-warm`：关闭 `项目` 页签（pane 卸载）后从工作区图标重开，**19 ms**（fixture，cold 312 ms）
+  / **42 ms**（real，cold 3659 ms）渲染缓存看板，`skeletonSeen:false`。
+- `console`：两模式 **0 errors / 0 exceptions / 0 warnings / 0 插件 HTTP ≥400 / 0 网络失败**；
+  `stale` 字段出现在两模式所有 `/projects`、`/items`、`/issue` 数据 2xx 响应上；客户端模块
+  `@ceasarxuu/dsh-github-projects` 加载（无 `@local/`）。
+
+**截图（v1.0.2 权威集，已刷新 `artifacts/screenshots/`）**：`01-tabs`、`02-projects-empty`、
+`03-projects-picker`、`04-projects-board`、`05-projects-list`、`06-projects-milestone`、`07-issue-empty`、
+`08-issue-detail`、`12-external-open`、`13-issue-subtitle`、`14-sidebar-subtitle`（1280×800，real）；
+`09-issue-comments`（1280×800，real + `--extra-comments`）；`11-projects-wide`（**2200×1300**，最大化
+右侧栏看板）；`10-desktop-tabs.png` 仍为真实 Desktop 手动截图；`15-published-install.png` 由发布后
+release-smoke 重生成。
+
+**发布前其它证据**
+
+| # | 项目 | 结果 |
+|---|---|---|
+| C1 | 宿主单测 | `node --test test/host/*.test.mjs` → **tests 92 / pass 92 / fail 0**（Node v24.18.0；`/bindings` 的 `workspaces` 响应与工作区图标数据已覆盖） |
+| C2 | 冻结输入 | `client.js` sha256 `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`（与 case file `coe/2026-10-29-00-31-picker-replay.md` E-004/E-006 记录一致）；`node --check client.js` 通过 |
+| C3 | P-001 独立验证 | 独立 picker-replay 验证器（独立脚本，非作者运行）**6/6 项检查通过**；与 e2e 新增的 `project-picker-replay` 阶段互为独立证据 |
+| C4 | 发布前预览截图 | 真实 Desktop：`artifacts/preview/v1.0.2-sidebar-project.png`（2560×1370）、`artifacts/preview/v1.0.2-workspace-icons.png`（900×760）与 P-001 序列 `artifacts/preview/picker-replay/01..05*.png`（1280×800）——发布前的早期人工证据，官方集见上一段 |
+| C5 | 本地预览安装 | 本机 Desktop profile 以本地 link 安装预览构建：`/plugin/github-projects/health` → 200；`state.json` sha256 前后一致（`542799af…`，绑定未被预览安装改动）；reload 后修复生效 |
+| C6 | 降级路径 | 宿主无 `sidebarRight` 服务时不注入工作区图标（无异常），`issue` 页签与两处副标题保持工作（代码路径走 `ctx.inject(['sidebarRight','sidebarRightTabs'])`，缺失即不执行） |
+| C7 | 行为回归（人工/预览） | 工作区图标 click/Enter 不展开工作区；重复点击聚焦已有页签（无重复 tab）；窄栏下工具栏换行、看板横向滚动、列表可用；`/bindings` 返回 `{sessions, workspaces, updatedAt}` 且不调用 `gh` |
+
+**发布后仍需补记（仅剩发布面，由维护者在 follow-up commit 写入本节）**
+
+- npm `@ceasarxuu/dsh-github-projects@1.0.2` 上线：`dist-tags.latest = 1.0.2`、public。
+- 发布后的**干净 profile npm 安装 smoke**：`node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.2 --keep`
+  → exit/PASS、run dir、registry 安装结果、`/plugin/github-projects/health` 状态、页签
+  `对话/轨迹/issue` + 工作区看板入口、console 0/0/0、tarball 文件数/体积；同时重生成
+  `15-published-install.png`。
+- GitHub tag/release [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) 确认；
+  `market/index.json` 的 `publishTimestamp` 更新。
+
+> v1.0.2 发布前结论：fixture 18/18、real 19/19 e2e PASS，console 全 0；宿主 92/92；独立 verifier
+> 6/6；权威截图 01–14 与预览人工证据齐备。发布后只差 npm 上线 + release-smoke 与 tag/release
+> 确认（上一段），不涉及新的功能验证。
+
 ---
 
 ## 9. 边界与已知限制
@@ -1799,12 +1982,15 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 - **只读**：不能修改 GitHub 上的任何内容（状态、评论、字段、Issue 创建/关闭）。
 - **只处理 Issue，不处理 PR 详情**：PR/Draft 条目只能跳转 GitHub。
 - **单 Project**：一个工作区同时只绑定一个 Project。
-- **无搜索/分页**：`projects` 页签只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
-- **会话副标题依赖宿主私有 DOM（两处）**：出厂头部没有 subtitle slot，插件用受控 portal 在
+- **无搜索/分页**：右侧栏看板只在已取回的条目（最多 `maxProjectItems`）内过滤；不跨 Project 搜索。
+- **会话副标题与工作区入口依赖宿主私有 DOM**：出厂头部没有 subtitle slot，插件用受控 portal 在
   `header[data-window-drag]` 内插入并守卫副标题行；左侧栏同样没有 subtitle slot，插件用受控
   DOM decorator（`[data-row-key^="session:"]` 行锚点 + `:has()` 行高覆盖 + `MutationObserver`
-  扫描/轮询兜底）注入第二行。宿主结构变化时两者都会**降级为不显示**（不报错、不影响会话），
-  需要随 DSH 升级复核。
+  扫描/轮询兜底）注入第二行，并向 `[data-row-key^="workspace:"]` 行注入看板图标。宿主结构变化时
+  三者都会**降级为不显示**（不报错、不影响会话），需要随 DSH 升级复核。
+- **右侧栏看板依赖可选的宿主服务**：页面在 `ctx.inject(['sidebarRight', 'sidebarRightTabs'])` 内注册
+  自定义页签与 body；宿主构建缺少这些服务时不注入工作区图标、看板不可打开（无异常），`issue` 页签与
+  副标题照常工作。自定义页签 API 变化（`register` / `openTab` / nav params）需随 DSH 升级复核。
 - **Agent 工具只作用于当前会话**：没有目标会话参数，不能给其它会话绑定/解绑；工具写入后客户端靠
   本地轮询在 ≤4s 内反映，不是实时推送。
 - **外部链接依赖弹窗权限**：Issue 链接用 `window.open(url, '_blank', 'noopener,noreferrer')` 打开
@@ -1818,10 +2004,10 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
   且仅在该列非空时出现）。
 - **空 No status 泳道**：`No status` 在过滤后为空时自动隐藏（其余四个规范列始终显示），因此泳道数量
   会随筛选结果变化；被隐藏的列键可从 `data-ghp-hidden-lanes` 读取。
-- **列宽与横向滚动**：泳道列最小宽度 176px；宽屏下五列均分可用宽度，窗口窄于约 960px 时整个看板横向滚动。
-  页面本身没有宽度上限（v1.1.1 起）。
-- **宿主布局边界**：DSH 的会话输入框（composer）保持宿主 shell 的居中宽度，不随插件全宽而改变；
-  侧边栏、页签栏等宿主框架也不在本插件的布局控制范围内。
+- **列宽与横向滚动**：泳道列最小宽度 176px；v1.0.2 起看板在右侧栏内自适应窄栏（工具栏换行、整板横向
+  滚动、列表单列可用）；v1.0.1 及更早看板是铺满会话主体的页签（页面无宽度上限，v1.1.1 起）。
+- **宿主布局边界**：DSH 的会话输入框（composer）保持宿主 shell 的居中宽度；`issue` 页铺满会话主体，
+  右侧栏看板位于宿主自己的侧栏面板内；侧边栏、页签栏等宿主框架不随插件布局改变。
 - **milestone 过滤受读取上限约束**：选项与计数只统计已加载条目；超过 `maxProjectItems` 的条目不会出现在
   下拉里，也不会被过滤到。
 - **视图偏好是本地偏好**：来回切换「泳道 / 列表」只影响当前客户端，不写入 profile 绑定文件。
@@ -1850,9 +2036,11 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 - `gh` 必须在宿主进程的 `PATH` 里，或通过 `ghCommand` 配绝对路径；GUI 应用继承的 `PATH` 往往比终端短，
   这是"终端里 `gh` 能用、插件报 `gh-missing`"的最常见原因。
 - `gh` 未登录或缺少 `project` scope → `gh-auth`，界面提示登录；组织 Project 可能还需要 `read:org`。
-- DSH 升级可能改变 slot/标准 props：`engines.dsh` 只允许 `>=0.2.1-rc.3 <0.3.0`（且仅在 0.2.1-rc.3
-  实测）；超出范围或升级后页签不出现/报错时需要适配。
-- 插件依赖 `conversation.view` slot 与 `useWorkspaces` 等标准 props；这些是宿主 API，不是稳定公测接口。
+- DSH 升级可能改变 slot/标准 props/右侧栏服务：`engines.dsh` 只允许 `>=0.2.1-rc.3 <0.3.0`（且仅在
+  0.2.1-rc.3 实测）；超出范围或升级后页签/看板不出现、报错时需要适配。
+- 插件依赖 `conversation.view` slot、`useWorkspaces` 等标准 props、可选的 `sidebarRight` /
+  `sidebarRightTabs` 客户端服务，以及 `sidebar.right.pane.tab` slot；这些是宿主 API，不是稳定公测接口。
+  右侧栏服务缺失时优雅降级（不注入工作区图标），不会让 `issue` 页签失效。
 
 ### 9.4 安全边界
 
@@ -1874,7 +2062,7 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 | P1 | 写回（状态） | 把 Issue 状态/Project Status 字段改到指定值；未来可在泳道看板上拖拽卡片改 Status（当前只读） | `gh issue close/reopen`、`gh project item-edit` |
 | P1 | 从会话建 Issue | 把当前对话摘要生成 Issue 草稿，用户确认后创建 | `gh issue create`、宿主侧摘要输入 |
 | P2 | Agent 工具 | 暴露 `github_projects` / `github_issue` 工具给 agent（读绑定、搜 Issue、写前需确认） | 宿主工具注册 + 权限/审批接入 |
-| P2 | 工作区看板 | 独立的 workspace 看板视图（按 status 分列、拖拽改状态） | 新 slot 或独立面板、写回能力 |
+| P2 | 工作区看板 | 独立/可停靠的 workspace 看板（v1.0.2 已有右侧栏单工作区看板；未来可做多工作区总览或全屏视图、拖拽改状态） | 新 slot 或独立面板、写回能力 |
 | P2 | 多账号 / GHES | 选择 `gh` 账号/主机，按 host 隔离缓存与绑定 | 认证配置、缓存 key、UI |
 | P3 | 通知与同步 | 绑定 Issue 变化提示（非轮询：打开会话时对比）、后台轻量同步 | 事件模型、缓存持久化 |
 
@@ -1920,6 +2108,7 @@ POST /plugin/github-projects/unbind-issue       {sessionId}
 | 中文 | 英文 | 代码/字段 |
 |---|---|---|
 | 页签 | tab / view | `conversation.view` slot entry |
+| 右侧栏页签 | right-sidebar tab | `sidebarRightTabs.register` / `sidebar.right.pane.tab` |
 | 工作区 | workspace | `workspaceId` |
 | 会话 | session | `sessionId` |
 | 绑定 / 解绑 | bind / unbind | `/bind-*`、`/unbind-*` |

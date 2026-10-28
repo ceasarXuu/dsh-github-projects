@@ -16,8 +16,8 @@
         "zh": "GitHub 项目与议题"
       },
       "description": {
-        "en": "Bind a GitHub Project to each workspace and an Issue to each session: swimlane board, issue detail tab, header/sidebar issue subtitles, built-in browser links, and agent bind tools.",
-        "zh": "给工作区绑定 GitHub Project、给会话绑定 Issue：泳道看板、Issue 详情页、会话头部/左侧栏副标题、内置浏览器跳转与 Agent 绑定工具。"
+        "en": "Bind a GitHub Project to each workspace and an Issue to each session: swimlane board in the right sidebar, issue detail tab, header/sidebar issue subtitles, system-browser links, and agent bind tools.",
+        "zh": "给工作区绑定 GitHub Project、给会话绑定 Issue：右侧栏泳道看板、Issue 详情页、会话头部/左侧栏副标题、系统浏览器跳转与 Agent 绑定工具。"
       },
       "icon": "icons/github-projects.svg",
       "author": "ceasarXuu",
@@ -35,7 +35,7 @@
       },
       "versions": [
         {
-          "version": "1.0.1",
+          "version": "1.0.2",
           "publishTimestamp": 1793149075,
           "source": {
             "type": "npm"

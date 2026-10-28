@@ -219,8 +219,9 @@ test('GET /bindings returns the empty binding map and never invokes gh', async (
   const started = Date.now()
   const body = expectJson(await app.get('/bindings'))
   const elapsed = Date.now() - started
-  assert.deepEqual(Object.keys(body).sort(), ['sessions', 'updatedAt'])
+  assert.deepEqual(Object.keys(body).sort(), ['sessions', 'updatedAt', 'workspaces'])
   assert.deepEqual(body.sessions, {})
+  assert.deepEqual(body.workspaces, {})
   assert.match(body.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
   assert.ok(Number.isFinite(Date.parse(body.updatedAt)))
   assert.ok(elapsed < 50, `/bindings took ${String(elapsed)}ms`)
@@ -239,10 +240,42 @@ test('GET /bindings returns every bound session with exact IssueSummary fields',
     'session-A': ISSUE_SUMMARY,
     'session-B': SECOND_ISSUE_SUMMARY,
   })
+  assert.deepEqual(body.workspaces, {}, 'no workspace is bound yet')
   // Only the BindingsResponse keys; no workspace map and no stale field.
   assert.deepEqual(Object.keys(body.sessions).sort(), ['session-A', 'session-B'])
   assert.deepEqual(Object.keys(body.sessions['session-A']).sort(), ['number', 'repo', 'state', 'title', 'url'])
   assert.equal(app.calls.length, 0, '/bindings must never invoke gh')
+})
+
+test('GET /bindings includes workspace → Project bindings with exact stored fields', async (t) => {
+  const app = useApp(t)
+  const secondProject = { ...PROJECT, number: 8, title: 'LongMan-issues', url: 'https://github.com/users/ceasarXuu/projects/8', itemCount: 9 }
+
+  await app.post('/bind-workspace', { workspaceId: 'ws-1', project: PROJECT })
+  await app.post('/bind-workspace', { workspaceId: 'ws-2', project: secondProject })
+  await app.post('/bind-issue', { sessionId: 'session-A', workspaceId: 'ws-1', issue: ISSUE_SUMMARY })
+  await app.post('/bind-issue', { sessionId: 'session-B', issue: SECOND_ISSUE_SUMMARY })
+  assert.equal(app.calls.length, 0, '/bindings reads must not touch gh')
+
+  const body = expectJson(await app.get('/bindings'))
+  assert.deepEqual(body.workspaces, { 'ws-1': PROJECT, 'ws-2': secondProject })
+  assert.deepEqual(Object.keys(body.workspaces['ws-1']).sort(), [
+    'closed', 'description', 'itemCount', 'number', 'owner', 'ownerType', 'title', 'url',
+  ])
+  assert.deepEqual(body.sessions, { 'session-A': ISSUE_SUMMARY, 'session-B': SECOND_ISSUE_SUMMARY })
+
+  // Unbinding one workspace removes only that entry; sessions are unaffected.
+  expectJson(await app.post('/unbind-workspace', { workspaceId: 'ws-1' }))
+  const afterUnbind = expectJson(await app.get('/bindings'))
+  assert.deepEqual(afterUnbind.workspaces, { 'ws-2': secondProject })
+  assert.deepEqual(afterUnbind.sessions, body.sessions)
+  assert.equal(app.calls.length, 0)
+
+  // Query parameters stay irrelevant for both maps.
+  const withQuery = expectJson(await app.get('/bindings?workspaceId=ws-1&refresh=1&bogus=1'))
+  assert.deepEqual(withQuery.workspaces, afterUnbind.workspaces)
+  assert.deepEqual(withQuery.sessions, afterUnbind.sessions)
+  assert.equal(app.calls.length, 0)
 })
 
 test('GET /bindings removes unbound sessions and ignores unknown request state', async (t) => {
@@ -257,6 +290,7 @@ test('GET /bindings removes unbound sessions and ignores unknown request state',
   // Arbitrary query parameters/ids are irrelevant to this route.
   const withQuery = expectJson(await app.get('/bindings?sessionId=session-A&workspaceId=nope&refresh=1'))
   assert.deepEqual(withQuery.sessions, afterUnbind.sessions)
+  assert.deepEqual(withQuery.workspaces, {})
   assert.equal(app.calls.length, 0)
 })
 
@@ -269,6 +303,7 @@ test('GET /bindings stays cheap and never invokes a hanging gh runner', async (t
     const body = expectJson(await app.get('/bindings'))
     assert.ok(Date.now() - started < 50, `/bindings blocked ${String(Date.now() - started)}ms`)
     assert.deepEqual(body.sessions, {})
+    assert.deepEqual(body.workspaces, {})
   }
   assert.equal(app.calls.length, 0, 'a hanging gh runner was invoked by /bindings')
   assert.equal(app.routes.length, 1, 'still the single prefix route (no extra registration)')

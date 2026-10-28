@@ -216,7 +216,9 @@ async function handle(req, res, config) {
   if (req.method === 'GET' && route === '/bindings') {
     const sessions = {}
     for (const [id, binding] of sessionBindings.entries()) sessions[id] = binding.issue
-    return send(res, 200, { sessions, updatedAt: new Date().toISOString() })
+    const workspaces = {}
+    for (const [id, binding] of workspaceBindings.entries()) workspaces[id] = binding.project
+    return send(res, 200, { sessions, workspaces, updatedAt: new Date().toISOString() })
   }
   if (req.method === 'GET' && route === '/projects') {
     await delay(180)

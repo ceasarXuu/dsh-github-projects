@@ -6,6 +6,11 @@
 // mock host or the real host), drives headless Chrome over CDP through the real
 // UI, and captures the acceptance screenshots under artifacts/screenshots/.
 //
+// v1.0.2 UI: there is no `projects` conversation view tab. The project board is
+// a DSH right-sidebar custom tab (`项目`), opened from the board icon
+// (`[data-ghp-workspace-entry]`) in the left-sidebar workspace row; the pane
+// body is `.ghp-sidebar-project[data-ghp-sidebar-project=<workspaceId>]`.
+//
 // Usage:
 //   node scripts/e2e/run.mjs [--mode fixture|real] [--keep] [--only=<stage>] [--headful]
 //
@@ -22,7 +27,7 @@ import {
 import { launchChrome, waitForDevToolsPort, connectPageTarget } from './lib/browser.mjs'
 import { startMockLlm } from './lib/mock-llm.mjs'
 import {
-  clickButton, clickTab, collectUi, prepareConversationUi, sendComposerMessage, settle, tabLabels,
+  clickButton, clickSidebarSession, clickTab, collectUi, prepareConversationUi, sendComposerMessage, settle, tabLabels,
   visibleButtonLabels, waitForAppShell, waitForText,
 } from './lib/app.mjs'
 
@@ -47,6 +52,7 @@ const STAGES = [
   'issue-detail',
   'issue-comments',
   'sidebar-subtitle',
+  'project-picker-replay',
   'projects-warm',
   'console',
 ]
@@ -113,7 +119,7 @@ Options:
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
-Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-external-open, 13-issue-subtitle, 14-sidebar-subtitle)
+Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-external-open, 13-issue-subtitle, 14-sidebar-subtitle; board shots capture the v1.0.2 right-sidebar pane)
 Temp root: /tmp/dsh-github-projects-e2e/<timestamp>/
 `
 
@@ -333,14 +339,50 @@ async function main() {
     }
 
     // --------------------------------------------------------------- tabs --
+    /** workspaceId parsed from the left-sidebar `workspace:` row (v1.0.2). */
+    let workspaceId = null
     if (gated('tabs')) {
       const tabsOk = await runStage('tabs', async () => {
         const labels = await tabLabels(resources.cdp)
-        for (const required of ['对话', '轨迹', 'projects', 'issue']) {
+        for (const required of ['对话', '轨迹', 'issue']) {
           assert(labels.includes(required), `session header is missing the "${required}" tab (tabs: ${JSON.stringify(labels)})`)
         }
+        // v1.0.2 removed the `projects` conversation.view tab: the board moved to
+        // DSH's right sidebar and is opened from the workspace-row board icon.
+        assert(!labels.includes('projects'), `v1.0.2 removed the "projects" conversation view tab, but it is still rendered (tabs: ${JSON.stringify(labels)})`)
+        // The decorator injects the workspace-row icon asynchronously after the
+        // sidebar tree renders; wait for it before snapshotting.
+        await resources.cdp.waitFor(`document.querySelector('[data-ghp-workspace-entry]') !== null`, {
+          timeoutMs: emitTimeout(15_000), intervalMs: 100, label: 'workspace row board icon',
+        })
+        const entry = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')].filter(vis)
+          const entries = rows.map(row => {
+            const icon = row.querySelector('[data-ghp-workspace-entry]')
+            return {
+              rowKey: row.getAttribute('data-row-key'),
+              icon: icon !== null && vis(icon),
+              bound: icon === null ? null : icon.getAttribute('data-ghp-workspace-entry-bound'),
+              aria: icon === null ? null : icon.getAttribute('aria-label'),
+            }
+          })
+          return {
+            rows: entries,
+            iconCount: entries.filter(candidate => candidate.icon).length,
+            paneOpen: document.querySelector('.ghp-sidebar-project') !== null,
+          }
+        })()`)
+        assert(entry.rows.length >= 1, `no [data-row-key^="workspace:"] workspace row in the left sidebar: ${JSON.stringify(entry)}`)
+        assert(entry.iconCount >= 1, `workspace row has no visible [data-ghp-workspace-entry] board icon: ${JSON.stringify(entry)}`)
+        const row = entry.rows.find(candidate => candidate.icon)
+        assert(row.aria === '打开 GitHub Project', `workspace board icon aria-label is ${JSON.stringify(row.aria)}, expected "打开 GitHub Project"`)
+        assert(row.bound === '0', `workspace board icon starts with data-ghp-workspace-entry-bound=${JSON.stringify(row.bound)}, expected "0" (nothing bound yet)`)
+        assert(entry.paneOpen === false, 'the right-sidebar project pane is already open before the tabs stage opened it')
+        workspaceId = row.rowKey.slice('workspace:'.length)
+        assert(workspaceId.length > 0, 'could not parse the workspaceId from the workspace row key')
         const screenshot = await shot('01-tabs.png')
-        return { tabs: labels, screenshot }
+        return { tabs: labels, workspaceId, boardIcon: row, sidebarPaneOpen: entry.paneOpen, screenshot }
       })
       if (tabsOk === false) throw new Error('tabs stage failed')
     }
@@ -348,12 +390,31 @@ async function main() {
     // ----------------------------------------------------- projects empty --
     if (gated('projects-empty')) {
       const projectsEmptyOk = await runStage('projects-empty', async () => {
-        assert(await clickTab(resources.cdp, 'projects'), 'could not click the "projects" tab')
+        // v1.0.2: open the board in the right sidebar through the workspace-row icon.
+        const board = await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
+        assert(board.board === false, `project board is already bound in the projects-empty stage: ${JSON.stringify(board)}`)
+        assert(board.tabs.some(label => label === '项目' || label === 'Project'), `right sidebar tab is ${JSON.stringify(board.tabs)}, expected the plugin's project tab`)
         await waitForText(resources.cdp, '绑定 GitHub Project', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, '选择 Project', { timeoutMs: emitTimeout(15_000) })
+        const pane = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const text = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ')
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          if (pane === undefined) return { pane: false }
+          return {
+            pane: true,
+            workspaceId: pane.getAttribute('data-ghp-sidebar-project'),
+            emptyText: text(pane).slice(0, 240),
+            chooseButton: [...pane.querySelectorAll('button')].some(el => vis(el) && text(el) === '选择 Project'),
+            board: pane.querySelector('[data-ghp-board]') !== null,
+          }
+        })()`)
+        assert(pane.pane && pane.workspaceId === workspaceId, `right-sidebar project pane is not the keyed workspace pane: ${JSON.stringify(pane)} (workspaceId ${JSON.stringify(workspaceId)})`)
+        assert(pane.chooseButton, `sidebar empty state has no 选择 Project action: ${JSON.stringify(pane)}`)
+        assert(pane.board === false, 'the unbound empty state unexpectedly renders a board')
         await settle(300)
         const screenshot = await shot('02-projects-empty.png')
-        return { screenshot }
+        return { screenshot, workspaceId, sidebarTab: board.tabs, pane }
       })
       if (projectsEmptyOk === false) throw new Error('projects-empty stage failed')
     }
@@ -365,9 +426,45 @@ async function main() {
         await waitForText(resources.cdp, 'Astropath-issues', { timeoutMs: emitTimeout(30_000) })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-picker-row"]').length >= 1`, 'picker rows rendered')
         await waitForPlugin(`!document.querySelector('[class*="ghp-picker-loading"]')`, 'picker loading finished')
+        // v1.0.2: the picker panel is portal'd to document.body (so no ancestor
+        // overflow can clip it) but its scrim is sized to the right-sidebar
+        // pane's rectangle — it must read as an in-pane overlay.
+        const picker = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          const overlay = [...document.querySelectorAll('.ghp-overlay')].find(vis)
+          const panel = overlay === undefined ? undefined : [...overlay.querySelectorAll('.ghp-picker')].find(vis)
+          const title = panel === undefined ? null : panel.querySelector('.ghp-picker-title')
+          const paneRect = pane === undefined ? null : pane.getBoundingClientRect()
+          const overlayRect = overlay === undefined ? null : overlay.getBoundingClientRect()
+          return {
+            pane: pane !== undefined,
+            overlay: overlay !== undefined,
+            panel: panel !== undefined,
+            title: title === null ? null : (title.innerText || '').trim(),
+            rows: panel === undefined ? 0 : panel.querySelectorAll('[class*="ghp-picker-row"]').length,
+            paneRect: paneRect === null ? null : { left: Math.round(paneRect.left), top: Math.round(paneRect.top), width: Math.round(paneRect.width), height: Math.round(paneRect.height) },
+            overlayRect: overlayRect === null ? null : { left: Math.round(overlayRect.left), top: Math.round(overlayRect.top), width: Math.round(overlayRect.width), height: Math.round(overlayRect.height) },
+          }
+        })()`)
+        assert(picker.overlay && picker.panel && picker.rows >= 1, `project picker did not render over the right-sidebar pane: ${JSON.stringify(picker)}`)
+        assert(picker.title === '选择 GitHub Project', `project picker title is ${JSON.stringify(picker.title)}, expected "选择 GitHub Project"`)
+        // `.ghp-overlay` is sized with the pane rect but is content-box with 16px
+        // vertical / 20px horizontal padding, so it covers a slightly larger box;
+        // what matters is that the pane is fully covered by the scrim.
+        const scrimCovers = (() => {
+          const pane = picker.paneRect
+          const overlay = picker.overlayRect
+          if (pane === null || overlay === null) return false
+          return overlay.left <= pane.left + 2
+            && overlay.left + overlay.width >= pane.left + pane.width - 2
+            && overlay.top <= pane.top + 2
+            && overlay.top + overlay.height >= pane.top + pane.height - 2
+        })()
+        assert(scrimCovers, `picker scrim does not cover the right-sidebar pane: ${JSON.stringify(picker)}`)
         await settle(400)
         const screenshot = await shot('03-projects-picker.png')
-        return { screenshot }
+        return { screenshot, picker }
       })
       if (pickerOk === false) throw new Error('projects-picker stage failed')
     }
@@ -386,7 +483,23 @@ async function main() {
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project board loading finished')
         const board = await waitForBoard(resources.cdp, emitTimeout(30_000))
         coldBoardMs = Date.now() - boardStarted
-        // Before any bind, no session subtitle may exist (v0.4.0 baseline).
+        // v1.0.2: the bound board must live inside the keyed right-sidebar pane.
+        const pane = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          const entry = [...document.querySelectorAll('[data-ghp-workspace-entry]')].find(vis)
+          return {
+            pane: pane !== undefined,
+            workspaceId: pane === undefined ? null : pane.getAttribute('data-ghp-sidebar-project'),
+            boardInPane: pane !== undefined && [...pane.querySelectorAll('[data-ghp-board]')].some(vis),
+            dockTabs: [...document.querySelectorAll('[data-dockkit-tab]')].filter(vis).map(el => (el.innerText || '').trim()),
+            entryBound: entry === undefined ? null : entry.getAttribute('data-ghp-workspace-entry-bound'),
+          }
+        })()`)
+        assert(pane.pane && pane.workspaceId === workspaceId, `bound board is not in the keyed right-sidebar pane: ${JSON.stringify(pane)} (workspaceId ${JSON.stringify(workspaceId)})`)
+        assert(pane.boardInPane, `[data-ghp-board] is missing inside .ghp-sidebar-project: ${JSON.stringify(pane)}`)
+        assert(pane.entryBound === '1', `workspace board icon was not marked bound after selecting a project: ${JSON.stringify(pane)}`)
+        // Before any issue bind, no session subtitle may exist (v0.4.0 baseline).
         assert(
           (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
           'session subtitle exists before any issue was bound',
@@ -409,6 +522,8 @@ async function main() {
           columns: board.columns,
           cardCount: board.cardCount,
           coldBoardMs,
+          sidebarTab: pane.dockTabs,
+          workspaceId: pane.workspaceId,
         }
       })
       if (projectsBoardOk === false) throw new Error('projects-board stage failed')
@@ -444,6 +559,7 @@ async function main() {
           const modeRoot = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis)
           const board = [...document.querySelectorAll('[data-ghp-board]')].find(vis)
           const issueHead = [...document.querySelectorAll('[class*="ghp-issue-head"]')].find(vis)
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
           const sidebarFrame = document.querySelector('[data-sidebar-browser-frame]')
           const browserTabs = [...document.querySelectorAll('[data-dockkit-tab]')]
             .filter(vis)
@@ -454,6 +570,7 @@ async function main() {
             opened: window.__ghpOpened ?? null,
             boardMode: modeRoot === undefined ? null : modeRoot.getAttribute('data-ghp-view-mode'),
             boardMounted: board !== undefined,
+            boardInPane: pane !== undefined && [...pane.querySelectorAll('[data-ghp-board]')].some(vis),
             issueViewMounted: issueHead !== undefined,
             sidebarBrowserFrame: sidebarFrame !== null && vis(sidebarFrame),
             sidebarBrowserTabs: browserTabs,
@@ -469,7 +586,7 @@ async function main() {
         assert(features.includes('noopener') && features.includes('noreferrer'), `window.open features must include noopener,noreferrer (got ${JSON.stringify(call.features)})`)
         assert(state.sidebarBrowserFrame === false, 'the embedded sidebar browser frame was created (v1.0.1 opens the system browser instead)')
         assert(state.sidebarBrowserTabs.length === 0, `a dockkit browser tab was created: ${JSON.stringify(state.sidebarBrowserTabs)}`)
-        assert(state.boardMounted && state.boardMode === 'board', `card body open must keep the projects board mounted (state: ${JSON.stringify(state)})`)
+        assert(state.boardMounted && state.boardInPane && state.boardMode === 'board', `card body open must keep the projects board mounted inside the right-sidebar pane (state: ${JSON.stringify(state)})`)
         assert(!state.issueViewMounted, 'card body open must not switch to the issue view')
         assert(state.subtitlePresent === false, 'card body open created a binding (session subtitle appeared)')
         await settle(300)
@@ -481,6 +598,7 @@ async function main() {
           sidebarBrowserFrame: state.sidebarBrowserFrame,
           sidebarBrowserTabs: state.sidebarBrowserTabs,
           boardMounted: state.boardMounted,
+          boardInPane: state.boardInPane,
           bindActionPresent,
         }
       })
@@ -497,6 +615,12 @@ async function main() {
         const list = await resources.cdp.evaluate(LIST_SNAPSHOT)
         assert(list.rows >= 1 || list.groups >= 1, `list view has neither rows nor grouped sections (rows=${list.rows}, groups=${list.groups})`)
         assert(list.statusesInText.length >= 1, `list view shows no known status headers (text: ${JSON.stringify(list.statusesInText)})`)
+        const listInPane = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          return pane !== undefined && [...pane.querySelectorAll('[data-ghp-list]')].some(vis)
+        })()`)
+        assert(listInPane, 'the list view is not rendered inside the right-sidebar project pane')
         await settle(400)
         const screenshot = await shot('05-projects-list.png')
         return { screenshot, rows: list.rows, groups: list.groups, statusesInText: list.statusesInText }
@@ -512,6 +636,12 @@ async function main() {
         assert(await clickAction(resources.cdp, 'view-board'), 'could not click [data-ghp-action="view-board"]')
         await waitForPlugin(`document.querySelector('[data-ghp-view-mode="board"]') !== null`, 'board view mode', emitTimeout(20_000))
         const baseline = await waitForBoard(resources.cdp, emitTimeout(30_000))
+        const milestoneBoardInPane = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          return pane !== undefined && [...pane.querySelectorAll('[data-ghp-board]')].some(vis)
+        })()`)
+        assert(milestoneBoardInPane, 'the milestone-filtered board is not inside the right-sidebar project pane')
 
         assert(await clickMilestoneToggle(resources.cdp), 'could not click [data-ghp-action="milestone"]')
         const options = await waitForMilestoneOptions(resources.cdp, emitTimeout(20_000))
@@ -554,36 +684,47 @@ async function main() {
     }
 
     // ------------------------------------------------------ projects wide --
-    // Wide-window regression (CONTRACT §4.2 "Layout width (v1.1.1)"): the page
-    // must fill the conversation body with no max-width cap. The 1280×800 run
-    // cannot show this — the old bug was nearly invisible there — so the stage
-    // resizes to 2200×1300, measures, shoots, then restores the 1280×800 frame
-    // for the issue stages.
+    // Wide-window regression (CONTRACT §4.2 "Layout width"): the projects page
+    // must fill its container with no max-width cap and the swimlanes must share
+    // that width (equal ±12px). v1.0.2 moved the board into DSH's right sidebar,
+    // so the stage resizes to 2200×1300, maximizes the pane through the shipped
+    // "全屏" control (same DOM the user clicks), asserts the plugin view fills
+    // the maximized pane and the lanes share its width, and captures the
+    // 2200×1300 evidence shot. It then leaves fullscreen, restores 1280×800 and
+    // collapses the right sidebar so the issue screenshots (07–14) show the
+    // plain conversation again.
     if (gated('projects-wide')) {
       const projectsWideOk = await runStage('projects-wide', async () => {
-        // Baseline requirement: the right sidebar is collapsed (the wide page
-        // fills the conversation body, not a reduced column).
-        const sidebarCollapsed = await collapseRightSidebar(resources.cdp)
-        assert(sidebarCollapsed, 'right sidebar is expanded before projects-wide; the conversation body must be full width')
+        const open = await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
+        assert(open.expanded, 'right sidebar is not expanded before projects-wide')
+        await waitForBoard(resources.cdp, emitTimeout(20_000))
         const WIDTH = 2200
         const HEIGHT = 1300
         await setViewport(resources.cdp, WIDTH, HEIGHT)
-        // Wait for the ResizeObserver-driven reflow to settle (page width must be
-        // stable across two consecutive samples, not still growing).
-        const wide = await waitForWideLayout(resources.cdp, emitTimeout(20_000))
+        const fullscreenClicked = await resources.cdp.evaluate(`(() => {
+          const inViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left < window.innerWidth - 2 && r.right > 2 }
+          const button = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '全屏')
+          if (button === undefined) return false
+          button.click()
+          return true
+        })()`)
+        assert(fullscreenClicked, 'could not click the right-sidebar 全屏 (maximize pane) control')
+        const wide = await waitForFullscreenLayout(resources.cdp, emitTimeout(20_000))
         assert(wide.innerWidth === WIDTH, `viewport did not resize (innerWidth=${wide.innerWidth}, expected ${WIDTH})`)
-        assert(wide.hasBoard, 'bound board is not open during projects-wide ([data-ghp-board] missing)')
-        const pagePct = (wide.pageWidth / wide.innerWidth) * 100
-        const leftPct = (wide.pageLeft / wide.innerWidth) * 100
+        assert(wide.hasPane && wide.hasPage && wide.hasBoard, `maximized sidebar board is not rendered (state: ${JSON.stringify(wide)})`)
+        const panePct = (wide.paneWidth / wide.innerWidth) * 100
         assert(
-          wide.pageWidth >= wide.innerWidth * 0.7,
-          `projects page is cramped at ${WIDTH}px: .ghp-page width=${wide.pageWidth}px (${pagePct.toFixed(1)}% of window; old 1000px cap ≈ 45%). ` +
-          'CONTRACT §4.2 Layout width (v1.1.1) requires width:100% with no max-width cap.',
+          wide.paneWidth >= wide.innerWidth * 0.9,
+          `maximized sidebar pane is only ${wide.paneWidth}px (${panePct.toFixed(1)}% of the window) at ${WIDTH}px`,
+        )
+        const pagePct = (wide.pageWidth / wide.paneWidth) * 100
+        assert(
+          wide.pageWidth >= wide.paneWidth * 0.9,
+          `projects page is cramped inside the maximized pane: .ghp-page width=${wide.pageWidth}px (${pagePct.toFixed(1)}% of pane ${wide.paneWidth}px) — CONTRACT §4.2 requires width:100% with no max-width cap`,
         )
         assert(
-          wide.pageLeft < wide.innerWidth * 0.25,
-          `projects page is centred/fixed at ${WIDTH}px: .ghp-page left=${wide.pageLeft}px (${leftPct.toFixed(1)}% of window). ` +
-          'No centred max-width column is allowed.',
+          wide.pageLeft <= 4,
+          `projects page is not left-aligned in the maximized pane: .ghp-page left=${wide.pageLeft}px (no centred max-width column is allowed)`,
         )
         // Hidden-lane rule applies at the wide viewport too.
         const wideBoard = await resources.cdp.evaluate(BOARD_SNAPSHOT)
@@ -613,21 +754,37 @@ async function main() {
           size.width === WIDTH && size.height === HEIGHT,
           `wide screenshot is ${size.width}x${size.height}, expected ${WIDTH}x${HEIGHT}`,
         )
-        // Restore the standard frame before the issue stages (07–09).
+        // Leave fullscreen, restore the standard frame and collapse the sidebar.
+        const fullscreenExited = await resources.cdp.evaluate(`(() => {
+          const inViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left < window.innerWidth - 2 && r.right > 2 }
+          const button = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '退出全屏')
+          if (button === undefined) return false
+          button.click()
+          return true
+        })()`)
+        assert(fullscreenExited, 'could not leave the maximized sidebar pane after projects-wide')
         await setViewport(resources.cdp, 1280, 800)
         assert(
           (await resources.cdp.evaluate('window.innerWidth')) === 1280,
           'viewport was not restored to 1280x800 after projects-wide',
         )
+        await resources.cdp.waitFor(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+          return pane !== undefined && pane.getBoundingClientRect().width < window.innerWidth / 2
+        })()`, { timeoutMs: emitTimeout(10_000), label: 'sidebar pane restored after fullscreen' })
+        assert(await collapseRightSidebar(resources.cdp), 'right sidebar did not collapse after projects-wide')
         await settle(300)
         return {
           screenshot,
           screenshotSize: `${size.width}x${size.height}`,
           viewport: `${WIDTH}x${HEIGHT}`,
+          maximizedPane: true,
+          paneWidth: wide.paneWidth,
+          paneWidthPct: Number(panePct.toFixed(1)),
           pageWidth: wide.pageWidth,
-          pageLeft: wide.pageLeft,
           pageWidthPct: Number(pagePct.toFixed(1)),
-          pageLeftPct: Number(leftPct.toFixed(1)),
+          pageLeft: wide.pageLeft,
           boardWidth: wide.boardWidth,
           hiddenLanes: laneCheck.hidden,
           laneKeys: laneCheck.laneKeys,
@@ -655,13 +812,19 @@ async function main() {
     // -------------------------------------------------- issue bind subtitle --
     // v0.4.0: the explicit bind action binds and switches to the issue view; the
     // session header then shows the issue subtitle row (§4.5).
+    // v1.0.2: the card lives in the right-sidebar board, so the stage opens the
+    // board through the workspace-row icon and binds there. A sidebar bind does
+    // not switch the conversation view (openView is null in the sidebar pane),
+    // but the issue view is already the active tab from the previous stage and
+    // refreshes through the shared binding map.
     if (gated('issue-bind-subtitle')) {
       const bindSubtitleOk = await runStage('issue-bind-subtitle', async () => {
         assert(
           (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
           'session subtitle exists before the first bind',
         )
-        assert(await clickTab(resources.cdp, 'projects'), 'could not go back to the "projects" tab')
+        const board = await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
+        assert(board.board, `the bound board is not rendered in the right-sidebar pane before the explicit bind: ${JSON.stringify(board)}`)
         await waitForBoard(resources.cdp, emitTimeout(30_000))
         const issueRef = 'ceasarXuu/Astropath#240'
         const clicked = await clickCardAction(resources.cdp, issueRef, 'bind')
@@ -673,7 +836,7 @@ async function main() {
         )
         await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header after bind', emitTimeout(30_000))
         const activeTab = await activeViewTab(resources.cdp)
-        assert(activeTab === 'issue', `explicit bind must switch to the issue view (active tab: ${JSON.stringify(activeTab)})`)
+        assert(activeTab === 'issue', `the issue view must be the active conversation tab after the sidebar bind (active tab: ${JSON.stringify(activeTab)})`)
         const subtitle = await waitForSubtitle(resources.cdp, emitTimeout(20_000))
         assert(subtitle.chipText.replace(/\s+/gu, '') === '#240', `subtitle chip text is ${JSON.stringify(subtitle.chipText)}, expected "#240"`)
         assert(subtitle.titleText.length > 0, 'subtitle title text is empty')
@@ -701,13 +864,15 @@ async function main() {
           subtitle.textOverflow === 'ellipsis' || subtitle.scrollWidth > subtitle.clientWidth,
           `subtitle title is not truncated with an ellipsis (textOverflow=${subtitle.textOverflow}, scrollWidth=${subtitle.scrollWidth}, clientWidth=${subtitle.clientWidth})`,
         )
-        // Polished evidence: let the issue detail finish loading so the shot shows
-        // the header subtitle over a rendered detail, not a loading skeleton.
+        // Polished evidence: the sidebar board is collapsed again so the shot
+        // shows the header subtitle over the issue detail (acceptance set), and
+        // the detail is given time to finish loading (never a skeleton).
+        assert(await collapseRightSidebar(resources.cdp), 'could not collapse the right sidebar before the subtitle screenshot')
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'issue detail loaded before subtitle screenshot', emitTimeout(20_000))
         await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(20_000), label: 'issue meta line' })
         await settle(400)
         const screenshot = await shot('13-issue-subtitle.png')
-        return { screenshot, subtitle, activeTab }
+        return { screenshot, subtitle, activeTab, bindSource: 'right-sidebar board card action' }
       })
       if (bindSubtitleOk === false) throw new Error('issue-bind-subtitle stage failed')
     }
@@ -888,45 +1053,253 @@ async function main() {
       if (sidebarOk === false) throw new Error('sidebar-subtitle stage failed')
     }
 
+    // --------------------------------- v1.0.2 picker replay regression --
+    // Frozen from the /tmp/e2e-picker probe that verified the v1.0.2 preview.
+    // The probe ran on a fresh session (no bound Issue); by this point in the
+    // acceptance flow #240 is bound, so the stage first resets the session
+    // binding through the shipped unbind flow, then re-runs the probe
+    // assertions unchanged (explicit open once, choose closes+consumes, session
+    // switch/return no replay, collapse/expand no replay, second explicit open +
+    // dismiss, bindings kept, one sidebar tab).
+    if (gated('project-picker-replay')) {
+      const replayOk = await runStage('project-picker-replay', async () => {
+        // v1.0.2 acceptance-flow precondition: the probe ran on a fresh
+        // session (no bound Issue); here #240 is bound, so reset it through
+        // the shipped unbind flow and keep the right sidebar out of the way.
+        await collapseRightSidebar(resources.cdp)
+        const reset = await unbindCurrentIssue(resources.cdp, emitTimeout(20_000))
+        // (reset is recorded in the stage detail below)
+        const snapshot = () => resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const pickers = [...document.querySelectorAll('.ghp-picker')].filter(vis)
+          const pane = document.querySelector('.ghp-sidebar-project')
+          const tabs = [...document.querySelectorAll('[data-dockkit-tab]')].map(el => (el.innerText || '').trim()).filter(Boolean)
+          const expanded = [...document.querySelectorAll('button')].some(el => vis(el) && (el.getAttribute('aria-label') || '').includes('收起右侧边栏'))
+          const cards = document.querySelectorAll('.ghp-sidebar-project [class*="ghp-board-card"]').length
+          const entry = document.querySelector('[data-ghp-workspace-entry]')
+          return {
+            pickerVisible: pickers.length > 0,
+            pickerCount: pickers.length,
+            pickerTitle: pickers.length === 0 ? null : (pickers[0].innerText || '').trim().split(String.fromCharCode(10))[0],
+            pane: pane !== null,
+            workspaceId: pane === null ? null : pane.getAttribute('data-ghp-sidebar-project'),
+            sidebarTabs: tabs,
+            sidebarExpanded: expanded,
+            cards,
+            workspaceEntryBound: entry === null ? null : entry.getAttribute('data-ghp-workspace-entry-bound'),
+          }
+        })()`)
+        const sessionState = () => resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const rows = [...document.querySelectorAll('[data-row-key^="session:"]')].filter(vis)
+          return { rows: rows.map(el => ({ key: el.getAttribute('data-row-key'), selected: el.getAttribute('aria-selected'), text: (el.innerText || '').trim().slice(0, 50) })) }
+        })()`)
+        const installPickerObserver = () => resources.cdp.evaluate(`(() => {
+          window.__ghpPickerAdds = 0
+          if (window.__ghpPickerObserver !== undefined) window.__ghpPickerObserver.disconnect()
+          window.__ghpPickerObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) for (const node of mutation.addedNodes) {
+              if (!(node instanceof Element)) continue
+              if (node.classList.contains('ghp-picker') || node.querySelector('.ghp-picker') !== null) window.__ghpPickerAdds += 1
+            }
+          })
+          window.__ghpPickerObserver.observe(document.body, { childList: true, subtree: true })
+          return true
+        })()`)
+        const pickerAdds = () => resources.cdp.evaluate(`window.__ghpPickerAdds`)
+        const switchAwayAndBack = async () => {
+          const clickedNew = await resources.cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const btn = [...document.querySelectorAll('button')].find(el => vis(el)
+              && ((el.innerText || '').includes('新会话') || (el.getAttribute('aria-label') || '').includes('新会话') || (el.getAttribute('aria-label') || '').includes('新建会话')))
+            if (btn === undefined) return false
+            btn.click()
+            return true
+          })()`)
+          assert(clickedNew, 'could not create a second session for the switch-away test')
+          await sleep(1000)
+          const away = await sessionState()
+          assert(away.rows.length >= 2, `second session was not created: ${JSON.stringify(away)}`)
+          assert(await clickSidebarSession(resources.cdp, 'e2e: mock assistant reply.'), 'could not click the original session row')
+          await sleep(1200)
+          const back = await sessionState()
+          return { away, back }
+        }
+
+        // 1. An explicit 从项目选择 opens the picker exactly once and binds a project.
+        assert(await clickTab(resources.cdp, 'issue'), 'could not open the issue tab')
+        await waitForText(resources.cdp, '为当前会话绑定 Issue', { timeoutMs: emitTimeout(10_000) })
+        await installPickerObserver()
+        assert(await clickButton(resources.cdp, { text: '从项目选择' }), 'could not click 从项目选择')
+        await waitForPlugin(`document.querySelector('.ghp-sidebar-project') !== null`, 'sidebar project pane', emitTimeout(15_000))
+        await waitForPlugin(`document.querySelectorAll('[class*="ghp-picker-row"]').length >= 1`, 'sidebar picker rows', emitTimeout(15_000))
+        const explicitOpen = await snapshot()
+        assert(explicitOpen.pickerVisible && explicitOpen.pickerCount === 1, `explicit pick did not open exactly one picker: ${JSON.stringify(explicitOpen)}`)
+        const opensForExplicit = await pickerAdds()
+        assert(opensForExplicit === 1, `explicit pick opened the picker ${opensForExplicit} times`)
+        assert(explicitOpen.sidebarTabs.length === 1, `explicit pick created extra tabs: ${JSON.stringify(explicitOpen.sidebarTabs)}`)
+
+        // 2. Choosing a project closes it; intent is consumed (no replay on remount).
+        assert(await resources.cdp.evaluate(`(() => {
+          const row = [...document.querySelectorAll('[class*="ghp-picker-row"]')].find(el => el.getBoundingClientRect().width > 0)
+          if (row === undefined) return false
+          ;(row.querySelector('button') ?? row).click()
+          return true
+        })()`), 'could not choose a project in the picker')
+        await waitForPlugin(`document.querySelector('[data-ghp-board]') !== null`, 'sidebar board after bind', emitTimeout(20_000))
+        await sleep(700)
+        const afterChoose = await snapshot()
+        assert(afterChoose.pickerVisible === false, `picker stayed open after choosing a project: ${JSON.stringify(afterChoose)}`)
+        assert(afterChoose.sidebarTabs.length === 1, `choosing a project created extra tabs: ${JSON.stringify(afterChoose.sidebarTabs)}`)
+        assert(afterChoose.sidebarExpanded, 'choosing a project collapsed the sidebar')
+        assert(afterChoose.workspaceEntryBound === '1', `workspace binding was not kept: ${JSON.stringify(afterChoose)}`)
+        assert(afterChoose.cards > 0, `bound board did not render cards: ${JSON.stringify(afterChoose)}`)
+
+        const switched = await switchAwayAndBack()
+        const afterReopen = await snapshot()
+        assert(afterReopen.pickerVisible === false, `picker replayed after session switch/reopen: ${JSON.stringify(afterReopen)}`)
+        assert(afterReopen.pane && afterReopen.sidebarTabs.length === 1, `sidebar project tab was lost or duplicated after reopen: ${JSON.stringify(afterReopen)}`)
+        assert(afterReopen.sidebarExpanded, 'session reopen left the sidebar collapsed')
+        assert(afterReopen.workspaceEntryBound === '1' && afterReopen.cards > 0, `project binding changed after reopen: ${JSON.stringify(afterReopen)}`)
+
+        // 3. Collapse/expand stays closed.
+        await resources.cdp.evaluate(`(() => {
+          const btn = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') || '').includes('收起右侧边栏'))
+          if (btn !== undefined) btn.click()
+          return true
+        })()`)
+        await sleep(600)
+        await resources.cdp.evaluate(`(() => {
+          const btn = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') || '').includes('打开右侧边栏'))
+          if (btn !== undefined) btn.click()
+          return true
+        })()`)
+        await sleep(800)
+        const afterCollapseExpand = await snapshot()
+        assert(afterCollapseExpand.pickerVisible === false, `picker replayed after collapse/expand: ${JSON.stringify(afterCollapseExpand)}`)
+
+        // 4. A new explicit choose opens exactly once and can be dismissed; no replay afterwards.
+        await installPickerObserver()
+        assert(await clickButton(resources.cdp, { text: '从项目选择' }), 'could not click 从项目选择 again')
+        await waitForPlugin(`document.querySelectorAll('.ghp-picker').length >= 1`, 'second explicit picker', emitTimeout(15_000))
+        await sleep(400)
+        const secondOpen = await snapshot()
+        const secondAdds = await pickerAdds()
+        assert(secondOpen.pickerVisible && secondOpen.pickerCount === 1, `second explicit pick did not open exactly one picker: ${JSON.stringify(secondOpen)}`)
+        assert(secondAdds === 1, `second explicit pick opened the picker ${secondAdds} times`)
+        assert(await resources.cdp.evaluate(`(() => {
+          const btn = document.querySelector('.ghp-picker .ghp-picker-close')
+          if (btn === null) return false
+          btn.click()
+          return true
+        })()`), 'could not dismiss the picker')
+        await sleep(500)
+        const afterDismiss = await snapshot()
+        assert(afterDismiss.pickerVisible === false, `picker stayed open after dismissal: ${JSON.stringify(afterDismiss)}`)
+        await switchAwayAndBack()
+        const afterReopenDismissed = await snapshot()
+        assert(afterReopenDismissed.pickerVisible === false, `dismissed pick replayed after session switch: ${JSON.stringify(afterReopenDismissed)}`)
+
+        // 5. Existing Issue binding path still works after the pick fix.
+        const boundCard = await resources.cdp.evaluate(`(() => {
+          const btn = [...document.querySelectorAll('.ghp-sidebar-project [data-ghp-card] [data-ghp-card-action="bind"]')]
+            .find(el => el.getBoundingClientRect().width > 0)
+          if (btn === undefined) return false
+          btn.click()
+          return true
+        })()`)
+        assert(boundCard, 'could not click a card bind action in the sidebar board')
+        await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail after sidebar bind', emitTimeout(20_000))
+        await waitForPlugin(`document.querySelector('[data-ghp-sidebar-subtitle-chip]') !== null`, 'sidebar session subtitle after sidebar bind', emitTimeout(10_000))
+        const issueBound = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const chip = [...document.querySelectorAll('[data-ghp-sidebar-subtitle-chip]')].find(vis)
+          return {
+            issueHead: [...document.querySelectorAll('[class*="ghp-issue-head"]')].some(vis),
+            subtitleChip: chip === undefined ? null : (chip.innerText || '').trim(),
+            headerSubtitle: document.querySelector('[data-ghp-session-subtitle]') !== null,
+            unboundPrompt: [...document.querySelectorAll('.ghp-empty')].some(el => vis(el) && (el.innerText || '').includes('为当前会话绑定 Issue')),
+            sidebarPicker: [...document.querySelectorAll('.ghp-picker')].some(vis),
+          }
+        })()`)
+        assert(issueBound.issueHead, `issue detail missing after binding from the sidebar board: ${JSON.stringify(issueBound)}`)
+        assert(issueBound.subtitleChip !== null && issueBound.subtitleChip.startsWith('#'), `sidebar session subtitle missing after sidebar bind: ${JSON.stringify(issueBound)}`)
+        assert(issueBound.headerSubtitle, `header session subtitle missing after sidebar bind: ${JSON.stringify(issueBound)}`)
+        assert(issueBound.unboundPrompt === false, `unbound prompt shown after sidebar bind: ${JSON.stringify(issueBound)}`)
+        await switchAwayAndBack()
+        const afterIssueReopen = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          return {
+            issueHead: [...document.querySelectorAll('[class*="ghp-issue-head"]')].some(vis),
+            sidebarSubtitle: [...document.querySelectorAll('[data-ghp-sidebar-subtitle-chip]')].some(vis),
+            unboundPrompt: [...document.querySelectorAll('.ghp-empty')].some(el => vis(el) && (el.innerText || '').includes('为当前会话绑定 Issue')),
+            picker: [...document.querySelectorAll('.ghp-picker')].some(vis),
+            sidebarTabs: [...document.querySelectorAll('[data-dockkit-tab]')].map(el => (el.innerText || '').trim()).filter(Boolean),
+          }
+        })()`)
+        assert(afterIssueReopen.issueHead === true, `existing Issue binding lost after session reopen: ${JSON.stringify(afterIssueReopen)}`)
+        assert(afterIssueReopen.sidebarSubtitle === true, `session subtitle lost after session reopen: ${JSON.stringify(afterIssueReopen)}`)
+        assert(afterIssueReopen.unboundPrompt === false, `unbound prompt after reopening a bound session: ${JSON.stringify(afterIssueReopen)}`)
+        assert(afterIssueReopen.picker === false, `picker replayed after reopening a bound session: ${JSON.stringify(afterIssueReopen)}`)
+
+        return {
+          reset,
+          explicitOpen, afterChoose, switched, afterReopen,
+          afterCollapseExpand, secondOpen, secondAdds, afterDismiss, afterReopenDismissed,
+          issueBound, afterIssueReopen,
+        }
+      })
+      if (replayOk === false) throw new Error('project-picker-replay stage failed')
+    }
+
     // ------------------------------------------------------ projects warm --
-    // v0.4.0 §3.5: after the first load the projects view is served from the
-    // module-level SWR cache — switching back must render the board without a
-    // cold skeleton and within 1500ms.
+    // v0.4.0 §3.5 warm-cache rule, adapted to v1.0.2: close the right-sidebar
+    // project tab (which unmounts the pane/ProjectsView) and reopen it from the
+    // workspace-row board icon. The module-level SWR cache must paint the board
+    // again without any cold skeleton and within 1500ms.
     if (gated('projects-warm')) {
       const warmOk = await runStage('projects-warm', async () => {
-        assert(await clickTab(resources.cdp, '对话'), 'could not switch to the "对话" view for the warm-open measurement')
-        await settle(250)
+        await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
+        await waitForBoard(resources.cdp, emitTimeout(20_000))
+        const tabClosed = await closeProjectTab(resources.cdp, { timeoutMs: emitTimeout(10_000) })
+        assert(tabClosed, 'could not close the right-sidebar project tab before the warm-open measurement')
+        assert((await sidebarBoardState(resources.cdp)).pane === false, 'the project pane is still mounted after closing its tab')
         const warmStarted = Date.now()
-        assert(await clickTab(resources.cdp, 'projects'), 'could not switch back to the "projects" view')
+        const entryClicked = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const entry = [...document.querySelectorAll('[data-ghp-workspace-entry]')].find(vis)
+          if (entry === undefined) return false
+          entry.click()
+          return true
+        })()`)
+        assert(entryClicked, 'could not reopen the project board from the workspace-row icon')
         let warmMs = null
         let skeletonSeen = false
-        let refreshIndicators = 0
         let lastState = null
         while (Date.now() - warmStarted < emitTimeout(6000)) {
           lastState = await resources.cdp.evaluate(`(() => {
             const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-            const root = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis)
-            const board = [...document.querySelectorAll('[data-ghp-board]')].find(vis)
-            const skeletons = [...document.querySelectorAll('[class*="ghp-skeleton"]')].filter(vis).length
-            const spinners = [...document.querySelectorAll('[class*="ghp-spinner"]')].filter(vis).length
+            const inViewport = (el) => { const r = el.getBoundingClientRect(); return vis(el) && r.left < window.innerWidth - 2 && r.right > 2 }
+            const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(inViewport)
+            const root = [...document.querySelectorAll('[data-ghp-view-mode]')].find(el => inViewport(el))
+            const board = [...document.querySelectorAll('.ghp-sidebar-project [data-ghp-board]')].find(inViewport)
             return {
+              pane: pane !== undefined,
               mode: root === undefined ? null : root.getAttribute('data-ghp-view-mode'),
               board: board !== undefined,
-              skeletons,
-              spinners,
+              skeletons: [...document.querySelectorAll('[class*="ghp-skeleton"]')].filter(vis).length,
             }
           })()`)
           if (lastState.skeletons > 0) skeletonSeen = true
-          refreshIndicators = lastState.spinners
-          if (lastState.mode === 'board' && lastState.board && lastState.skeletons === 0) {
+          if (lastState.pane && lastState.mode === 'board' && lastState.board && lastState.skeletons === 0) {
             warmMs = Date.now() - warmStarted
             break
           }
           await sleep(40)
         }
-        assert(warmMs !== null, `cached projects view did not render a skeleton-free board within ${emitTimeout(6000)}ms (last: ${JSON.stringify(lastState)})`)
-        assert(warmMs <= 1500, `warm projects open took ${warmMs}ms (>1500ms) — CONTRACT §3.5 requires the cached board to render without a cold skeleton`)
-        assert(!skeletonSeen, 'warm projects open rendered a loading skeleton although cached data exists (SWR cache miss)')
+        assert(warmMs !== null, `cached sidebar project view did not render a skeleton-free board within ${emitTimeout(6000)}ms (last: ${JSON.stringify(lastState)})`)
+        assert(warmMs <= 1500, `warm sidebar board open took ${warmMs}ms (>1500ms) — CONTRACT §3.5 requires the cached board to render without a cold skeleton`)
+        assert(!skeletonSeen, 'warm sidebar board open rendered a loading skeleton although cached data exists (SWR cache miss)')
         // Host-side plugin request timings observed for the warm revalidation.
         const pluginRequestTimings = resources.cdp.pluginRequests.slice(-12)
         const pluginResponses = (await readPluginResponses(resources.cdp)).slice(-12).map(entry => ({
@@ -934,7 +1307,14 @@ async function main() {
           status: entry.status,
           stale: entry.json?.stale ?? null,
         }))
-        return { warmMs, coldBoardMs, skeletonSeen, refreshIndicators, pluginRequestTimings, pluginResponses }
+        return {
+          warmMs,
+          coldBoardMs,
+          skeletonSeen,
+          reopen: 'workspace-row board icon after closing the project tab',
+          pluginRequestTimings,
+          pluginResponses,
+        }
       })
       if (warmOk === false) throw new Error('projects-warm stage failed')
     }
@@ -1033,8 +1413,9 @@ async function main() {
     try { await resources.llm?.close() } catch { /* ignore */ }
   }
 
-  // Artifact accounting: the harness writes 01–06 (and optionally 08); 07 is
-  // manual Desktop-install evidence owned by the Lead and never touched here.
+  // Artifact accounting: the harness owns the numbered state shots (board shots
+  // now capture the v1.0.2 right-sidebar pane); 10-desktop-tabs.png is manual
+  // Desktop-install evidence owned by the Lead and never written/removed here.
   const desktopEvidence = join(SCREENSHOT_DIR, '10-desktop-tabs.png')
   const manualEvidence = existsSync(desktopEvidence) ? { '10-desktop-tabs.png': desktopEvidence } : {}
 
@@ -1420,21 +1801,24 @@ async function setViewport(cdp, width, height) {
   await sleep(250)
 }
 
-const WIDE_LAYOUT = `(() => {
+const WIDE_PANE_LAYOUT = `(() => {
   const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-  const viewRoot = [...document.querySelectorAll('[data-ghp-view-mode="board"]')].find(vis)
-  const page = viewRoot === undefined ? null : viewRoot.querySelector('.ghp-page')
-  const board = document.querySelector('[data-ghp-board]')
-  const columns = [...document.querySelectorAll('[data-ghp-board] [data-ghp-column]')]
-  const cards = [...document.querySelectorAll('[data-ghp-board] [data-ghp-card]')].filter(vis)
+  const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(vis)
+  const page = pane === undefined ? null : pane.querySelector('.ghp-page')
+  const board = pane === undefined ? null : pane.querySelector('[data-ghp-board]')
+  const columns = board === null ? [] : [...board.querySelectorAll('[data-ghp-column]')]
+  const cards = board === null ? [] : [...board.querySelectorAll('[data-ghp-card]')].filter(vis)
+  const paneRect = pane === undefined ? null : pane.getBoundingClientRect()
   const pageRect = page === null ? null : page.getBoundingClientRect()
   const boardRect = board === null ? null : board.getBoundingClientRect()
   const laneWidths = columns.map(el => Math.round(el.getBoundingClientRect().width * 10) / 10)
   return {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
-    hasBoard: board !== null,
+    hasPane: pane !== undefined,
     hasPage: page !== null,
+    hasBoard: board !== null,
+    paneWidth: paneRect === null ? 0 : Math.round(paneRect.width * 10) / 10,
     pageWidth: pageRect === null ? 0 : Math.round(pageRect.width * 10) / 10,
     pageLeft: pageRect === null ? -1 : Math.round(pageRect.left * 10) / 10,
     boardWidth: boardRect === null ? 0 : Math.round(boardRect.width * 10) / 10,
@@ -1446,24 +1830,27 @@ const WIDE_LAYOUT = `(() => {
   }
 })()`
 
-/** Wait for the 2200px reflow to settle (page present and width stable). */
-async function waitForWideLayout(cdp, timeoutMs) {
+/**
+ * Wait for the maximized right-sidebar pane layout to settle (page width stable
+ * across two samples and the pane actually filling the window).
+ */
+async function waitForFullscreenLayout(cdp, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   let previousWidth = -1
   let stableTicks = 0
   let last = null
   while (Date.now() < deadline) {
-    last = await cdp.evaluate(WIDE_LAYOUT)
-    if (last.hasPage && last.hasBoard && last.pageWidth > 0) {
+    last = await cdp.evaluate(WIDE_PANE_LAYOUT)
+    if (last.hasPane && last.hasPage && last.hasBoard && last.paneWidth > 0) {
       stableTicks = Math.abs(last.pageWidth - previousWidth) < 1 ? stableTicks + 1 : 0
       previousWidth = last.pageWidth
-      if (stableTicks >= 2) return last
+      if (stableTicks >= 2 && last.paneWidth >= last.innerWidth * 0.9) return last
     } else {
       stableTicks = 0
     }
     await sleep(200)
   }
-  throw new Error(`wide layout did not settle within ${timeoutMs}ms (last: ${JSON.stringify(last)})`)
+  throw new Error(`maximized sidebar layout did not settle within ${timeoutMs}ms (last: ${JSON.stringify(last)})`)
 }
 
 /** Actual PNG pixel size, parsed from the IHDR chunk. */
@@ -1475,14 +1862,184 @@ function pngDimensions(file) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
 }
 
+// ------------------------------- v1.0.2 right-sidebar project board helpers --
+// The v1.0.2 board is a DSH right-sidebar custom tab (`项目`) opened from the
+// board icon injected into the left-sidebar workspace row. The pane body is
+// `.ghp-sidebar-project[data-ghp-sidebar-project=<workspaceId>]`; collapsing the
+// right sidebar keeps that pane mounted off-screen (left > innerWidth), so the
+// reliable open/closed signal is the visible 收起右侧边栏 / 打开右侧边栏 button.
+
+const SIDEBAR_BOARD_STATE = `(() => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' }
+  const inViewport = (el) => { const r = el.getBoundingClientRect(); return vis(el) && r.left < window.innerWidth - 2 && r.right > 2 }
+  const text = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ')
+  const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(el => inViewport(el))
+  const collapseButton = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '收起右侧边栏')
+  const expandButton = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '打开右侧边栏')
+  const entry = [...document.querySelectorAll('[data-ghp-workspace-entry]')].find(vis)
+  const board = [...document.querySelectorAll('.ghp-sidebar-project [data-ghp-board]')].find(el => inViewport(el))
+  const entryRow = entry === undefined ? null : entry.closest('[data-row-key]')
+  const paneRect = pane === undefined ? null : pane.getBoundingClientRect()
+  return {
+    pane: pane !== undefined,
+    paneVisible: pane !== undefined,
+    workspaceId: pane === undefined ? null : pane.getAttribute('data-ghp-sidebar-project'),
+    expanded: collapseButton !== undefined,
+    collapsed: expandButton !== undefined && collapseButton === undefined,
+    tabs: [...document.querySelectorAll('[data-dockkit-tab]')].filter(vis).map(el => text(el)),
+    entryBound: entry === undefined ? null : entry.getAttribute('data-ghp-workspace-entry-bound'),
+    entryWorkspaceId: entryRow === null ? null : (entryRow.getAttribute('data-row-key') || '').replace(/^workspace:/u, ''),
+    board: board !== undefined,
+    paneRect: paneRect === null ? null : { left: Math.round(paneRect.left), top: Math.round(paneRect.top), width: Math.round(paneRect.width), height: Math.round(paneRect.height) },
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+  }
+})()`
+
+const sidebarBoardState = cdp => cdp.evaluate(SIDEBAR_BOARD_STATE)
+
+/** Visible right-sidebar collapse/expand buttons (the harness' open-state signal). */
+async function rightSidebarState(cdp) {
+  return cdp.evaluate(`(() => {
+    const inViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left < window.innerWidth - 2 && r.right > 2 }
+    const labels = [...document.querySelectorAll('button')].filter(inViewport).map(el => el.getAttribute('aria-label')).filter(label => label !== null)
+    return { collapse: labels.includes('收起右侧边栏'), expand: labels.includes('打开右侧边栏') }
+  })()`)
+}
+
+/**
+ * Open (or expand) the right-sidebar project board through the workspace-row
+ * board icon. The plugin decorator injects the icon asynchronously, and the
+ * programmatic click can race the tab type registration for ~1 frame on a fresh
+ * page, so the helper waits for the icon, retries the click and re-checks the
+ * pane + dockkit tab state.
+ * @returns {Promise<object>} the SIDEBAR_BOARD_STATE snapshot (+ opened/attempts)
+ */
+async function openProjectBoard(cdp, { timeoutMs = 30_000, expectWorkspaceId = null } = {}) {
+  const check = (state) => {
+    if (!(state.paneVisible && state.expanded)) return null
+    if (expectWorkspaceId !== null) {
+      assert(state.workspaceId === expectWorkspaceId, `sidebar project pane is keyed to ${JSON.stringify(state.workspaceId)}, expected ${JSON.stringify(expectWorkspaceId)}`)
+    }
+    return state
+  }
+  const initial = await sidebarBoardState(cdp)
+  const already = check(initial)
+  if (already !== null) return { ...already, opened: false, attempts: 0 }
+  await cdp.waitFor(`document.querySelector('[data-ghp-workspace-entry]') !== null`, {
+    timeoutMs, intervalMs: 100, label: 'workspace row board icon',
+  }).catch(() => {})
+  await settle(400)
+  let click = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    click = await cdp.evaluate(`(() => {
+      const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' }
+      const entry = [...document.querySelectorAll('[data-ghp-workspace-entry]')].find(vis)
+      if (entry === undefined) return { clicked: false }
+      const row = entry.closest('[data-row-key]')
+      const info = {
+        clicked: true,
+        workspaceId: typeof entry.__ghpWorkspaceId === 'string' ? entry.__ghpWorkspaceId : null,
+        bound: entry.getAttribute('data-ghp-workspace-entry-bound'),
+        rowKey: row === null ? null : row.getAttribute('data-row-key'),
+      }
+      entry.click()
+      return info
+    })()`)
+    if (click.clicked === false) { await settle(300); continue }
+    const opened = await cdp.waitFor(`(() => {
+      const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+      const inViewport = (el) => { const r = el.getBoundingClientRect(); return vis(el) && r.left < window.innerWidth - 2 && r.right > 2 }
+      const pane = [...document.querySelectorAll('.ghp-sidebar-project')].find(inViewport)
+      const collapse = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '收起右侧边栏')
+      return pane !== undefined && collapse !== undefined
+    })()`, { timeoutMs: 6_000, intervalMs: 100, label: 'right-sidebar project pane' }).then(() => true).catch(() => false)
+    if (opened) {
+      const ok = check(await sidebarBoardState(cdp))
+      if (ok !== null) return { ...ok, opened: true, attempts: attempt, click }
+    }
+    await settle(350)
+  }
+  throw new Error(`could not open the right-sidebar project pane from [data-ghp-workspace-entry] after 3 clicks (last: ${JSON.stringify(click)}, state: ${JSON.stringify(await sidebarBoardState(cdp))})`)
+}
+
+/** Close the right-sidebar project tab through its dockkit context menu. */
+async function closeProjectTab(cdp, { timeoutMs = 10_000 } = {}) {
+  const menuOpened = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const tabs = [...document.querySelectorAll('[data-dockkit-tab]')].filter(vis)
+    const tab = tabs.find(el => /项目|Project/u.test(el.innerText || '')) ?? (tabs.length === 1 ? tabs[0] : undefined)
+    if (tab === undefined) return false
+    const r = tab.getBoundingClientRect()
+    tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }))
+    return true
+  })()`)
+  if (!menuOpened) return false
+  const menuReady = await cdp.waitFor(`[...document.querySelectorAll('[data-dockkit-tab-menu] [data-dockkit-menu-close]')].some(el => el.getBoundingClientRect().width > 0)`, {
+    timeoutMs, intervalMs: 100, label: 'project tab context menu',
+  }).then(() => true).catch(() => false)
+  if (!menuReady) return false
+  const clicked = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const item = [...document.querySelectorAll('[data-dockkit-tab-menu] [data-dockkit-menu-close]')].find(vis)
+    if (item === undefined) return false
+    item.click()
+    return true
+  })()`)
+  if (!clicked) return false
+  return cdp.waitFor(`document.querySelector('.ghp-sidebar-project') === null`, { timeoutMs, intervalMs: 100, label: 'project pane removed' })
+    .then(() => true).catch(() => false)
+}
+
+/** Unbind the current session's Issue through the shipped issue-view flow. */
+async function unbindCurrentIssue(cdp, timeoutMs = 20_000) {
+  const before = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    return {
+      issueHead: [...document.querySelectorAll('[class*="ghp-issue-head"]')].some(vis),
+      unboundPrompt: [...document.querySelectorAll('.ghp-empty')].some(el => vis(el) && (el.innerText || '').includes('为当前会话绑定 Issue')),
+    }
+  })()`)
+  if (before.unboundPrompt && !before.issueHead) return { alreadyUnbound: true }
+  const clicked = await cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const norm = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ')
+    const root = [...document.querySelectorAll('.ghp-root')].find(el => el.querySelector('[class*="ghp-issue-head"]') !== null)
+    if (root === undefined) return false
+    const button = [...root.querySelectorAll('button')].filter(vis).find(el => norm(el) === '解绑')
+    if (button === undefined) return false
+    button.click()
+    return true
+  })()`)
+  if (!clicked) return { alreadyUnbound: false, clicked: false }
+  await waitForText(cdp, '确认解绑', { timeoutMs, label: 'issue unbind confirmation' })
+  const confirmed = await clickButton(cdp, { text: '确认解绑' })
+  assert(confirmed, 'could not confirm the issue unbind')
+  await waitForText(cdp, '为当前会话绑定 Issue', { timeoutMs, label: 'issue unbound prompt after reset' })
+  return { alreadyUnbound: false, clicked: true, confirmed: true }
+}
+
 // ---------------------------------------- v0.4.0 browser / subtitle helpers --
 
-/** The currently selected conversation view tab label (or null). */
+/**
+ * The currently selected conversation view label (or null).
+ *
+ * The shipped header collapses overflowing conversation views into a
+ * `更多会话视图 · <label>` menu button; when the right sidebar is expanded the
+ * `issue` tab can live there (its `viewsMoreActive` class marks it selected), so
+ * the active view must be read from that button too — not only from
+ * `button[role="tab"][aria-selected="true"]`.
+ */
 async function activeViewTab(cdp) {
   return cdp.evaluate(`(() => {
     const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
     const el = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
-    return el === undefined ? null : (el.innerText || el.textContent || '').trim()
+    if (el !== undefined) return (el.innerText || el.textContent || '').trim()
+    const more = [...document.querySelectorAll('button')].find(button => vis(button)
+      && /更多会话视图/u.test(button.getAttribute('aria-label') || '')
+      && /Active/i.test(String(button.className || '')))
+    if (more === undefined) return null
+    const match = (more.getAttribute('aria-label') || '').match(/更多会话视图\\s*[·:]\\s*(.+)$/u)
+    return match === null ? null : match[1].trim()
   })()`)
 }
 
@@ -1596,25 +2153,19 @@ async function closeSidebarBrowser(cdp, timeoutMs) {
 
 /** Restore the shipped baseline: right sidebar collapsed (idempotent, retried). */
 async function collapseRightSidebar(cdp) {
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    const state = await cdp.evaluate(`(() => {
-      const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-      const expand = [...document.querySelectorAll('[data-sidebar-right-expand]')].find(vis)
-      if (expand !== undefined) return { state: 'collapsed' }
-      const toggle = [...document.querySelectorAll('[data-sidebar-right-toggle]')].find(vis)
-      if (toggle !== undefined) { toggle.click(); return { state: 'clicked-toggle' } }
-      const fallback = [...document.querySelectorAll('button,[role="button"]')]
-        .find(el => el.getAttribute('aria-label') === '收起右侧边栏' && vis(el))
-      if (fallback !== undefined) { fallback.click(); return { state: 'clicked-aria' } }
-      return { state: 'absent' }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const state = await rightSidebarState(cdp)
+    if (state.collapse === false) return true
+    await cdp.evaluate(`(() => {
+      const inViewport = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left < window.innerWidth - 2 && r.right > 2 }
+      const button = [...document.querySelectorAll('button')].find(el => inViewport(el) && (el.getAttribute('aria-label') || '') === '收起右侧边栏')
+      if (button === undefined) return false
+      button.click()
+      return true
     })()`)
-    if (state.state === 'collapsed') return true
-    await sleep(400)
+    await settle(500)
   }
-  return cdp.evaluate(`(() => {
-    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-    return [...document.querySelectorAll('[data-sidebar-right-expand]')].some(vis)
-  })()`)
+  return (await rightSidebarState(cdp)).collapse === false
 }
 
 // Session issue subtitle (§4.5): chip + truncated title + full title attribute.
