@@ -1,6 +1,7 @@
 # dsh-github-projects
 
-**v0.4.1** · the GitHub Project and Issue bound to your DSH session, one tab away.
+**v1.0.0 — first public release.** The GitHub Project and Issue bound to your DSH session, one tab
+away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
@@ -17,6 +18,26 @@ conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
 
 ![Session header with the projects and issue tabs](artifacts/screenshots/01-tabs.png)
+
+## Release 1.0.0 — first public release
+
+**GitHub Projects & Issues** v1.0.0 is the first public release, distributed as the npm package
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects). Source and issue tracker:
+<https://github.com/ceasarXuu/dsh-github-projects>. Licensed MIT ([LICENSE](LICENSE)); notable changes
+per version: [CHANGELOG.md](CHANGELOG.md).
+
+| | |
+|---|---|
+| npm package | `@ceasarxuu/dsh-github-projects` (public scoped package) |
+| Plugin Manager name | *GitHub Projects & Issues* / **GitHub 项目与议题** (from `locale/en.json` + `locale/zh.json`) |
+| Repository | <https://github.com/ceasarXuu/dsh-github-projects> |
+| License | MIT |
+| Host engines | `dsh >=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
+| Runtime dependencies | none (host half uses only `node:*`; browser half uses the host-provided `react` / `react-dom`) |
+
+Functionality is unchanged from 0.4.1 — 1.0.0 is the publication/identity release (the package was
+renamed from the internal `@local/dsh-github-projects`). The 0.x feature notes below are **pre-public
+history**.
 
 ## How it works
 
@@ -39,7 +60,9 @@ returns to normal.
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
-## What's new in 0.4.1 — issue subtitle in the sidebar session tree
+## Pre-public history (0.x feature notes)
+
+### What's new in 0.4.1 — issue subtitle in the sidebar session tree
 
 - **The subtitle now also appears under every bound session row in the left sidebar** (selected or not,
   across all workspaces), matching the conversation-header subtitle: a tinted `#N` chip plus the
@@ -55,7 +78,7 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
   `[data-row-key^="session:"]` DOM decorator (`:has()` layout override + MutationObserver); if the
   host DOM changes, the sidebar subtitle degrades to hidden without errors.
 
-## What's new in 0.4.0 — issue subtitle, agent tools, browser-open and faster reads
+### What's new in 0.4.0 — issue subtitle, agent tools, browser-open and faster reads
 
 - **Issue subtitle under the session title.** A session with a bound Issue shows `#N` (tinted chip)
   plus the issue title on one line (ellipsis; full `repo#N title` in the tooltip). Clicking it opens
@@ -77,7 +100,7 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
   disk cache across restarts, `/config` never waits on `gh`, and warm projects opens render cached
   data with **no skeleton** (<300 ms host response; guarded by the e2e `projects-warm` stage).
 
-## What's new in 0.3.0 — status color system + smarter lanes
+### What's new in 0.3.0 — status color system + smarter lanes
 
 - **A real status color system.** Lanes, list sections, type glyphs and the `issue` view now use a
   deliberate palette: `No status` neutral, `TODO` blue, `In Progress` amber, `In Review` violet,
@@ -97,7 +120,7 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
   icon tile — motion is limited to 120ms color/border transitions and respects
   `prefers-reduced-motion`.
 
-## What's new in 0.2.1 (v1.1.1) — full-width layout
+### What's new in 0.2.1 (v1.1.1) — full-width layout
 
 - The `projects` page (board **and** list) and the `issue` page now fill the conversation body width:
   `width: 100%`, **no `max-width` cap**, no centred fixed column. On wide Desktop windows the five
@@ -108,7 +131,7 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 - Regression guard: the new e2e `projects-wide` stage asserts at 2200×1300 that the page fills ≥85%
   of the body width → `artifacts/screenshots/11-projects-wide.png`.
 
-## What's new in 0.2.0 (v1.1)
+### What's new in 0.2.0 (v1.1)
 
 - **Swimlane board (default view).** Five fixed status columns left→right: `No status`, `TODO`,
   `In Progress`, `In Review`, `Done`. A custom Status the Project defines is never dropped — it gets
@@ -177,32 +200,39 @@ unbound; the user's own binding remains):
 
 ## Install
 
-The plugin is a local package (`@local/dsh-github-projects`), not published to npm. Install it into
-the DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
-`web` / `headless` if that is what you run).
+The plugin is distributed as the npm package **`@ceasarxuu/dsh-github-projects`**. Install it into the
+DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
+`web` / `headless` if that is what you run). Installing needs write access to the profile directory.
 
-**CLI (the path verified on DSH 0.2.1-rc.3):**
+**Plugin Manager (recommended):** Plugins → Add → `@ceasarxuu/dsh-github-projects` → install and
+keep it enabled. The card shows the localized name/description from the package's `locale/` metadata
+and the plugin icon.
+
+**CLI:**
 
 ```sh
-# add the local checkout to the desktop profile
-dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
+# install from npm into the desktop profile
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
 
 # verify it is installed in that profile
-dsh plugin --profile desktop why @local/dsh-github-projects
+dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
+
+# remove it again
+dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 ```
 
-`dsh plugin ... add` records the package as a `link:` dependency **and** appends it to the profile's
-`dsh.profile.bundles`; the running Desktop app hot-recomposes and loads both halves without a
-restart (the window reloads and may return to the workspace home; sessions are untouched — reopen a
-session and the tabs are there). The command also accepts a published package name instead of a
-local path. Installing needs write access to the profile directory. Remove it with:
+Installing records the package in the profile and appends it to `dsh.profile.bundles`; the running
+Desktop app hot-recomposes and loads both halves without a restart (the window reloads and may return
+to the workspace home; sessions are untouched — reopen a session and the tabs are there).
+
+**Development — local checkout:** to run from this repository instead of npm, link the checkout:
 
 ```sh
-dsh plugin --profile desktop remove @local/dsh-github-projects
+dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 ```
 
-**Plugin Manager:** the Plugins → Add UI performs the equivalent profile install for non-CLI use;
-the CLI path above is the one exercised on this machine.
+That records a `link:` dependency (the `link:` prefix may be omitted). Use this for development only;
+installed users should use the npm package above.
 
 ## Use
 
@@ -251,7 +281,7 @@ so restate every key you need.
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
 - id: github-projects
-  name: '@local/dsh-github-projects'
+  name: '@ceasarxuu/dsh-github-projects'
   config:
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
@@ -348,16 +378,18 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | 0.4.1 (sidebar session-row subtitle + local `GET /bindings`; 0.4.0: header subtitle, agent tools, built-in-browser click, faster SWR reads; 0.3.0: visual system + hidden `No status` lane) |
+| Plugin version | **1.0.0** (first public release; functionality unchanged from 0.4.1) |
+| Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v0.4.1 accepted 2026-10-28: 91/91 host tests; e2e PASS in fixture and real modes (18/18 stages each; frozen client `e1ae2410…`, index `b52964f7…`); sidebar subtitle verified (row 41px, chip `#240`, click does not change selection); `/bindings` 1–7 ms local; warm re-open 17–56 ms with no skeleton; 14 screenshots — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v0.4.1 accepted 2026-10-28 (91/91 host tests; e2e PASS in fixture and real modes; 14 screenshots). v1.0.0 pre-publish gate passed: renamed-package e2e PASS, and the packed tarball installed into a clean `web` profile with `/plugin/github-projects/health` → 200. The npm-registry install smoke is recorded in the repository’s latest acceptance chapter (the npm tarball ships docs as a publish-time snapshot) |
 
-There is no formal `engines.dsh` gate yet: a DSH upgrade that changes the `conversation.view` slot
-or session standard props may require a plugin update.
+`engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
+range — or one that changes the `conversation.view` slot, session standard props, or the header/sidebar
+DOM anchors — may require a plugin update.
 
 ## Known limitations
 
@@ -422,4 +454,6 @@ or session standard props may require a plugin update.
 
 ## License
 
-MIT. Chinese README: [README.zh.md](README.zh.md).
+MIT — see [LICENSE](LICENSE). Changes: [CHANGELOG.md](CHANGELOG.md); release checklist:
+[RELEASING.md](RELEASING.md). Source: <https://github.com/ceasarXuu/dsh-github-projects>.
+Chinese README: [README.zh.md](README.zh.md).

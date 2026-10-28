@@ -1,13 +1,42 @@
 {
-  "name": "@local/dsh-github-projects",
-  "version": "0.4.1",
-  "private": true,
+  "name": "@ceasarxuu/dsh-github-projects",
+  "version": "1.0.0",
+  "description": "GitHub Projects board, session-bound Issues, header/sidebar issue subtitles, and agent bind/unbind/switch tools inside DeepSeek Harness.",
   "type": "module",
-  "description": "Bind a GitHub Project to a DSH workspace and an Issue to each session, shown as the `projects` and `issue` conversation tabs.",
+  "license": "MIT",
+  "author": "ceasarXuu",
+  "homepage": "https://github.com/ceasarXuu/dsh-github-projects#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ceasarXuu/dsh-github-projects.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ceasarXuu/dsh-github-projects/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "github",
+    "github-projects",
+    "issue",
+    "board",
+    "swimlane",
+    "milestone",
+    "agent-tools"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0",
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
@@ -19,16 +48,15 @@
     "icon.svg",
     "README.md",
     "README.zh.md",
-    "docs/*.md"
+    "LICENSE",
+    "CHANGELOG.md",
+    "locale/*.json",
+    "docs/DESIGN.zh.md"
   ],
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "github",
-    "github-projects",
-    "issue"
-  ],
-  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/host/*.test.mjs",
+    "e2e": "node scripts/e2e/run.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -41,9 +69,5 @@
         "@deepseek-ai/dsh-client-locale"
       ]
     }
-  },
-  "scripts": {
-    "test": "node --test test/host/*.test.mjs",
-    "e2e": "node scripts/e2e/run.mjs"
   }
 }

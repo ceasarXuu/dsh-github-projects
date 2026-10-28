@@ -366,7 +366,7 @@ Pattern proven on this exact app (see `/tmp/dsh-hello-plugin/client.js` and sess
 
 ```js
 window.__ModuleLoader__.load({
-  id: '@local/dsh-github-projects',
+  id: '@ceasarxuu/dsh-github-projects',
   factory(require) {
     const React = require('react')
     // ... module body, components, dictionaries, css string ...

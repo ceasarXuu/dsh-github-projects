@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "title": {
+    "en": "ceasarXuu DSH plugins",
+    "zh": "ceasarXuu 的 DSH 插件"
+  },
+  "description": {
+    "en": "Small, self-contained DeepSeek Harness plugins.",
+    "zh": "轻量、自包含的 DeepSeek Harness 插件。"
+  },
+  "plugins": [
+    {
+      "name": "@ceasarxuu/dsh-github-projects",
+      "title": {
+        "en": "GitHub Projects & Issues",
+        "zh": "GitHub 项目与议题"
+      },
+      "description": {
+        "en": "Bind a GitHub Project to each workspace and an Issue to each session: swimlane board, issue detail tab, header/sidebar issue subtitles, built-in browser links, and agent bind tools.",
+        "zh": "给工作区绑定 GitHub Project、给会话绑定 Issue：泳道看板、Issue 详情页、会话头部/左侧栏副标题、内置浏览器跳转与 Agent 绑定工具。"
+      },
+      "icon": "icons/github-projects.svg",
+      "author": "ceasarXuu",
+      "homepage": "https://github.com/ceasarXuu/dsh-github-projects#readme",
+      "repository": {
+        "url": "https://github.com/ceasarXuu/dsh-github-projects"
+      },
+      "metadata": {
+        "labels": [
+          "github",
+          "projects",
+          "issue",
+          "board"
+        ]
+      },
+      "versions": [
+        {
+          "version": "1.0.0",
+          "publishTimestamp": 1793176200,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.3 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}

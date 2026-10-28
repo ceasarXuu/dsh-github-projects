@@ -89,13 +89,16 @@ export function writeOverlay({ root, pluginEntry, documentsDirectory }) {
  * Boot `dsh web` in the run root.
  * @param {{
  *   root: string, home: string, workspace: string,
- *   overlayPath: string, logPath: string,
+ *   overlayPath?: string | null, logPath: string,
+ *   profile?: string,
  *   port?: number,
  *   env?: Record<string, string>,
  * }} options
  */
-export function startDshWeb({ root, home, workspace, overlayPath, logPath, port = 0, env = {} }) {
-  const args = ['--profile', 'web', '--patch', overlayPath, '--no-open', '--port', String(port)]
+export function startDshWeb({ root, home, workspace, overlayPath = null, logPath, profile = 'web', port = 0, env = {} }) {
+  const args = ['--profile', profile]
+  if (overlayPath !== null) args.push('--patch', overlayPath)
+  args.push('--no-open', '--port', String(port))
   const log = createWriteStream(logPath, { flags: 'w' })
   const child = spawn(DSH_CLI, args, {
     cwd: workspace,

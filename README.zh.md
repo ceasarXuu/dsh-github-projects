@@ -1,6 +1,6 @@
 # dsh-github-projects
 
-**v0.4.1** · 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
+**v1.0.0 — 首个公开发布。** 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
 这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
 GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue，并在会话
@@ -14,6 +14,25 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 > 第三方插件，非 DeepSeek / DeepSeek Harness 官方组件。
 
 ![会话头部的 projects 与 issue 页签](artifacts/screenshots/01-tabs.png)
+
+## 1.0.0 发布说明（首个公开发布）
+
+**GitHub 项目与议题** v1.0.0 是首个公开发布版本，以 npm 包
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects) 分发。源码与问题反馈：
+<https://github.com/ceasarXuu/dsh-github-projects>。许可证 MIT（[LICENSE](LICENSE)）；版本变更见
+[CHANGELOG.md](CHANGELOG.md)。
+
+| | |
+|---|---|
+| npm 包 | `@ceasarxuu/dsh-github-projects`（公开 scoped 包） |
+| Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（来自 `locale/en.json` + `locale/zh.json`） |
+| 仓库 | <https://github.com/ceasarXuu/dsh-github-projects> |
+| 许可证 | MIT |
+| 宿主引擎 | `dsh >=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
+| 运行时依赖 | 无（宿主半只用 `node:*`，浏览器半用宿主提供的 `react` / `react-dom`） |
+
+功能与 0.4.1 完全一致——1.0.0 是发布/身份版本（包名从内部的 `@local/dsh-github-projects` 改为现名）。
+下方的 0.x 特性说明为**公开发布前的历史记录**。
 
 ## 工作方式
 
@@ -33,7 +52,9 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
 不上报遥测、也不直接访问 GitHub。
 
-## 0.4.1 新特性：副标题同时出现在左侧会话列表
+## 公开发布前的历史（0.x 特性说明）
+
+### 0.4.1 新特性：副标题同时出现在左侧会话列表
 
 - **左侧栏的每个已绑定会话行**（无论是否选中、属于哪个工作区）都会在标题下显示与头部一致的
   Issue 副标题：`#N`（tint chip）+ Issue 标题，单行省略，tooltip 带完整 `repo#N title`。有副标题的
@@ -45,7 +66,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
   行锚点 + `:has()` 行高覆盖 + `MutationObserver` 扫描）注入第二行；宿主结构变化时自动降级为
   不显示，不报错、不影响会话行本身。
 
-## 0.4.0 新特性：会话 Issue 副标题、Agent 工具、内置浏览器打开与更快读取
+### 0.4.0 新特性：会话 Issue 副标题、Agent 工具、内置浏览器打开与更快读取
 
 - **会话 Issue 副标题。** 已绑定 Issue 的会话在标题下显示 `#N`（tint chip）+ Issue 标题，单行省略，
   `title` 属性带完整 `repo#N title`；点击在内置右侧浏览器打开 GitHub。agent 工具改绑后约 4 秒内
@@ -62,7 +83,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
   （`staleTtlMs` 10 分钟）、磁盘缓存跨重启；`/config` 不等 `gh`；warm 打开 projects **无骨架**
   （宿主响应 <300ms，由 e2e `projects-warm` 门禁保证）。
 
-## 0.3.0 新特性：状态配色与视觉层次 + 空 No status 泳道自动隐藏
+### 0.3.0 新特性：状态配色与视觉层次 + 空 No status 泳道自动隐藏
 
 - **一套真正的状态配色。** 泳道、列表段、类型图标与 `issue` 页使用明确的调色板：`No status`
   中性、`TODO` 蓝、`In Progress` 琥珀、`In Review` 紫、`Done` 绿、自定义状态青；Issue 绿、PR 紫、
@@ -78,7 +99,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
   工具栏项目 icon 使用品牌 tint；空态/错误态使用 tint 图标块。动效仅 120ms 颜色/边框过渡，并尊重
   `prefers-reduced-motion`。
 
-## 0.2.1（v1.1.1）新特性：全宽自适应
+### 0.2.1（v1.1.1）新特性：全宽自适应
 
 - `projects` 页（泳道与列表）和 `issue` 页现在**铺满会话主体宽度**：`width: 100%`、**无 `max-width`
   上限**、不做居中固定列。宽屏 Desktop 窗口下五列泳道均分整个可用宽度，不再被挤在约 1000px 的居中
@@ -88,7 +109,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 - 回归门禁：新增 e2e `projects-wide` 阶段，在 2200×1300 下断言页面宽度 ≥ body 的 85%
   → `artifacts/screenshots/11-projects-wide.png`。
 
-## 0.2.0（v1.1）新特性
+### 0.2.0（v1.1）新特性
 
 - **泳道看板（默认视图）。** 固定五列，从左到右 `No status` / `TODO` / `In Progress` / `In Review` /
   `Done`。Project 自定义的其它 Status 不会被丢弃，会追加到最右侧成为额外列。列头显示当前过滤后的
@@ -148,29 +169,37 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ## 安装
 
-插件是本地包（`@local/dsh-github-projects`），未发布到 npm。把它装到你实际运行的 DSH profile
-（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。
+插件以 npm 包 **`@ceasarxuu/dsh-github-projects`** 分发。把它装到你实际运行的 DSH profile
+（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。安装需要对
+profile 目录的写权限。
 
-**命令行（DSH 0.2.1-rc.3 上已验证的方式）：**
+**Plugin Manager（推荐）：** 插件 → 添加 → 输入 `@ceasarxuu/dsh-github-projects` → 安装并保持启用。
+插件卡片会显示包里 `locale/` 元数据提供的中英文名称/描述与图标。
+
+**命令行：**
 
 ```sh
-# 安装到指定 profile
-dsh plugin --profile desktop add /绝对路径/dsh-github-projects
+# 从 npm 安装到 desktop profile
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
 
 # 确认已安装到该 profile
-dsh plugin --profile desktop why @local/dsh-github-projects
+dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
 
 # 卸载
-dsh plugin --profile desktop remove @local/dsh-github-projects
+dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 ```
 
-`dsh plugin ... add` 会把包记录为 `link:` 依赖，并追加到 profile `package.json` 的
-`dsh.profile.bundles`；运行中的 Desktop 会热重组并加载两个半身，无需重启；移除后即时回退。
-安装时窗口会重载并回到工作区首页（HMR 重组的正常表现，会话数据不受影响），重新点开会话即可看到页签。
-命令也接受已发布的包名代替本地路径；安装需要对 profile 目录的写权限。
+安装会把包写入 profile 并追加到 `package.json` 的 `dsh.profile.bundles`；运行中的 Desktop 会热重组
+并加载两个半身，无需重启；移除后即时回退。安装时窗口会重载并回到工作区首页（HMR 重组的正常表现，
+会话数据不受影响），重新点开会话即可看到页签。
 
-**Plugin Manager：** 插件管理界面的「添加」是等价的 UI 路径，适合不走命令行的用户；
-本机验收走的是上面的命令行路径。
+**开发场景（本地仓库）：** 如果想直接从本仓库运行而不是用 npm 包，可以链接本地检出：
+
+```sh
+dsh plugin --profile desktop add /绝对路径/dsh-github-projects
+```
+
+这会记录为 `link:` 依赖（`link:` 前缀可省略）。仅用于开发；普通用户请使用上面的 npm 包。
 
 ## 使用
 
@@ -213,7 +242,7 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
 - id: github-projects
-  name: '@local/dsh-github-projects'
+  name: '@ceasarxuu/dsh-github-projects'
   config:
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
@@ -306,16 +335,17 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | 0.4.1（侧栏会话行副标题 + 本地 `GET /bindings`；0.4.0：头部副标题 / Agent 工具 / 内置浏览器 / SWR 更快读取；0.3.0：视觉系统 + 空泳道隐藏） |
+| 插件版本 | **1.0.0**（首个公开发布；功能与 0.4.1 一致） |
+| 宿主引擎 | `engines.dsh`：`>=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | 2026-10-28 通过 v0.4.1 验收：宿主测试 91/91；e2e fixture/real 均 PASS（各 18/18 阶段；冻结 client `e1ae2410…`、index `b52964f7…`）；侧栏副标题已验证（行高 41px、chip `#240`、点击不切换会话）；`/bindings` 本地 1–7ms；warm 打开 17–56ms 无骨架；14 张截图——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | v0.4.1 已于 2026-10-28 通过验收（宿主测试 91/91、e2e fixture/real PASS、14 张截图）。v1.0.0 发布前门禁已通过：改名包 e2e PASS，打包 tarball 在干净 `web` profile 安装成功（`/plugin/github-projects/health` → 200）；npm registry 安装 smoke 记录于仓库最新验收章节（npm 包内文档为发布时快照） |
 
-目前还没有 `engines.dsh` 版本门禁：如果 DSH 升级改动了 `conversation.view` slot 或会话标准 props，
-可能需要同步更新插件。
+`engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了
+`conversation.view` slot、会话标准 props、头部/侧栏 DOM 锚点的 DSH 升级可能需要同步更新插件。
 
 ## 已知限制
 
@@ -366,4 +396,6 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 ## 许可证
 
-MIT。设计文档（中文）：[docs/DESIGN.zh.md](docs/DESIGN.zh.md)。
+MIT——见 [LICENSE](LICENSE)。变更记录：[CHANGELOG.md](CHANGELOG.md)；发布流程：
+[RELEASING.md](RELEASING.md)。源码：<https://github.com/ceasarXuu/dsh-github-projects>。
+设计文档（中文）：[docs/DESIGN.zh.md](docs/DESIGN.zh.md)。

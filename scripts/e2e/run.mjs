@@ -925,6 +925,22 @@ async function main() {
       const configResponses = pluginResponses.filter(entry => entry.status >= 200 && entry.status < 300
         && /\/plugin\/github-projects\/config(?:\?|$)/u.test(entry.url))
       const configPending = configResponses.filter(entry => entry.json?.gh?.error === 'pending' || entry.json?.gh?.available === false)
+      // Release gate (v1.0.0): prove the renamed client module id is what the
+      // browser actually loaded (served bundle URLs expose the package name).
+      const moduleUrls = await resources.cdp.evaluate(`(() => {
+        return [...performance.getEntriesByType('resource')]
+          .map(entry => entry.name)
+          .filter(name => name.includes('/plugins/'))
+          .map(name => { try { return decodeURIComponent(name) } catch { return name } })
+          .filter(name => name.includes('github-projects'))
+      })()`)
+      const renamedModuleLoaded = moduleUrls.some(url => url.includes('@ceasarxuu/dsh-github-projects'))
+      const oldModuleLoaded = moduleUrls.some(url => url.includes('@local/dsh-github-projects'))
+      assert(moduleUrls.length >= 1, `client plugin bundle was not observed in page resource timings (${JSON.stringify(moduleUrls)})`)
+      assert(
+        renamedModuleLoaded && !oldModuleLoaded,
+        `client plugin module id rename mismatch: loaded=${JSON.stringify(moduleUrls)} (expected @ceasarxuu/dsh-github-projects, no @local/)`,
+      )
       const routeSummary = pluginResponses.map(entry => ({
         route: String(entry.url).replace(/^[^?]*\/plugin\/github-projects/iu, ''),
         status: entry.status,
@@ -951,6 +967,11 @@ async function main() {
         },
         bindings: {
           responses: pluginResponses.filter(entry => /\/plugin\/github-projects\/bindings(?:\?|$)/u.test(entry.url)).length,
+        },
+        clientModule: {
+          renamed: renamedModuleLoaded,
+          oldIdLoaded: oldModuleLoaded,
+          urls: moduleUrls,
         },
       }
     })
