@@ -17,7 +17,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { DSH_CLI, isolatedEnv, runTimestamp, startDshWeb, waitForHttpReady } from './lib/dsh.mjs'
@@ -27,7 +27,7 @@ import {
   clickTab, collectUi, prepareConversationUi, sendComposerMessage, settle, tabLabels, waitForAppShell,
 } from './lib/app.mjs'
 
-const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..')
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCREENSHOT = join(REPO_ROOT, 'artifacts', 'screenshots', '15-published-install.png')
 const DEFAULT_SPEC = '@ceasarxuu/dsh-github-projects@1.0.0'
 

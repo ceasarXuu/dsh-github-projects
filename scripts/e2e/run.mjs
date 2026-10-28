@@ -167,6 +167,9 @@ async function main() {
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
     '10-desktop-tabs.png', '11-projects-wide.png', '12-browser-open.png',
     '13-issue-subtitle.png', '14-sidebar-subtitle.png',
+    // 15 is produced by scripts/e2e/release-smoke.mjs (published-install gate),
+    // never by this harness — preserve it as release evidence.
+    '15-published-install.png',
   ])
   const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-browser-open.png', '13-issue-subtitle.png', '14-sidebar-subtitle.png'])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
