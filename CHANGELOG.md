@@ -3,6 +3,27 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.0.1 — 2026-10-28
+
+Bug-fix release for the sidebar issue subtitle and Issue link opening (user reports).
+
+- **Sidebar session row clicks stay navigation-only.** The injected sidebar subtitle is now a plain
+  non-interactive `span`; clicking anywhere on a session row — including the subtitle — opens that
+  session and never opens the Issue. (Previously the subtitle was a button that stopped propagation
+  and opened the Issue.)
+- **Issue links open the system default browser in a new tab.** Card/list-row clicks, the header
+  subtitle and the Issue view's GitHub link now use
+  `window.open(url, '_blank', 'noopener,noreferrer')` (same as DSH's "Open in system browser")
+  instead of the built-in right-sidebar browser. The plugin no longer requires the optional
+  `sidebarRight`/`sidebarRightTabs` client services.
+- **No horizontal overflow in the sidebar.** The subtitle now uses
+  `flex:1 1 100%; max-width:100%; padding-inline-start:20px` instead of `flex-basis:100% + margin`,
+  so long Issue titles stay inside the session container; this also removes the stray horizontal
+  scrollbar rectangle that appeared above the sidebar footer/avatar.
+- e2e: `projects-browser` → `projects-external-open` (stubs `window.open`, asserts no sidebar
+  browser tab), and `sidebar-subtitle` adds no-overflow + row-click-navigates assertions;
+  screenshot `12-browser-open.png` → `12-external-open.png`.
+
 ## 1.0.0 — 2026-10-28 — first public release
 
 First public release of **GitHub Projects & Issues** for DeepSeek Harness

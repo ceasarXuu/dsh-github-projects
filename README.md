@@ -1,15 +1,16 @@
 # dsh-github-projects
 
-**v1.0.0 — first public release.** The GitHub Project and Issue bound to your DSH session, one tab
-away.
+**v1.0.1 — bug-fix release.** The GitHub Project and Issue bound to your DSH session, one tab away.
 
 This DSH plugin appends two views to the conversation header: `projects` shows the GitHub Project
 bound to the **workspace** — as a status swimlane board by default, with a list view and a milestone
 filter — and `issue` shows the Issue bound to the **session**, with a one-line **issue subtitle**
 under the session title in the conversation header **and** under the session row in the left sidebar
-session tree (v0.4.1). Clicking a card opens GitHub in DSH's built-in right-sidebar browser; a
-separate **Bind** action binds the Issue to the session, and the model can do the same through three
-agent tools. Everything is read-only against GitHub — it is a viewing surface, not a writer.
+session tree (v0.4.1). Clicking a card or the header subtitle opens GitHub in your **system default
+browser** (new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row
+just opens that session. A separate **Bind** action binds the Issue to the session, and the model can
+do the same through three agent tools. Everything is read-only against GitHub — it is a viewing
+surface, not a writer.
 
 ```
 conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
@@ -19,21 +20,45 @@ conversation header:  [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
 
 ![Session header with the projects and issue tabs](artifacts/screenshots/01-tabs.png)
 
+## Release 1.0.1 — sidebar clicks, system-browser links, no overflow
+
+Bug-fix release for four user-reported issues (three fixes); **published as `1.0.1`** (npm `latest` = 1.0.1).
+
+| | |
+|---|---|
+| npm package | `@ceasarxuu/dsh-github-projects@1.0.1` (public scoped package) |
+| Release | [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) |
+| Fixes | sidebar rows navigate only; links open in the system browser; no sidebar overflow |
+
+- **Sidebar session rows are navigation-only.** The subtitle under a bound session row is now a plain,
+  non-interactive `span`; clicking anywhere on the row — subtitle included — opens that session and
+  never opens the Issue.
+- **Issue links open in your system default browser (new tab).** Card/list-row clicks, the
+  conversation-header subtitle and the Issue view's GitHub link use
+  `window.open(url, '_blank', 'noopener,noreferrer')`, the same mechanism as DSH's "Open in system
+  browser". The plugin no longer uses the built-in right-sidebar browser (and no longer needs the
+  optional `sidebarRight` client services).
+- **No horizontal overflow in the sidebar.** The subtitle uses
+  `flex:1 1 100%; max-width:100%; overflow:hidden` with a 20px leading indent, so long Issue titles
+  stay inside the session row; the stray horizontal scrollbar rectangle above the sidebar
+  footer/avatar is gone. Bound rows still grow 32px→~41px; unbound sessions and workspace rows are
+  untouched.
+
 ## Release 1.0.0 — first public release
 
-**GitHub Projects & Issues** v1.0.0 is the first public release and is **live on npm** as
-[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)
-(`latest` = 1.0.0, public). Source and issue tracker:
-<https://github.com/ceasarXuu/dsh-github-projects>; release notes:
+**GitHub Projects & Issues** v1.0.0 was the first public release (the current release is **1.0.1**
+above), and is **live on npm** as
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects).
+Source and issue tracker: <https://github.com/ceasarXuu/dsh-github-projects>; release notes:
 <https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>. Licensed MIT
 ([LICENSE](LICENSE)); notable changes per version: [CHANGELOG.md](CHANGELOG.md).
 
 | | |
 |---|---|
-| npm package | `@ceasarxuu/dsh-github-projects` (public scoped package) |
+| npm package | `@ceasarxuu/dsh-github-projects` (public scoped package; 1.0.0 first published version) |
 | Plugin Manager name | *GitHub Projects & Issues* / **GitHub 项目与议题** (from `locale/en.json` + `locale/zh.json`) |
 | Repository | <https://github.com/ceasarXuu/dsh-github-projects> |
-| Release | [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
+| Releases | [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | License | MIT |
 | Host engines | `dsh >=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Runtime dependencies | none (host half uses only `node:*`; browser half uses the host-provided `react` / `react-dom`) |
@@ -54,7 +79,7 @@ Binding is two levels deep, matching how GitHub context actually lives:
 The `projects` tab reads the Project's items once (`GET /items`) and derives everything on the
 client: the swimlane columns from the Projects v2 `Status` field, the milestone filter from the
 `milestone` field, the text/status filters and their counts. Clicking an Issue/PR **card body or list
-row** opens its GitHub page in DSH's built-in right-sidebar browser (it does **not** bind); the
+row** opens its GitHub page in your **system default browser** as a new tab (it does **not** bind); the
 explicit **Bind** action on the card/row binds that Issue to the current session, switches to the
 `issue` tab and adds the issue subtitle under the session title. `issue` renders the title, state,
 body, labels and comments. Neither tab replaces the shipped views: remove the plugin and the header
@@ -65,6 +90,10 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
 ## Pre-public history (0.x feature notes)
 
+> Historical: these describe the 0.x behavior at the time. **1.0.1 supersedes** the sidebar click and
+> link-opening behavior below — Issue links now open in the system default browser, and the sidebar
+> subtitle is non-interactive (row clicks open the session).
+
 ### What's new in 0.4.1 — issue subtitle in the sidebar session tree
 
 - **The subtitle now also appears under every bound session row in the left sidebar** (selected or not,
@@ -72,8 +101,9 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
   issue title on a second line (single line, ellipsis, full `repo#N title` in the tooltip). The row
   grows from 32px to ~41px only while it has a subtitle; the first line (status, title, time, pin,
   actions) is untouched.
-- Clicking the sidebar subtitle opens the Issue in DSH's built-in right-sidebar browser **without
-  changing the selected session**.
+- Clicking the sidebar subtitle opened the Issue in DSH's built-in right-sidebar browser **without
+  changing the selected session** (superseded in 1.0.1: the subtitle is a non-interactive `span` and
+  the whole row opens the session).
 - Binding changes — including agent-tool `bind`/`switch`/`unbind` — are reflected in the sidebar
   within **≤4 s** through a new local `GET /bindings` endpoint (poll ~4 s + immediate
   `binding-changed` event), with no `gh` call and no need to reopen the tree.
@@ -84,14 +114,14 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 ### What's new in 0.4.0 — issue subtitle, agent tools, browser-open and faster reads
 
 - **Issue subtitle under the session title.** A session with a bound Issue shows `#N` (tinted chip)
-  plus the issue title on one line (ellipsis; full `repo#N title` in the tooltip). Clicking it opens
-  GitHub in DSH's built-in right-sidebar browser. It updates within ~4 s of an agent-tool change and
-  immediately after the plugin's own bind/unbind.
-- **Click = open in the built-in browser; Bind is explicit.** Clicking an Issue/PR card or list row
-  now opens the GitHub page in DSH's right-sidebar browser (same browser tab as links) instead of
-  binding. Use the explicit **Bind** button on the card/row to bind to the current session and jump
-  to the `issue` tab. PR/Draft rows only open in the browser. (In the Web build the embedded iframe
-  may be blocked by github.com's `X-Frame-Options`; the Desktop build's webview renders it.)
+  plus the issue title on one line (ellipsis; full `repo#N title` in the tooltip). Clicking it opened
+  GitHub in DSH's built-in right-sidebar browser at the time (since 1.0.1 it opens in the system
+  default browser). It updates within ~4 s of an agent-tool change and immediately after the plugin's
+  own bind/unbind.
+- **Click = open; Bind is explicit.** Clicking an Issue/PR card or list row opened the GitHub page in
+  DSH's right-sidebar browser at the time (since 1.0.1 it opens in the system default browser)
+  instead of binding. Use the explicit **Bind** button on the card/row to bind to the current session
+  and jump to the `issue` tab. PR/Draft rows only open.
 - **Agent tools.** The model can manage the current session's Issue binding with
   `github_issue_bind` / `github_issue_switch` / `github_issue_unbind` (args: an Issue URL or
   `owner/repo#123`). They only touch the **current session**, never write to GitHub, and the UI
@@ -164,22 +194,23 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 | Bound Issue: green Open badge, sticky header, body, labels | Comments with author, relative time and links |
 | ![wide layout](artifacts/screenshots/11-projects-wide.png) | |
 | 2200×1300 wide window: page fills the session area (old 1000px centred cap fixed) | |
-| ![built-in browser](artifacts/screenshots/12-browser-open.png) | ![issue subtitle](artifacts/screenshots/13-issue-subtitle.png) |
-| Clicking an Issue card body opens GitHub in DSH's built-in right-sidebar browser — **no binding** is created. Web build: the iframe is refused by github.com's `X-Frame-Options: DENY` (blank pane, URL still shown); Desktop's Electron webview renders it. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens the built-in browser) |
+| ![external browser](artifacts/screenshots/12-external-open.png) | ![issue subtitle](artifacts/screenshots/13-issue-subtitle.png) |
+| Clicking an Issue card body opens GitHub in your **system default browser, new tab** — **no binding** is created. Bind via the card button | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis, full text in tooltip; click opens it in the system browser) |
 | ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | |
-| Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41px); binding changes sync via `/bindings` (~4 s poll + binding event); click opens the built-in browser without changing the selected session | |
+| Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41px, no horizontal overflow); the subtitle is **non-interactive** — clicking the row opens that session; binding changes sync via `/bindings` (~4 s poll + binding event) | |
 | ![Published install](artifacts/screenshots/15-published-install.png) | |
-| Published `1.0.0` installed from npm into a clean `web` profile: the fresh session header shows `对话 / 轨迹 / projects / issue` (`15-published-install.png`, release smoke) | |
+| Published `1.0.1` installed from npm into a clean `web` profile: the fresh session header shows `对话 / 轨迹 / projects / issue` (`15-published-install.png`, release smoke) | |
 
 Screenshots 01–09 and 12–15 are captured by the isolated e2e harness in **real-host mode** against
 live `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `13` is the
 conversation-header subtitle, `14` the sidebar session-row subtitle (v0.4.1), and `15` the
-clean-profile install of the published npm release. `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
-layout. `10-desktop-tabs.png` is different: it is a manual 2560×1370 full-window capture of the **real
-Desktop app** after the v0.4.1 install (sha256 `5347164c…8226`), showing two bound rows in the left
-sidebar with their second-line `#240 [v1.2.0]…` subtitles, the open session's header subtitle, and the
-four tabs. It was captured while the session was bound through an agent tool (the test binding was then
-unbound; the user's own binding remains):
+clean-profile install of the published npm release (1.0.1). `12` shows the system-browser open
+(v1.0.1). `11-projects-wide.png` is harness output at **2200×1300**, proving the full-width
+layout. `10-desktop-tabs.png` is different: it is a manual **1438×1370** capture of the **real Desktop app**
+after the v1.0.1 install (sha256 `3860f7b9…988c`), showing three bound rows in the left sidebar with
+their second-line issue subtitles (`#240 …` / `#289 …` / `#240 …`, clipped inside the row) and a clean
+footer/avatar area — no stray scrollbar rectangle. This frame has no conversation-header subtitle;
+`13-issue-subtitle.png` is the header-subtitle evidence. The four tabs are visible:
 
 ![Desktop session header after install](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -206,7 +237,7 @@ unbound; the user's own binding remains):
 
 ## Install
 
-The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.0`** (`latest` = 1.0.0).
+The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.1`** (`latest` = 1.0.1).
 Install it into the DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
 `web` / `headless` if that is what you run). Installing needs write access to the profile directory.
 
@@ -217,8 +248,8 @@ and the plugin icon.
 **CLI:**
 
 ```sh
-# install the published release into the desktop profile (pin @1.0.0)
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.0
+# install the published release into the desktop profile (pin @1.0.1)
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.1
 
 # verify it is installed in that profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -240,8 +271,8 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 That records a `link:` dependency (the `link:` prefix may be omitted). Use this for development only;
 installed users should use the npm package above.
 
-> The registry also lists an internal staging version (`0.0.0-stage`) alongside 1.0.0. Install the
-> release explicitly with `@1.0.0`; `latest` already points at 1.0.0.
+> The registry also lists an internal staging version (`0.0.0-stage`). Install the release explicitly
+> with `@1.0.1`; `latest` already points at 1.0.1.
 
 ## Use
 
@@ -252,14 +283,16 @@ installed users should use the npm package above.
    **List** in the **Swimlane / List** toggle to switch to the grouped list view.
 4. Narrow the view with the **milestone** dropdown (`All` / `Backlog` / a milestone) and/or the text
    filter — counts update in both board and list.
-5. Click a card body/list row to open the Issue or PR in DSH's **built-in right-sidebar browser**
+5. Click a card body/list row to open the Issue or PR in your **system default browser** as a new tab
    (this does not change the binding). Click the card/row **Bind** button to bind the Issue to the
    current session — the view switches to the `issue` tab and the issue subtitle appears under the
    session title.
 6. Alternatively, in an unbound `issue` tab paste a GitHub Issue URL or `owner/repo#123` and click
    **Bind**. Or just ask the model: “bind https://github.com/acme/web/issues/228 to this session”,
    “switch this session to acme/web#240”, “unbind this session's Issue” (agent tools).
-7. The issue subtitle can be clicked any time to reopen the Issue in the built-in browser.
+7. The conversation-header issue subtitle can be clicked any time to reopen the Issue in the system
+   browser. The sidebar subtitle is non-interactive: clicking anywhere on a session row opens that
+   session.
 
 Use **Refresh** to force a fresh read (cached data may be served stale for up to `staleTtlMs` while
 it revalidates), **Change** to switch the workspace's Project, and **Unbind** (with confirmation) to
@@ -387,14 +420,14 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | **1.0.0** (first public release; functionality unchanged from 0.4.1) |
+| Plugin version | **1.0.1** (bug-fix release on top of 1.0.0; functionality otherwise unchanged from 0.4.1) |
 | Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v1.0.0 is **live on npm 1.0.0**; clean-profile install smoke **PASS** (registry install of `@ceasarxuu/dsh-github-projects@1.0.0` into a temp `web` profile: `/plugin/github-projects/health` → 200, four tabs, console 0/0/0); renamed-package e2e PASS (91/91 host tests, 18/18 stages); **15 screenshots** — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
+| Acceptance | v1.0.1 is **live on npm 1.0.1** (`latest`) with clean-profile install smoke **PASS** (registry install into a temp `web` profile, `/plugin/github-projects/health` → 200, four tabs, console 0/0/0); fixture 17/17 + real 18/18 e2e stages PASS, 91/91 host tests, console 0/0/0; **15 screenshots**; external-open (1 `window.open`, no sidebar browser) and sidebar non-interactive/no-overflow assertions verified — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) (Chinese) |
 
 `engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
 range — or one that changes the `conversation.view` slot, session standard props, or the header/sidebar
@@ -438,12 +471,13 @@ DOM anchors — may require a plugin update.
 - **Agent tools only target the current session:** there is no parameter to bind/unbind another
   session. They also need a host with `ctx.tools` and an owning agent; the UI reflects tool changes
   via a cheap local poll (≤4 s), not a push channel.
-- **Built-in browser fallback:** card/row clicks use DSH's right-sidebar browser tab; on hosts without
-  it the plugin falls back to `window.open` (a normal browser tab, leaving the current view).
-- **Web build iframe limit:** the Web build's built-in browser is an iframe, and github.com sends
-  `X-Frame-Options: DENY`, so the embedded GitHub page can render blank in the Web build (the address
-  bar URL is still correct). The Desktop build's Electron webview renders it normally; this affects
-  only in-app viewing, not the URL itself.
+- **External links need popup permission:** Issue links open via
+  `window.open(url, '_blank', 'noopener,noreferrer')` (same as DSH's "Open in system browser"), so a
+  browser/desktop setting that blocks popups can suppress the new tab. The plugin does not detect the
+  block; if nothing opens, allow popups for DSH and retry.
+- **Sidebar subtitle is intentionally non-interactive:** it is plain text under the session title —
+  clicking the row (including the subtitle) selects that session; it never opens the Issue. Use the
+  card/list row, the conversation-header subtitle, or the Issue view's GitHub link to open GitHub.
 - **SWR freshness:** for up to `staleTtlMs` (10 min) you may see cached data first while a background
   refresh runs, and a restarted DSH can render the disk cache before GitHub answers. Click **Refresh**
   for a fresh read. The disk cache stores GitHub read results (no tokens) under your DSH profile —

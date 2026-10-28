@@ -1,11 +1,12 @@
 # dsh-github-projects
 
-**v1.0.0 — 首个公开发布。** 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
+**v1.0.1 — 缺陷修复版本。** 把当前会话绑定的 GitHub Project 和 Issue，放进 DSH 会话头部的两个页签。
 
 这个 DSH 插件向会话头部追加两个视图：`projects` 以**泳道看板**（默认）展示绑定到**工作区**的
 GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展示绑定到**会话**的 Issue，并在会话
-标题下显示一行 **Issue 副标题**（v0.4.1 起左侧栏会话列表的会话行标题下也会显示）。点卡片会用 DSH 内置右侧浏览器打开 GitHub（不再直接绑定），绑定由
-显式「绑定」按钮或 3 个 agent 工具完成。对 GitHub 全程只读——它是查看面板，不是写入工具。
+标题下显示一行 **Issue 副标题**（v0.4.1 起左侧栏会话列表的会话行标题下也会显示）。点卡片或头部副标题
+会在**系统默认浏览器**新标签页打开 GitHub；左侧栏副标题不可交互，点会话行任意位置只会打开该会话。
+绑定由显式「绑定」按钮或 3 个 agent 工具完成。对 GitHub 全程只读——它是查看面板，不是写入工具。
 
 ```
 会话头部： [ 对话 ] [ 轨迹 ] [ projects ] [ issue ] [ … ]
@@ -15,12 +16,31 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ![会话头部的 projects 与 issue 页签](artifacts/screenshots/01-tabs.png)
 
+## 1.0.1 发布说明（缺陷修复）
+
+修复四个用户报告的问题（三项修复）；**已发布为 `1.0.1`**（npm `latest` = 1.0.1）。
+
+| | |
+|---|---|
+| npm 包 | `@ceasarxuu/dsh-github-projects@1.0.1`（公开 scoped 包） |
+| 发布 | [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) |
+| 修复 | 侧栏会话行仅导航；链接改用系统浏览器；侧栏无横向溢出 |
+
+- **左侧栏会话行只做导航。** 会话行下的副标题改为纯展示的 `span`（不可交互）；点会话行任意位置
+  （包括副标题）都只会打开该会话，**不会**打开 Issue。
+- **Issue 链接改在系统默认浏览器的新标签页打开。** 卡片/列表行点击、会话头部副标题、Issue 页的
+  GitHub 链接统一使用 `window.open(url, '_blank', 'noopener,noreferrer')`（与 DSH「在系统浏览器中
+  打开」一致）；插件不再使用内置右侧浏览器，也不再依赖可选的 `sidebarRight` 客户端服务。
+- **侧栏不再横向溢出。** 副标题改为 `flex:1 1 100%; max-width:100%; overflow:hidden` 并保留 20px
+  缩进，长 Issue 标题不会撑出会话行；侧栏 footer/头像上方那条横向滚动条矩形消失。有副标题的行仍
+  从 32px 长到约 41px，未绑定会话行与工作区行保持原样。
+
 ## 1.0.0 发布说明（首个公开发布）
 
-**GitHub 项目与议题** v1.0.0 是首个公开发布版本，**已上线 npm**：
-[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)
-（`latest` = 1.0.0，公开）。源码与问题反馈：<https://github.com/ceasarXuu/dsh-github-projects>；
-发布说明：<https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>。许可证 MIT
+**GitHub 项目与议题** v1.0.0 是首个公开发布版本（当前版本为上方的 **1.0.1**），**已上线 npm**：
+[`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)。
+源码与问题反馈：<https://github.com/ceasarXuu/dsh-github-projects>；发布说明：
+<https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>。许可证 MIT
 （[LICENSE](LICENSE)）；版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 | | |
@@ -28,7 +48,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | npm 包 | `@ceasarxuu/dsh-github-projects`（公开 scoped 包） |
 | Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（来自 `locale/en.json` + `locale/zh.json`） |
 | 仓库 | <https://github.com/ceasarXuu/dsh-github-projects> |
-| 发布 | [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
+| 发布 | [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | 许可证 | MIT |
 | 宿主引擎 | `dsh >=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 运行时依赖 | 无（宿主半只用 `node:*`，浏览器半用宿主提供的 `react` / `react-dom`） |
@@ -47,7 +67,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 `projects` 页签一次读取 `GET /items`，在前端完成所有派生：按 Projects v2 的 `Status` 字段分成泳道列、
 按 `milestone` 字段生成过滤选项、文本/状态筛选与计数；不额外调用 GitHub。**点卡片主体或列表行**
-会在 DSH 内置右侧浏览器打开 GitHub 页面（不改变绑定）；点**显式的「绑定」按钮**才会把 Issue 绑到
+会在**系统默认浏览器**新标签页打开 GitHub 页面（不改变绑定）；点**显式的「绑定」按钮**才会把 Issue 绑到
 当前会话、切到 `issue` 页签并在会话标题下显示副标题。两个页签都是追加的：停用插件后会话头部完全
 恢复原样。
 
@@ -56,12 +76,16 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ## 公开发布前的历史（0.x 特性说明）
 
+> 以下描述的是当时（0.x）的行为；**1.0.1 已改变**侧栏点击与链接打开方式——Issue 链接现在在系统
+> 默认浏览器打开，侧栏副标题不可交互（点会话行只会打开会话）。
+
 ### 0.4.1 新特性：副标题同时出现在左侧会话列表
 
 - **左侧栏的每个已绑定会话行**（无论是否选中、属于哪个工作区）都会在标题下显示与头部一致的
   Issue 副标题：`#N`（tint chip）+ Issue 标题，单行省略，tooltip 带完整 `repo#N title`。有副标题的
   行从 32px 变为约 41px 的两行（≥40px），第一行（状态点、标题、时间、pin、操作）保持不变。
-- 点侧栏副标题在 **DSH 内置右侧浏览器**打开 Issue，**不会切换当前选中的会话**。
+- 当时点侧栏副标题在 **DSH 内置右侧浏览器**打开 Issue，不会切换当前选中的会话（1.0.1 起副标题
+  不可交互，点会话行只会打开会话）。
 - 绑定变化（包括 agent 工具的 bind/switch/unbind）通过新增的本地 `GET /bindings`（约 4s 轮询 +
   `binding-changed` 事件立即刷新）在 **≤4s** 内反映到侧栏，不需要重新展开会话树，也不调用 `gh`。
 - 诚实说明：出厂侧栏没有 subtitle slot，客户端用受控 DOM decorator（`[data-row-key^="session:"]`
@@ -71,9 +95,9 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 ### 0.4.0 新特性：会话 Issue 副标题、Agent 工具、内置浏览器打开与更快读取
 
 - **会话 Issue 副标题。** 已绑定 Issue 的会话在标题下显示 `#N`（tint chip）+ Issue 标题，单行省略，
-  `title` 属性带完整 `repo#N title`；点击在内置右侧浏览器打开 GitHub。agent 工具改绑后约 4 秒内
+  `title` 属性带完整 `repo#N title`；当时点击在内置右侧浏览器打开 GitHub（1.0.1 起改为系统浏览器）。agent 工具改绑后约 4 秒内
   自动更新，插件自身的绑定/解绑则立即更新。
-- **点击=内置浏览器，绑定=显式按钮。** 点 Issue/PR 卡片或列表行现在在 DSH 右侧栏浏览器打开 GitHub
+- **点击=打开链接，绑定=显式按钮（当时为内置右侧浏览器；1.0.1 起改为系统默认浏览器）。** 点 Issue/PR 卡片或列表行在 DSH 右侧栏浏览器打开 GitHub
   页面（与普通链接使用同一个浏览器 tab），不再直接绑定；要绑定请点卡片/行上的「绑定」按钮，绑定后
   跳到 `issue` 页签。PR/Draft 行只有查看动作。
 - **Agent 工具。** 模型可以用 `github_issue_bind` / `github_issue_switch` / `github_issue_unbind`
@@ -136,20 +160,21 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 | 已绑定 Issue：绿色 Open 徽章、吸顶头部、正文、标签 | 评论：作者、相对时间与 GitHub 链接 |
 | ![宽窗口全宽布局](artifacts/screenshots/11-projects-wide.png) | |
 | 宽窗口（2200×1300）：页面铺满会话区域（旧 1000px 居上限宽已修复） | |
-| ![内置浏览器打开](artifacts/screenshots/12-browser-open.png) | ![Issue 副标题](artifacts/screenshots/13-issue-subtitle.png) |
-| 点 Issue 卡片正文在内置右侧浏览器打开 GitHub，**不创建绑定**。Web 版用 iframe，github.com 的 `X-Frame-Options: DENY` 会拒绝内嵌（空白 pane，地址栏 URL 正确）；Desktop 版 Electron webview 正常渲染。绑定请用卡片上的「绑定」按钮 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 带全文，点击打开内置浏览器） |
+| ![系统浏览器打开](artifacts/screenshots/12-external-open.png) | ![Issue 副标题](artifacts/screenshots/13-issue-subtitle.png) |
+| 点 Issue 卡片正文在**系统默认浏览器**新标签页打开 GitHub，**不创建绑定**。绑定请用卡片上的「绑定」按钮 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略，tooltip 带全文，点击在系统浏览器打开） |
 | ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | |
-| 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px）；绑定变化经 `/bindings` 约 4s 轮询/绑定事件同步；点击打开内置浏览器、不改变选中会话 | |
+| 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px，无横向溢出）；副标题**不可交互**，点会话行只会打开该会话；绑定变化经 `/bindings` 约 4s 轮询/绑定事件同步 | |
 | ![发布版安装](artifacts/screenshots/15-published-install.png) | |
-| 从 npm 安装已发布 `1.0.0` 到干净 `web` profile：新会话头部显示 `对话 / 轨迹 / projects / issue`（`15-published-install.png`，release smoke） | |
+| 从 npm 安装已发布 `1.0.1` 到干净 `web` profile：新会话头部显示 `对话 / 轨迹 / projects / issue`（`15-published-install.png`，release smoke） | |
 
 截图 01–09、12–15 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
 1280×800；`09` 需 `--extra-comments`）；`13` 是会话头部副标题、`14` 是左侧栏会话行副标题、
-`15` 是已发布 npm 版本的干净 profile 安装截图。`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
-全宽布局证据。`10-desktop-tabs.png` 不同：它是 v0.4.1 重装后**真实 Desktop 应用**的 2560×1370
-全窗口手动截图（sha256 `5347164c…8226`），左侧栏两个已绑定会话行各显示第二行 `#240 [v1.2.0]…`
-副标题，打开会话的头部也显示同一副标题，另有四个页签。截图在 agent 工具绑定期间拍摄（测试绑定随后
-解绑，用户自己的绑定保留）：
+`15` 是已发布 npm 版本（1.0.1）的干净 profile 安装截图。`12` 展示 v1.0.1 的系统浏览器打开
+`11-projects-wide.png` 是 harness 在 **2200×1300** 下采集的
+全宽布局证据。`10-desktop-tabs.png` 不同：它是 v1.0.1 安装后**真实 Desktop 应用**的 **1438×1370**
+手动截图（sha256 `3860f7b9…988c`），左侧栏三个已绑定会话行各显示第二行 Issue 副标题（`#240 …` /
+`#289 …` / `#240 …`，均裁在行内），footer/头像区域干净、没有多余滚动条矩形；本帧不含会话头部副标题
+（头部证据见 `13-issue-subtitle.png`），四个页签可见：
 
 ![安装后 Desktop 会话头部](artifacts/screenshots/10-desktop-tabs.png)
 
@@ -174,7 +199,7 @@ GitHub Project，可切换列表视图并支持 milestone 过滤；`issue` 展�
 
 ## 安装
 
-插件**已上线 npm**：**`@ceasarxuu/dsh-github-projects@1.0.0`**（`latest` = 1.0.0）。把它装到你实际运行的 DSH profile
+插件**已上线 npm**：**`@ceasarxuu/dsh-github-projects@1.0.1`**（`latest` = 1.0.1）。把它装到你实际运行的 DSH profile
 （默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。安装需要对
 profile 目录的写权限。
 
@@ -184,8 +209,8 @@ profile 目录的写权限。
 **命令行：**
 
 ```sh
-# 安装已发布版本到 desktop profile（显式 pin @1.0.0）
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.0
+# 安装已发布版本到 desktop profile（显式 pin @1.0.1）
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.1
 
 # 确认已安装到该 profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -206,8 +231,8 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 
 这会记录为 `link:` 依赖（`link:` 前缀可省略）。仅用于开发；普通用户请使用上面的 npm 包。
 
-> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.0.0`（`latest` 已经是
-> 1.0.0）。
+> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.0.1`（`latest` 已经是
+> 1.0.1）。
 
 ## 使用
 
@@ -217,13 +242,14 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 3. 绑定后默认是**泳道看板**：从左到右扫五列状态；用工具栏的「泳道 / 列表」切换可在分组列表与看板间切换。
 4. 用工具栏的 **milestone 下拉**（`全部` / `Backlog` / 具体 milestone）和文本筛选收窄范围，
    两种视图的计数会同步更新；空列显示「无条目」但列不消失。
-5. 点卡片主体或列表行：在 DSH **内置右侧浏览器**打开该 Issue/PR 的 GitHub 页面（不改变绑定）。
+5. 点卡片主体或列表行：在**系统默认浏览器**新标签页打开该 Issue/PR 的 GitHub 页面（不改变绑定）。
    点卡片/行上的「绑定」按钮才把 Issue 绑到当前会话，界面自动切到 `issue` 页签，并在会话标题下
    出现 Issue 副标题。
 6. 另一条路径：在未绑定的 `issue` 页签直接粘贴 Issue 链接或 `owner/repo#123`，点「绑定」；
    也可以直接对模型说「把 https://github.com/acme/web/issues/228 绑定到当前会话」「当前会话换成
    acme/web#240」「解除当前会话的 Issue 绑定」（agent 工具）。
-7. 之后随时点会话标题下的副标题，可在内置浏览器重新打开该 Issue。
+7. 之后随时点会话标题下的副标题，可在系统浏览器重新打开该 Issue；侧栏副标题不可交互，点会话行
+   只会打开该会话。
 
 点「刷新」强制新鲜读取（缓存过期后最多 10 分钟内可能先显示旧数据再后台刷新）；「更换」切换工作区
 绑定的 Project；「解绑」（需确认）清除绑定。解绑 Project 不会影响已绑定的 Issue。
@@ -343,14 +369,14 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | **1.0.0**（首个公开发布；功能与 0.4.1 一致） |
+| 插件版本 | **1.0.1**（在 1.0.0 之上的缺陷修复；其余功能与 0.4.1 一致） |
 | 宿主引擎 | `engines.dsh`：`>=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | v1.0.0 **已上线 npm 1.0.0**；干净 profile 安装 smoke **PASS**（registry 安装 `@ceasarxuu/dsh-github-projects@1.0.0` 到临时 `web` profile：`/plugin/github-projects/health` → 200、四个页签、console 0/0/0）；改名包 e2e PASS（宿主测试 91/91、18/18 阶段）；**15 张截图**——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
+| 验收 | v1.0.1 **已上线 npm 1.0.1**（`latest`），干净 profile 安装 smoke **PASS**（registry 安装到临时 `web` profile：`/plugin/github-projects/health` → 200、四个页签、console 0/0/0）；fixture 17/17 + real 18/18 e2e PASS、宿主测试 91/91、**15 张截图**；外部浏览器打开（`window.open` 1 次、无侧栏 browser）与侧栏非交互/无溢出断言均验证——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据) |
 
 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了
 `conversation.view` slot、会话标准 props、头部/侧栏 DOM 锚点的 DSH 升级可能需要同步更新插件。
@@ -385,11 +411,11 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
   工具改绑最迟下一轮轮询（≤4s）反映到侧栏。有副标题的会话行约 41px、未绑定的仍 32px。
 - **Agent 工具只作用于当前会话：** 没有跨会话参数，不能给其它会话绑定/解绑；工具需要宿主提供
   `ctx.tools` 与 owning agent，界面通过本地轮询（≤4s）反映，不是推送。
-- **内置浏览器兜底：** 卡片/行点击使用 DSH 右侧栏 browser tab；宿主没有该能力时回退 `window.open`
-  （普通新标签页，会离开当前界面）。
-- **Web 版内置浏览器受 X-Frame-Options 限制：** Web 构建用 iframe 承载浏览器，github.com 返回
-  `X-Frame-Options: DENY`，内嵌 GitHub 页面可能显示空白（地址栏 URL 正确）；Desktop 版 Electron
-  webview 正常渲染。只影响"在界面内查看"，不影响 URL 本身。
+- **外部链接依赖弹窗权限：** Issue 链接通过 `window.open(url, '_blank', 'noopener,noreferrer')`
+  打开（与 DSH「在系统浏览器中打开」一致）；若浏览器/桌面端拦截弹窗，新标签页可能不出现。插件
+  无法检测拦截；没有反应时请允许 DSH 弹出窗口后重试。
+- **侧栏副标题故意不可交互：** 它只是会话标题下的纯文本——点会话行（包括副标题）只会选中该会话，
+  不会打开 Issue；要打开 GitHub 请用卡片/列表行、会话头部副标题或 Issue 页的 GitHub 链接。
 - **SWR 新鲜度：** `staleTtlMs`（10 分钟）内可能先看到缓存数据再后台刷新；DSH 重启后还可能先用
   磁盘缓存渲染。需要最新数据请点「刷新」。磁盘缓存保存 GitHub 读取结果（不含 token），位于 DSH
   profile 下；可删除或设 `diskCache: false` 关闭。
