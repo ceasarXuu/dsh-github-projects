@@ -243,62 +243,17 @@ window.__ModuleLoader__.load({
       return () => window.removeEventListener(BINDING_CHANGED_EVENT, listener)
     }
 
-    /* Built-in right-sidebar browser (v0.4.0): the face is a client service;
-       capture it when it appears and degrade to window.open when unavailable. */
-    let sidebarRightFace = null
-    let sidebarRightTabsFace = null
-
-    function adoptSidebarRightServices(scope) {
-      try {
-        if (scope.sidebarRight !== undefined && scope.sidebarRight !== null) sidebarRightFace = scope.sidebarRight
-      } catch (_unavailableRight) { /* keep the previous face */ }
-      try {
-        if (scope.sidebarRightTabs !== undefined && scope.sidebarRightTabs !== null) sidebarRightTabsFace = scope.sidebarRightTabs
-      } catch (_unavailableTabs) { /* keep the previous registry */ }
-    }
-
-    function bindSidebarRightServices(ctx) {
-      adoptSidebarRightServices(ctx)
-      try {
-        ctx.inject(['sidebarRight'], (scope) => {
-          adoptSidebarRightServices(scope)
-          scope.effect(() => () => { sidebarRightFace = null }, 'github-projects: sidebarRight face')
-        })
-      } catch (_injectRightUnavailable) { /* optional service */ }
-      try {
-        ctx.inject(['sidebarRightTabs'], (scope) => {
-          adoptSidebarRightServices(scope)
-          scope.effect(() => () => { sidebarRightTabsFace = null }, 'github-projects: sidebarRightTabs registry')
-        })
-      } catch (_injectTabsUnavailable) { /* optional service */ }
-    }
-
-    function browserTabAvailable() {
-      const tabs = sidebarRightTabsFace
-      if (tabs === null || tabs === undefined) return true
-      if (typeof tabs.get !== 'function') return true
-      try {
-        const definition = tabs.get('browser')
-        return definition !== undefined && definition !== null
-      } catch (_registryUnavailable) {
-        return false
-      }
-    }
-
-    /** Open a GitHub URL in DSH's built-in right-sidebar browser. */
+    /**
+     * Open a GitHub URL in the system default browser as a new tab (v1.0.1) —
+     * the same mechanism as DSH's own "Open in system browser". A blocked popup
+     * is a silent no-op; the app itself is never navigated.
+     */
     function openGithubUrl(url) {
       const href = safeHref(url)
       if (href === null) return
       try {
-        const face = sidebarRightFace
-        if (face !== null && face !== undefined
-          && typeof face.openTab === 'function'
-          && browserTabAvailable()) {
-          face.openTab('browser', { params: { url: href } })
-          return
-        }
-      } catch (_openFailed) { /* no mounted session surface etc. — fall back */ }
-      try { window.open(href, '_blank', 'noopener,noreferrer') } catch (_blocked) { /* give up quietly */ }
+        window.open(href, '_blank', 'noopener,noreferrer')
+      } catch (_blocked) { /* popup blocked — no-op */ }
     }
 
     /** Warm `/issue` for a session's bound Issue so the tab opens instantly. */
@@ -1319,22 +1274,6 @@ window.__ModuleLoader__.load({
           : h('span', { className: 'ghp-btn-label' }, ...labelParts))
     }
 
-    function LinkButton({ href, variant = 'ghost', size = 'md', icon, children, ariaLabel }) {
-      if (safeHref(href) === null) return null
-      const classes = ['ghp-btn']
-      if (variant !== 'secondary') classes.push(`ghp-btn-${variant}`)
-      if (size === 'sm') classes.push('ghp-btn-sm')
-      return h('a', {
-        className: classes.join(' '),
-        href,
-        target: '_blank',
-        rel: 'noreferrer noopener',
-        'aria-label': ariaLabel,
-      },
-      icon === undefined || icon === null ? null : h('span', { className: 'ghp-btn-icon', 'aria-hidden': true }, icon),
-      children === undefined || children === null ? null : h('span', { className: 'ghp-btn-label' }, children))
-    }
-
     function Spinner({ size = 14 }) {
       return h('span', { className: 'ghp-spinner', style: { width: `${size}px`, height: `${size}px` }, 'aria-hidden': true })
     }
@@ -1926,9 +1865,13 @@ window.__ModuleLoader__.load({
     /* 8b. Sidebar session subtitle decorator (§4.6).                      */
     /* ------------------------------------------------------------------ */
 
+    /**
+     * Non-interactive subtitle (v1.0.1): a plain span, so clicks bubble to the
+     * shipped session-row handler and only ever open/select the session — the
+     * subtitle must never open the Issue.
+     */
     function sidebarSubtitleNodeFor(issue) {
-      const node = document.createElement('button')
-      node.type = 'button'
+      const node = document.createElement('span')
       node.className = 'ghp-sidebar-subtitle'
       node.setAttribute('data-ghp-sidebar-subtitle', '')
       const chip = document.createElement('span')
@@ -1938,19 +1881,10 @@ window.__ModuleLoader__.load({
       title.className = 'ghp-sidebar-subtitle-title'
       title.setAttribute('data-ghp-sidebar-subtitle-title', '')
       node.append(chip, title)
-      // Open the Issue in DSH's built-in browser without selecting the session.
-      node.addEventListener('click', (event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const current = node.__ghpIssue
-        if (isPlainObject(current)) openGithubUrl(current.url)
-      })
-      node.__ghpIssue = null
       return node
     }
 
     function updateSidebarSubtitleNode(node, issue) {
-      node.__ghpIssue = issue
       const chip = node.querySelector('[data-ghp-sidebar-subtitle-chip]')
       const title = node.querySelector('[data-ghp-sidebar-subtitle-title]')
       const numberText = `#${issue.number}`
@@ -1961,8 +1895,6 @@ window.__ModuleLoader__.load({
         if (title.textContent !== titleText) title.textContent = titleText
         if (title.getAttribute('title') !== fullText) title.setAttribute('title', fullText)
       }
-      const aria = `${numberText} ${titleText}`.trim()
-      if (node.getAttribute('aria-label') !== aria) node.setAttribute('aria-label', aria)
     }
 
     /**
@@ -3346,12 +3278,13 @@ window.__ModuleLoader__.load({
               busy: unbinding,
               className: 'ghp-btn ghp-btn-ghost ghp-btn-sm ghp-btn-unbind',
             }),
-            h(LinkButton, {
-              href: url,
+            h(Button, {
               variant: 'ghost',
               size: 'sm',
               icon: h(IconExternal, { size: 14 }),
-              ariaLabel: t('common.openGithub'),
+              onClick: () => openGithubUrl(url),
+              'aria-label': t('common.openGithub'),
+              title: t('common.openGithub'),
             }, t('common.openGithub')))),
         h('h2', { className: 'ghp-issue-title' }, title),
         metaNodes.length === 0
@@ -4528,30 +4461,23 @@ a.ghp-board-card { text-decoration: none; }
   flex-wrap: wrap;
   padding-block: 2px;
   row-gap: 2px;
+  overflow: hidden;
+  min-width: 0;
 }
 .ghp-sidebar-subtitle {
   box-sizing: border-box;
-  flex: 0 0 100%;
+  flex: 1 1 100%;
+  max-width: 100%;
   min-width: 0;
-  margin-inline-start: 20px;
+  margin-inline-start: 0;
+  padding-inline-start: 20px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0;
-  border: none;
-  border-radius: var(--dsw-radius-xs, 4px);
-  background: transparent;
   color: var(--dsw-alias-label-tertiary, #8a8a8a);
-  font: inherit;
   font-size: 11px;
   line-height: 15px;
-  text-align: left;
-  cursor: pointer;
-}
-.ghp-sidebar-subtitle:hover { color: var(--dsw-alias-label-secondary, #a3a3a3); }
-.ghp-sidebar-subtitle:focus-visible {
-  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
-  outline-offset: 1px;
 }
 .ghp-sidebar-subtitle-chip {
   display: inline-flex;
@@ -4570,6 +4496,7 @@ a.ghp-board-card { text-decoration: none; }
   white-space: nowrap;
 }
 .ghp-sidebar-subtitle-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: inherit;
@@ -4645,7 +4572,6 @@ a.ghp-board-card { text-decoration: none; }
     /* ------------------------------------------------------------------ */
 
     function apply(ctx) {
-      bindSidebarRightServices(ctx)
       installBindingMap(ctx)
       installSidebarSubtitles(ctx)
 

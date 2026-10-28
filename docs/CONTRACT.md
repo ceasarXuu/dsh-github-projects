@@ -451,13 +451,14 @@ States: loading skeleton → error (retry) → unbound empty state → bound boa
   text filter (and, in list mode, the status chips). Options derive from the unfiltered loaded item
   set; if the selected milestone disappears after a refresh, fall back to `全部` and show a notice.
 - **Cards (board).** Title clamped to 2 lines, `repo#number`, labels (max 2 + `+N`), milestone chip.
-  Clicking the card body (or a list row) opens the Issue/PR GitHub page in DSH's **built-in right
-  sidebar browser** (`sidebarRight.openTab('browser', { params: { url } })`, fallback `window.open`)
-  — it does NOT bind (v0.4.0). Each Issue card has an explicit bind action
+  Clicking the card body (or a list row) opens the Issue/PR GitHub page in the **system default
+  browser as a new tab** (`window.open(url, '_blank', 'noopener,noreferrer')`, the same mechanism as
+  DSH's own "Open in system browser") — it does NOT bind (v0.4.0; switched from the embedded
+  sidebar browser to the system browser in v1.0.1). Each Issue card has an explicit bind action
   (`[data-ghp-card-action="bind"]`, label `绑定` / `已绑定`) that binds the Issue to the current
   session and switches to the `issue` view; the list row `绑定` button behaves the same. Bound cards
   show the `已绑定` badge. Cards keep a focus-visible outline and are keyboard-activatable
-  (Enter/Space = open in browser).
+  (Enter/Space = open in the system browser).
 - Text filter: title / repo / number / labels (same fields in both modes). Column counts and list
   section counts reflect the filtered set.
 - Refresh button sets `refresh=1`; both modes keep previous data while refreshing with a subtle
@@ -525,7 +526,7 @@ These are part of the contract, not incidental markup. Keep them on the named el
 | `[data-ghp-board]` | board container | present in board mode |
 | `[data-ghp-column="no-status"\|"todo"\|"in-progress"\|"in-review"\|"done"]` (unknown: `other:<raw>`) | each column | column identity; `data-ghp-count` carries the filtered count |
 | `[data-ghp-card]` | each board card | card element; `data-issue="owner/repo#N"` on Issue cards |
-| `[data-ghp-card-action="open"]` | card body | opens the GitHub page in the built-in browser |
+| `[data-ghp-card-action="open"]` | card body | opens the GitHub page in the system default browser (new tab) |
 | `[data-ghp-card-action="bind"]` | bind button | binds the card's Issue to the current session |
 | `[data-ghp-session-subtitle]` | session header subtitle row | present only when the session has a bound Issue |
 | `[data-ghp-subtitle-chip]` | subtitle `#N` chip | bound issue number |
@@ -584,8 +585,8 @@ session title:
   the Session is blank (header chrome hidden).
 - Updates within ≤4 s after an agent-tool binding change (cheap local `/config` poll, no `gh`), and
   immediately after this plugin's own bind/unbind actions.
-- Clicking the row opens the Issue GitHub page in the built-in right sidebar browser (fallback
-  `window.open`).
+- Clicking the row opens the Issue GitHub page in the **system default browser as a new tab**
+  (`window.open(url, '_blank', 'noopener,noreferrer')`).
 - Implementation guard: the shipped header has no subtitle slot, so the client inserts one owned row
   into `header[data-window-drag]` after the title row and re-ensures it after host re-renders
   (React portal). If the anchor is absent the feature degrades to no subtitle and never throws; it
@@ -599,14 +600,25 @@ information under its title:
 - Layout: the shipped row (`[data-row-key="session:<sessionId>"]`, a 32px flex row) becomes a
   wrapping two-line row only while it has a subtitle: override with
   `[data-row-key^="session:"]:has([data-ghp-sidebar-subtitle]) { height:auto; min-height:32px;
-  flex-wrap:wrap; padding-block:2px }`. The subtitle element is `flex: 0 0 100%; min-width:0;
-  margin-inline-start:20px; display:flex; align-items:center; gap:4px; font-size:11px; line-height:15px`
-  and contains a small tinted `#N` chip (10px/14px, tabular) plus the Issue title, single line
-  `text-overflow: ellipsis`, `title` attribute = full `repo#N title`.
+  flex-wrap:wrap; padding-block:2px; overflow:hidden; min-width:0 }`. The subtitle element is a plain
+  `span` with `box-sizing:border-box; flex:1 1 100%; max-width:100%; min-width:0;
+  margin-inline-start:0; padding-inline-start:20px; overflow:hidden; display:flex; align-items:center;
+  gap:4px; font-size:11px; line-height:15px`; the chip is `flex:none` and the title is
+  `flex:1 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis`. It
+  contains a small tinted `#N` chip (10px/14px, tabular) plus the Issue title, and the full
+  `repo#N title` stays in the `title` attribute.
+- No horizontal overflow: the subtitle and its text must stay inside the session row's content box
+  (subtitle `getBoundingClientRect().right <= row content right`, and the sidebar tree/list must not
+  gain a horizontal scrollbar: `scrollWidth <= clientWidth + 1`). The pre-v1.0.1
+  `flex-basis:100% + margin-inline-start:20px` combination overflowed the row by the leading indent,
+  which both let the title escape the session container and produced a stray horizontal scrollbar
+  rectangle above the sidebar footer (user bug reports).
 - The first row line (status dot slot, title, time, pin, actions) must stay intact; workspace rows,
   search-result rows and sessions without a binding are untouched.
-- Clicking the sidebar subtitle opens the Issue GitHub page in the built-in right sidebar browser
-  (fallback `window.open`) and does NOT change the selected session (`stopPropagation`).
+- The subtitle is **non-interactive** (plain `span`, no click handler, no `stopPropagation`): clicking
+  anywhere in the row — including on the subtitle — opens/selects that session in the conversation
+  view and must never open the Issue or navigate away. The native `title` tooltip still shows the
+  full reference.
 - Updates: the client keeps a module-level binding map from `GET /bindings` (SWR; poll ≈4 s and an
   immediate refresh on the plugin's `binding-changed` event), so an agent-tool bind/switch/unbind is
   reflected in the sidebar within ≤4 s without reopening the tree.
@@ -643,15 +655,12 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and hidden when
      its filtered count is 0, the four non-No-status canonical lanes always present, ≥1 card;
      `04-projects-board.png`;
-   - `projects-browser` — the overlay enables the Web-disabled shipping row
-     (`- id: ui-sidebar-browser / disabled: false`) so the browser tab type exists. Click an Issue
-     card body (`[data-ghp-card-action="open"]`): assert DSH's built-in right sidebar browser opens
-     (`[data-sidebar-browser-frame]` iframe whose `src` contains `github.com/<repo>/issues/<N>`, and
-     the browser tab/address bar is present) and no binding was created; `12-browser-open.png`; close
-     the browser tab afterwards. In Web the iframe itself cannot render github.com
-     (`X-Frame-Options: DENY`) — that refusal is an expected, documented console error in the
-     harness allowlist and does not fail the run; Desktop uses an Electron `<webview>` and renders
-     the page natively;
+   - `projects-external-open` — stub `window.open` in the page (or observe the CDP target) and click
+     an Issue card body (`[data-ghp-card-action="open"]`): assert it was called once with the Issue
+     URL (`https://github.com/<repo>/issues/<N>`) and `_blank`, that **no** DSH sidebar browser
+     tab/frame was created, that no binding was made and the projects board stays mounted;
+     `12-external-open.png`. The harness no longer enables `ui-sidebar-browser` and no
+     `X-Frame-Options` console allowlist is needed;
    - `projects-list` — toggle to list: `[data-ghp-list]`, grouped sections; `05-projects-list.png`;
    - `projects-milestone` — open the milestone dropdown: options include `全部` + `Backlog` + real
      project milestones; select an existing milestone (e.g. `v1.2.0`), assert card/row counts shrink
@@ -672,18 +681,21 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      `issue-comments` → `09-issue-comments.png`;
    - `sidebar-subtitle` — with the session still bound to #240, assert the left sidebar session row
      shows the injected subtitle: exactly the bound session row contains
-     `[data-ghp-sidebar-subtitle]` with chip text `#240` and non-empty title, the subtitle sits below
-     the row title (`subtitle.top >= title.bottom - 2`), the row is taller than the shipped 32px
-     (≥ 40px), and unbound session rows have no subtitle; `14-sidebar-subtitle.png` (whole window,
-     sidebar visible);
+     `[data-ghp-sidebar-subtitle]` (a `span`, not a button) with chip text `#240` and non-empty title,
+     the subtitle sits below the row title (`subtitle.top >= title.bottom - 2`), the row is taller
+     than the shipped 32px (≥ 40px), and unbound session rows have no subtitle; **no horizontal
+     overflow** (subtitle right ≤ row content right, row/list `scrollWidth <= clientWidth + 1`);
+     **click behavior**: clicking the row (including the subtitle coordinates) switches to that
+     session's conversation view (`对话` active) and does NOT call `window.open`; then return to the
+     `issue` view for the screenshot; `14-sidebar-subtitle.png` (whole window, sidebar visible);
    - `projects-warm` — switch to chat and back to `projects`; assert the cached board renders without
      a skeleton within 1500 ms and log the measured duration (the cold duration was already logged in
      `projects-board`); no screenshot;
    - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
      failures;
    - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
-     captured by the Lead after the final install; `11-projects-wide.png`, `12-browser-open.png` and
-     `13-issue-subtitle.png` are harness output.
+     captured by the Lead after the final install; `11-projects-wide.png`,
+     `12-external-open.png` and `13-issue-subtitle.png` are harness output.
 6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit
    nonzero on assertion failure. Must be re-runnable (`node scripts/e2e/run.mjs`).
 
@@ -696,10 +708,11 @@ at least one milestone) for the board and filter stages.
 
 - `node --test test/host/*.test.mjs` passes (host logic, fixtures).
 - e2e harness exits 0 with screenshots 01–09 (+ optional), `11-projects-wide.png`,
-  `12-browser-open.png`, `13-issue-subtitle.png`, `14-sidebar-subtitle.png`, in fixture mode and
+  `12-external-open.png`, `13-issue-subtitle.png`, `14-sidebar-subtitle.png`, in fixture mode and
   (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
-  milestone-filter, wide-layout, built-in-browser-open, conversation-header subtitle, sidebar
-  subtitle and warm-open latency stages.
+  milestone-filter, wide-layout, system-browser-open, conversation-header subtitle, sidebar
+  subtitle (non-interactive, no overflow, row click selects the session) and warm-open latency
+  stages.
 - Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
   and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures.
 - Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.

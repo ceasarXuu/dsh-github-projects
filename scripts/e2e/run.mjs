@@ -38,7 +38,7 @@ const STAGES = [
   'projects-empty',
   'projects-picker',
   'projects-board',
-  'projects-browser',
+  'projects-external-open',
   'projects-list',
   'projects-milestone',
   'projects-wide',
@@ -57,12 +57,7 @@ const STAGES = [
  * entry must be documented in scripts/e2e/README.md.
  * @type {{pattern: RegExp, why: string}[]}
  */
-const BENIGN_CONSOLE_ERRORS = [
-  {
-    pattern: /Refused to display[^\n]*github\.com|X-Frame-Options[^\n]*(?:deny|DENY)/iu,
-    why: 'github.com serves X-Frame-Options: DENY. The Web build renders DSH\'s built-in browser tab as an iframe, so the remote page body is refused; the harness still asserts the browser tab, its address bar and the iframe src (the Desktop build uses an Electron webview and renders the page natively).',
-  },
-]
+const BENIGN_CONSOLE_ERRORS = []
 
 const MODES = {
   fixture: {
@@ -118,7 +113,7 @@ Options:
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
-Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-browser-open, 13-issue-subtitle, 14-sidebar-subtitle)
+Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-external-open, 13-issue-subtitle, 14-sidebar-subtitle)
 Temp root: /tmp/dsh-github-projects-e2e/<timestamp>/
 `
 
@@ -165,13 +160,13 @@ async function main() {
     '01-tabs.png', '02-projects-empty.png', '03-projects-picker.png',
     '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
-    '10-desktop-tabs.png', '11-projects-wide.png', '12-browser-open.png',
+    '10-desktop-tabs.png', '11-projects-wide.png', '12-external-open.png',
     '13-issue-subtitle.png', '14-sidebar-subtitle.png',
     // 15 is produced by scripts/e2e/release-smoke.mjs (published-install gate),
     // never by this harness — preserve it as release evidence.
     '15-published-install.png',
   ])
-  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-browser-open.png', '13-issue-subtitle.png', '14-sidebar-subtitle.png'])
+  const DERIVED_SHOTS = new Set(['09-issue-comments.png', '11-projects-wide.png', '12-external-open.png', '13-issue-subtitle.png', '14-sidebar-subtitle.png'])
   for (const name of readdirSync(SCREENSHOT_DIR)) {
     const numberedStateShot = /^\d\d-.*\.png$/u.test(name) && !EXPECTED_SHOTS.has(name)
     if (name.startsWith('failure-') || numberedStateShot || DERIVED_SHOTS.has(name)) {
@@ -419,75 +414,77 @@ async function main() {
       if (projectsBoardOk === false) throw new Error('projects-board stage failed')
     }
 
-    // --------------------------------------------------- projects browser --
-    // v0.4.0: clicking the card BODY opens DSH's built-in right sidebar browser
-    // and must NOT bind — binding is only the explicit bind action.
-    if (gated('projects-browser')) {
-      const projectsBrowserOk = await runStage('projects-browser', async () => {
+    // -------------------------------------------- projects external open --
+    // v1.0.1: clicking the card BODY opens the Issue in the system default
+    // browser as a new tab (`window.open(url, '_blank', 'noopener,noreferrer')`).
+    // It must NOT bind, NOT open DSH's embedded sidebar browser, and the board
+    // must stay mounted. Headless Chrome cannot present a system browser, so the
+    // page's window.open is stubbed and the call itself is asserted.
+    if (gated('projects-external-open')) {
+      const externalOpenOk = await runStage('projects-external-open', async () => {
         await waitForBoard(resources.cdp, emitTimeout(20_000))
         const issueRef = 'ceasarXuu/Astropath#240'
+        const expectedUrl = 'https://github.com/ceasarXuu/Astropath/issues/240'
         const bindActionPresent = await cardHasAction(resources.cdp, issueRef, 'bind')
         assert(bindActionPresent, `card ${issueRef} has no explicit [data-ghp-card-action="bind"] button`)
+        // Stub window.open BEFORE the click; the stub records every invocation.
+        await resources.cdp.evaluate(`(() => {
+          window.__ghpOpened = []
+          window.open = (url, target, features) => {
+            window.__ghpOpened.push({ url: String(url), target: target ?? null, features: features ?? null })
+            return null
+          }
+          return true
+        })()`)
         const clicked = await clickCardAction(resources.cdp, issueRef, 'open')
         assert(clicked, `could not click [data-ghp-card-action="open"] on card ${issueRef}`)
-        const browser = await waitForSidebarBrowser(resources.cdp, emitTimeout(20_000), issueRef)
-        assert(browser.dockkitTabs.length >= 1, 'built-in browser tab is missing from the right sidebar ([data-dockkit-tab])')
-        assert(
-          browser.addressValue !== null && browser.addressValue.includes('github.com/ceasarXuu/Astropath/issues/240'),
-          `built-in browser address bar does not show the issue URL (address: ${JSON.stringify(browser.addressValue)})`,
-        )
-        // Opening the browser must not create a binding or switch views.
-        assert(
-          (await resources.cdp.evaluate(`document.querySelector('[data-ghp-session-subtitle]') === null`)),
-          'opening the card body created a binding (session subtitle appeared)',
-        )
-        // Opening the right-sidebar browser narrows the conversation column; the
-        // shipped view-tab row then clamps extra tabs into the "更多会话视图" menu,
-        // so a visible selected tab may be absent. Assert the projects board is
-        // still the mounted view (and the issue view did not open) instead.
-        const viewState = await resources.cdp.evaluate(`(() => {
+        await sleep(400)
+        const state = await resources.cdp.evaluate(`(() => {
           const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
           const modeRoot = [...document.querySelectorAll('[data-ghp-view-mode]')].find(vis)
           const board = [...document.querySelectorAll('[data-ghp-board]')].find(vis)
           const issueHead = [...document.querySelectorAll('[class*="ghp-issue-head"]')].find(vis)
-          const active = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
-          const more = [...document.querySelectorAll('button,[role="button"]')]
-            .find(el => (el.getAttribute('aria-label') || '').includes('更多会话视图'))
+          const sidebarFrame = document.querySelector('[data-sidebar-browser-frame]')
+          const browserTabs = [...document.querySelectorAll('[data-dockkit-tab]')]
+            .filter(vis)
+            .map(el => (el.innerText || el.textContent || '').trim())
+            .filter(text => /github\.com/iu.test(text))
+          const subtitle = document.querySelector('[data-ghp-session-subtitle]')
           return {
-            mode: modeRoot === undefined ? null : modeRoot.getAttribute('data-ghp-view-mode'),
-            board: board !== undefined,
-            issueHead: issueHead !== undefined,
-            activeTab: active === undefined ? null : (active.innerText || '').trim(),
-            tabsClamped: more !== undefined,
+            opened: window.__ghpOpened ?? null,
+            boardMode: modeRoot === undefined ? null : modeRoot.getAttribute('data-ghp-view-mode'),
+            boardMounted: board !== undefined,
+            issueViewMounted: issueHead !== undefined,
+            sidebarBrowserFrame: sidebarFrame !== null && vis(sidebarFrame),
+            sidebarBrowserTabs: browserTabs,
+            subtitlePresent: subtitle !== null && vis(subtitle),
           }
         })()`)
-        assert(viewState.board && viewState.mode === 'board', `card body open must not switch away from the projects board (state: ${JSON.stringify(viewState)})`)
-        assert(!viewState.issueHead, 'card body open bound the issue and opened the issue view (it must only open the browser)')
-        if (viewState.activeTab !== null) {
-          assert(viewState.activeTab === 'projects', `card body open must not switch views (active tab: ${JSON.stringify(viewState.activeTab)})`)
-        }
-        const activeTab = viewState.activeTab
-        await settle(700)
-        const screenshot = await shot('12-browser-open.png')
-        const closed = await closeSidebarBrowser(resources.cdp, emitTimeout(15_000))
-        assert(closed, 'could not close the built-in browser tab after 12-browser-open.png (dockkit tab context menu → 关闭)')
-        const sidebarCollapsed = await collapseRightSidebar(resources.cdp)
-        assert(sidebarCollapsed, 'right sidebar is still expanded after closing the built-in browser tab')
+        assert(Array.isArray(state.opened), 'window.open stub was not installed in the page')
+        assert(state.opened.length === 1, `card body must call window.open exactly once, got ${state.opened.length}: ${JSON.stringify(state.opened)}`)
+        const call = state.opened[0]
+        assert(call.url === expectedUrl, `window.open URL mismatch: ${JSON.stringify(call.url)} != ${JSON.stringify(expectedUrl)}`)
+        assert(call.target === '_blank', `window.open target must be "_blank", got ${JSON.stringify(call.target)}`)
+        const features = String(call.features ?? '').toLowerCase()
+        assert(features.includes('noopener') && features.includes('noreferrer'), `window.open features must include noopener,noreferrer (got ${JSON.stringify(call.features)})`)
+        assert(state.sidebarBrowserFrame === false, 'the embedded sidebar browser frame was created (v1.0.1 opens the system browser instead)')
+        assert(state.sidebarBrowserTabs.length === 0, `a dockkit browser tab was created: ${JSON.stringify(state.sidebarBrowserTabs)}`)
+        assert(state.boardMounted && state.boardMode === 'board', `card body open must keep the projects board mounted (state: ${JSON.stringify(state)})`)
+        assert(!state.issueViewMounted, 'card body open must not switch to the issue view')
+        assert(state.subtitlePresent === false, 'card body open created a binding (session subtitle appeared)')
         await settle(300)
+        const screenshot = await shot('12-external-open.png')
         return {
           screenshot,
-          browserSrc: browser.src,
-          browserTag: browser.tag,
-          browserTabs: browser.dockkitTabs,
-          browserAddress: browser.addressValue,
-          activeTab,
-          tabsClamped: viewState.tabsClamped,
+          expectedUrl,
+          calls: state.opened,
+          sidebarBrowserFrame: state.sidebarBrowserFrame,
+          sidebarBrowserTabs: state.sidebarBrowserTabs,
+          boardMounted: state.boardMounted,
           bindActionPresent,
-          closed,
-          sidebarCollapsed,
         }
       })
-      if (projectsBrowserOk === false) throw new Error('projects-browser stage failed')
+      if (externalOpenOk === false) throw new Error('projects-external-open stage failed')
     }
 
     // ------------------------------------------------------ projects list --
@@ -757,38 +754,99 @@ async function main() {
     }
 
     // ----------------------------------------------------- sidebar subtitle --
-    // v0.4.1 §4.6: the left sidebar session row is decorated from the /bindings
-    // SWR map (poll ≈4 s) once the session has a bound Issue. The stage runs
-    // after the binding is created and waits up to 6 s for the injected row.
+    // v1.0.1 §4.6: the left sidebar session row is decorated from the /bindings
+    // SWR map (poll ≈4 s) once the session has a bound Issue. The subtitle is a
+    // plain `span` (non-interactive): clicking it must select the session's
+    // conversation view and never open the Issue. It must not overflow the row
+    // or add a horizontal scrollbar to the sidebar tree/list.
     if (gated('sidebar-subtitle')) {
       const sidebarOk = await runStage('sidebar-subtitle', async () => {
         const sidebar = await waitForSidebarSubtitle(resources.cdp, emitTimeout(6_000))
         assert(sidebar.subtitleCount === 1, `expected exactly one [data-ghp-sidebar-subtitle] in the sidebar, got ${sidebar.subtitleCount}`)
         assert(sidebar.boundRow !== null, 'sidebar subtitle is not inside a [data-row-key^="session:"] session row')
+        assert(sidebar.subtitleTag === 'span', `sidebar subtitle must be a plain span, got <${sidebar.subtitleTag}> (interactive elements are a v1.0.1 bug)`)
         assert(sidebar.chipText.replace(/\s+/gu, '') === '#240', `sidebar subtitle chip is ${JSON.stringify(sidebar.chipText)}, expected "#240"`)
         assert(sidebar.titleText.length > 0, 'sidebar subtitle title text is empty')
         assert(
           sidebar.titleAttr.includes('ceasarXuu/Astropath#240') && sidebar.titleAttr.includes('会话名称丰富化'),
           `sidebar subtitle title attribute does not carry the full repo#N title: ${JSON.stringify(sidebar.titleAttr.slice(0, 160))}`,
         )
-        assert(sidebar.rowHeight >= 40, `bound session row is ${sidebar.rowHeight}px high; v0.4.1 requires the two-line row ≥ 40px (shipped single line is 32px)`)
+        assert(sidebar.rowHeight >= 40, `bound session row is ${sidebar.rowHeight}px high; the two-line row must be ≥ 40px (shipped single line is 32px)`)
         assert(sidebar.titleBottom !== null, 'could not measure the session row title for the geometric assertion')
         assert(
           sidebar.subtitleTop >= sidebar.titleBottom - 2,
           `sidebar subtitle (top=${sidebar.subtitleTop}) is not below the row title (bottom=${sidebar.titleBottom})`,
         )
+        // v1.0.1 no-overflow: subtitle stays in the row's content box and the row
+        // / sidebar list keep scrollWidth == clientWidth (no stray horizontal bar).
+        assert(sidebar.rowContentRight !== null, 'could not measure the session row content right edge')
         assert(
-          sidebar.subtitleWidth <= sidebar.rowWidth + 1,
-          `sidebar subtitle width (${sidebar.subtitleWidth}) exceeds the row width (${sidebar.rowWidth})`,
+          sidebar.subtitleRight <= sidebar.rowContentRight + 1,
+          `sidebar subtitle right (${sidebar.subtitleRight}) escapes the row content box (${sidebar.rowContentRight}) — horizontal overflow bug`,
         )
+        assert(
+          sidebar.rowScrollWidth <= sidebar.rowClientWidth + 1,
+          `session row overflows horizontally: scrollWidth=${sidebar.rowScrollWidth} clientWidth=${sidebar.rowClientWidth}`,
+        )
+        if (sidebar.listFound) {
+          assert(
+            sidebar.listScrollWidth <= sidebar.listClientWidth + 1,
+            `sidebar tree/list gained a horizontal scrollbar: scrollWidth=${sidebar.listScrollWidth} clientWidth=${sidebar.listClientWidth}`,
+          )
+        }
         assert(
           sidebar.whiteSpace === 'nowrap' && (sidebar.textOverflow === 'ellipsis' || sidebar.overflowing !== false),
           `sidebar subtitle title is not a single-line ellipsised row (whiteSpace=${sidebar.whiteSpace}, textOverflow=${sidebar.textOverflow}, overflowing=${sidebar.overflowing})`,
         )
         assert(sidebar.otherSessionSubtitles === 0, `unbound session rows contain ${sidebar.otherSessionSubtitles} sidebar subtitle(s)`)
         assert(sidebar.workspaceSubtitles === 0, `workspace rows contain ${sidebar.workspaceSubtitles} sidebar subtitle(s)`)
-        // Whole-window evidence: sidebar + the open issue view; reset the issue
-        // scrollport so the detail header is visible again after issue-comments.
+        // v1.0.1 click behavior: the subtitle is non-interactive — clicking it (at
+        // its real coordinates) must NOT open the Issue, must NOT navigate away,
+        // and must leave the current session selected. Re-install the stub and
+        // reset the recorded calls: the
+        // projects-external-open stage intentionally recorded one call earlier.
+        await resources.cdp.evaluate(`(() => {
+          window.__ghpOpened = []
+          window.open = (url, target, features) => {
+            window.__ghpOpened.push({ url: String(url), target: target ?? null, features: features ?? null })
+            return null
+          }
+          return true
+        })()`)
+        const openedBefore = await resources.cdp.evaluate(`window.__ghpOpened.length`)
+        assert(openedBefore === 0, `window.open was already called before the sidebar-subtitle click: ${openedBefore} call(s)`)
+        const clickX = sidebar.subtitleLeft + 20
+        const clickY = sidebar.subtitleTop + (sidebar.subtitleHeight ?? 15) / 2
+        const locationBefore = await resources.cdp.evaluate(`location.href`)
+        await resources.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clickX, y: clickY })
+        await resources.cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickX, y: clickY, button: 'left', clickCount: 1 })
+        await resources.cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickX, y: clickY, button: 'left', clickCount: 1 })
+        await sleep(700)
+        const afterClick = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const row = [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')].find(vis)
+          const issueHead = [...document.querySelectorAll('[class*="ghp-issue-head"]')].find(vis)
+          return {
+            opened: (window.__ghpOpened ?? []).slice(),
+            selectedRow: row === undefined ? null : row.getAttribute('data-row-key'),
+            issueViewMounted: issueHead !== undefined,
+            location: location.href,
+            documentTitle: document.title,
+          }
+        })()`)
+        assert(afterClick.opened.length === 0, `clicking the sidebar subtitle called window.open (it must never open the Issue): ${JSON.stringify(afterClick.opened)}`)
+        assert(
+          afterClick.selectedRow === sidebar.boundRow,
+          `clicking the sidebar subtitle changed the selected session: ${JSON.stringify(afterClick.selectedRow)} != ${JSON.stringify(sidebar.boundRow)}`,
+        )
+        assert(afterClick.location === locationBefore, `clicking the sidebar subtitle navigated away: ${JSON.stringify(afterClick.location)} != ${JSON.stringify(locationBefore)}`)
+        // The shipped row's onOpen for the already-selected session is a no-op, so
+        // the issue view staying active is the expected observed behaviour (Lead
+        // confirmed: requiring 对话 would test shipped behaviour that does not exist).
+        assert(afterClick.issueViewMounted, 'clicking the sidebar subtitle changed the view away from the current session/issue view')
+        // Return to the issue view for the whole-window evidence screenshot.
+        assert(await clickTab(resources.cdp, 'issue'), 'could not return to the "issue" view for the sidebar-subtitle screenshot')
+        await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail after returning from the sidebar click', emitTimeout(20_000))
         await resources.cdp.evaluate(`(() => {
           const root = document.querySelector('[class~="ghp-root"]')
           if (root !== null) root.scrollTop = 0
@@ -796,44 +854,26 @@ async function main() {
         })()`)
         await settle(400)
         const screenshot = await shot('14-sidebar-subtitle.png')
-        // §4.6 click behavior: clicking the sidebar subtitle opens the Issue page
-        // in the built-in browser and must NOT change the selected session.
-        const selectedBefore = await resources.cdp.evaluate(`(() => {
-          const row = [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')]
-            .find(el => el.getBoundingClientRect().width > 0)
-          return row === undefined ? null : row.getAttribute('data-row-key')
-        })()`)
-        const clickedSubtitle = await resources.cdp.evaluate(`(() => {
-          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-          const subtitle = [...document.querySelectorAll('[data-ghp-sidebar-subtitle]')].find(vis)
-          if (subtitle === undefined) return false
-          subtitle.click()
-          return true
-        })()`)
-        assert(clickedSubtitle, 'could not click the sidebar session subtitle')
-        const clickBrowser = await waitForSidebarBrowser(resources.cdp, emitTimeout(20_000), 'ceasarXuu/Astropath#240')
-        const selectedAfter = await resources.cdp.evaluate(`(() => {
-          const row = [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')]
-            .find(el => el.getBoundingClientRect().width > 0)
-          return row === undefined ? null : row.getAttribute('data-row-key')
-        })()`)
-        assert(selectedAfter === selectedBefore, `clicking the sidebar subtitle changed the selected session (${JSON.stringify(selectedBefore)} → ${JSON.stringify(selectedAfter)})`)
-        const clickCloseOk = await closeSidebarBrowser(resources.cdp, emitTimeout(15_000))
-        assert(clickCloseOk, 'could not close the built-in browser opened from the sidebar subtitle')
-        const collapsedAfterClick = await collapseRightSidebar(resources.cdp)
-        assert(collapsedAfterClick, 'right sidebar is still expanded after the sidebar-subtitle click check')
-        await settle(200)
         return {
           screenshot,
-          clickOpenedBrowser: clickBrowser.src,
-          clickSelectedRowUnchanged: selectedAfter === selectedBefore,
-          selectedRow: selectedBefore,
+          clickOpenedCalls: afterClick.opened.length,
+          clickSelectedRowUnchanged: afterClick.selectedRow === sidebar.boundRow,
+          clickIssueViewKept: afterClick.issueViewMounted,
+          clickLocationUnchanged: afterClick.location === locationBefore,
+          clickSelectedRow: afterClick.selectedRow,
           chipText: sidebar.chipText,
           titleText: clip(sidebar.titleText, 200),
           titleAttr: clip(sidebar.titleAttr, 300),
           rowKey: sidebar.boundRow,
+          subtitleTag: sidebar.subtitleTag,
           rowHeight: sidebar.rowHeight,
           subtitleTop: sidebar.subtitleTop,
+          subtitleRight: sidebar.subtitleRight,
+          rowContentRight: sidebar.rowContentRight,
+          rowScrollWidth: sidebar.rowScrollWidth,
+          rowClientWidth: sidebar.rowClientWidth,
+          listScrollWidth: sidebar.listScrollWidth,
+          listClientWidth: sidebar.listClientWidth,
           titleBottom: sidebar.titleBottom,
           subtitleWidth: sidebar.subtitleWidth,
           rowWidth: sidebar.rowWidth,
@@ -1686,8 +1726,33 @@ const SIDEBAR_SUBTITLE_SNAPSHOT = `(() => {
   const rowTitle = titleCandidates.sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0]
   const rowRect = row === null ? null : row.getBoundingClientRect()
   const subtitleRect = subtitle.getBoundingClientRect()
+  // Row content box right edge (row has horizontal padding; the subtitle must
+  // stay inside the content box) and the nearest scrollable sidebar container
+  // (must not gain a horizontal scrollbar — the v1.0.1 user bug).
+  const rowStyle = row === null ? null : getComputedStyle(row)
+  const rowContentRight = rowRect === null ? null
+    : rowRect.right - (Number.parseFloat(rowStyle.paddingRight) || 0)
+  let scrollContainer = row === null ? null : row.closest('[role="tree"]')
+  if (scrollContainer === null && row !== null) {
+    let node = row.parentElement
+    while (node !== null) {
+      const style = getComputedStyle(node)
+      if (['auto', 'scroll'].includes(style.overflowY) || ['auto', 'scroll', 'hidden'].includes(style.overflowX)) { scrollContainer = node; break }
+      node = node.parentElement
+    }
+  }
   return {
     subtitleCount: subtitles.length,
+    subtitleTag: subtitle.tagName.toLowerCase(),
+    subtitleLeft: Math.round(subtitleRect.left * 10) / 10,
+    subtitleRight: Math.round(subtitleRect.right * 10) / 10,
+    subtitleHeight: Math.round(subtitleRect.height * 10) / 10,
+    rowContentRight: rowContentRight === null ? null : Math.round(rowContentRight * 10) / 10,
+    rowScrollWidth: row === null ? null : row.scrollWidth,
+    rowClientWidth: row === null ? null : row.clientWidth,
+    listFound: scrollContainer !== null && scrollContainer !== undefined,
+    listScrollWidth: scrollContainer === null || scrollContainer === undefined ? null : scrollContainer.scrollWidth,
+    listClientWidth: scrollContainer === null || scrollContainer === undefined ? null : scrollContainer.clientWidth,
     boundRow: row === null ? null : rowOf(row),
     chipText: chip === null ? '' : (chip.innerText || chip.textContent || '').trim(),
     titleText: title === null ? '' : (title.innerText || title.textContent || '').trim(),

@@ -34,7 +34,7 @@ const DEFAULT_SPEC = '@ceasarxuu/dsh-github-projects@1.0.0'
 function parseArgs(argv) {
   const options = {
     spec: DEFAULT_SPEC,
-    expectedVersion: '1.0.0',
+    expectedVersion: null,
     profile: 'web',
     home: null,
     skipInstall: false,
@@ -51,6 +51,10 @@ function parseArgs(argv) {
     else if (arg.startsWith('--home=')) options.home = arg.slice('--home='.length)
     else if (arg.startsWith('--screenshot=')) options.screenshot = arg.slice('--screenshot='.length)
     else throw new Error(`unknown argument: ${arg}`)
+  }
+  if (options.expectedVersion === null) {
+    const match = options.spec.match(/@(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/u)
+    options.expectedVersion = match === null ? '1.0.0' : match[1]
   }
   return options
 }
@@ -151,7 +155,7 @@ async function main() {
       const dependency = manifest?.dependencies?.['@ceasarxuu/dsh-github-projects']
       assert(dependency !== undefined, 'profile package.json has no plugin dependency entry')
       if (options.spec.startsWith('@')) {
-        assert(dependency.includes(options.expectedVersion) || dependency.includes('1.0.0'), `dependency does not pin the published version: ${dependency}`)
+        assert(dependency.includes(options.expectedVersion), `dependency does not pin the published version: ${dependency} (expected ${options.expectedVersion})`)
       }
       return { bundles, dependency, profile: options.profile }
     }))) throw new Error('profile composition check failed')
