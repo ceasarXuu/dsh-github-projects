@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GitHub 项目与议题",
+    "description": "给工作区绑定 GitHub Project、给会话绑定 Issue：状态泳道看板、Issue 详情页、会话头部与左侧栏副标题、内置浏览器跳转，以及 Agent 绑定/切换/解除工具。"
+  }
+}

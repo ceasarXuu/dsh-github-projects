@@ -16,7 +16,7 @@
 // docs/CONTRACT.md §3.1). Everything is read-only against GitHub; the only
 // writes are the durable bindings.
 window.__ModuleLoader__.load({
-  id: '@local/dsh-github-projects',
+  id: '@ceasarxuu/dsh-github-projects',
   factory(require) {
     const React = require('react')
     const ReactDOM = require('react-dom')
@@ -4652,7 +4652,7 @@ a.ghp-board-card { text-decoration: none; }
       ctx.effect(() => {
         const tag = document.createElement('style')
         tag.dataset.plugin = 'github-projects'
-        tag.dataset.pluginCss = '@local/dsh-github-projects/client.css'
+        tag.dataset.pluginCss = '@ceasarxuu/dsh-github-projects/client.css'
         tag.textContent = CSS
         document.head.appendChild(tag)
         return () => { tag.remove() }

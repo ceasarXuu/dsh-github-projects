@@ -9,7 +9,7 @@
 # object, so restate every key you need there.
 - insert:
     - id: github-projects
-      name: '@local/dsh-github-projects'
+      name: '@ceasarxuu/dsh-github-projects'
       config:
         # `gh` executable. Absolute path is recommended when PATH differs
         # between a terminal and the Desktop host.

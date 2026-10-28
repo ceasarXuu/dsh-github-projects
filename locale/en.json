@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GitHub Projects & Issues",
+    "description": "Bind a GitHub Project to each workspace and an Issue to each session: status swimlane board, issue detail tab, header and sidebar issue subtitles, built-in browser links, and agent bind/switch/unbind tools."
+  }
+}

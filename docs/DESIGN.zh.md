@@ -6,13 +6,16 @@
 
 | 项目 | 值 |
 |---|---|
-| 插件包名 | `@local/dsh-github-projects` |
-| 插件版本 | 0.4.1（侧栏会话行副标题 + `/bindings`；0.4.0：头部副标题 / Agent 工具 / 内置浏览器 / 更快读取；0.3.0：视觉系统 + 空泳道） |
-| 目标宿主 | DeepSeek Harness 0.2.1-rc.3（Desktop 与 `dsh web` 同一套客户端） |
+| 插件包名 | `@ceasarxuu/dsh-github-projects`（公开 npm scoped 包） |
+| 插件版本 | **1.0.0（首个公开发布）**；功能与 0.4.1 一致 |
+| 发布渠道 | npm `@ceasarxuu/dsh-github-projects`（`publishConfig.access: public`）；仓库 <https://github.com/ceasarXuu/dsh-github-projects> |
+| 许可证 | MIT（[LICENSE](../LICENSE)） |
+| Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（包内 `locale/en.json`、`locale/zh.json`） |
+| 目标宿主 | DeepSeek Harness 0.2.1-rc.3（`engines.dsh >=0.2.1-rc.3 <0.3.0`；Desktop 与 `dsh web` 同一套客户端；唯一实测版本） |
 | GitHub 工具链 | GitHub CLI `gh` 2.96.0（2026-07-02）实测 |
 | 契约基线 | [`docs/CONTRACT.md`](./CONTRACT.md)（v1 冻结接口） |
 | 定位 | 第三方、非 DeepSeek / DeepSeek Harness 官方组件 |
-| 文档状态 | 与实现同步；v0.4.1 验收证据见[第 8 章](#8-验收与验证证据) |
+| 文档状态 | 与实现同步；v1.0.0 发布门禁与 0.x 历史验收见[第 8 章](#8-验收与验证证据) |
 
 本文面向三类读者：想了解"为什么这样做"的产品/设计评审者（第 1–2 章）、要维护或扩展插件的工程师（第 3–6 章）、要安装和验收的使用者（第 7–8 章）。接口字段的权威定义在 [`docs/CONTRACT.md`](./CONTRACT.md)，本文解释其背后的取舍。
 
@@ -199,6 +202,24 @@
 | 点击语义 | — | 点侧栏副标题在**内置右侧浏览器**打开 Issue，**不改变当前选中的会话** |
 | 宿主接口 | 9 个端点 | 新增 `GET /bindings`（共 10 个）；其余接口不变 |
 | 实现方式 | 头部 portal 注入 | 侧栏无 subtitle slot：客户端用 guarded DOM decorator（扫描 `[data-row-key^="session:"]`、`MutationObserver` + 轮询兜底、`:has` 布局覆盖）；锚点缺失时静默降级为不显示 |
+
+### 1.11 v1.0.0 发布说明（首个公开发布）
+
+0.1.0–0.4.1 是内部迭代；**1.0.0 是首个公开发布版本，功能与 0.4.1 完全一致**，变更集中在身份与
+发布面：
+
+| 项目 | v1.0.0 |
+|---|---|
+| 包名 | `@local/dsh-github-projects` → **`@ceasarxuu/dsh-github-projects`**（公开 scoped 包） |
+| 发布 | npm `publish --access public`；源码仓库 <https://github.com/ceasarXuu/dsh-github-projects> |
+| 包内容 | 新增 `LICENSE`、`CHANGELOG.md`、`RELEASING.md`、`locale/{en,zh}.json`、`market/index.json`；`engines.dsh` + Node 门禁 |
+| Plugin Manager | 卡片显示名 *GitHub Projects & Issues* / **GitHub 项目与议题**，描述与图标来自包内 `locale/` 与 `icon.svg` |
+| 兼容性 | `engines.dsh >=0.2.1-rc.3 <0.3.0`、Node ≥ 22；仍只在 DSH 0.2.1-rc.3 实测 |
+| 运行时依赖 | 零 npm 运行时依赖：宿主半只用 `node:*`，浏览器半只用宿主提供的 `react` / `react-dom` |
+| 文档 | README/DESIGN 改为公开发布口径：安装以 npm/Plugin Manager 为主；0.x 特性说明标记为发布前历史；发布门禁证据见 8.7 |
+
+> 1.0.0 的发布门禁（改名包的 e2e、干净 profile 的 npm 安装 smoke、`npm pack` 内容检查）见 §8.7；
+> 0.x 的接口/实现说明保留在 §1.6–§1.10 与第 8 章历史基线中，作为发布前记录。
 
 ---
 
@@ -750,11 +771,11 @@ DSH 插件可以同时提供**宿主半**和**浏览器半**：宿主半是 Cord
 ```
 
 - **`dsh.bundle.patch`** 指向 Cordis 补丁层 `cordis.patch.yml`，其中 `insert` 一行宿主插件：
-  `id: github-projects`、`name: '@local/dsh-github-projects'`、默认 `config`。
+  `id: github-projects`、`name: '@ceasarxuu/dsh-github-projects'`、默认 `config`。
   DSH 的 profile 由若干 bundle 补丁 + profile 自身的 `cordis.patch.yml` 组合而成（见 3.8 的覆盖规则）。
 - **`dsh.client`** 告诉宿主这个包还带一个浏览器半：`platform: web`、`immediately: true`（页面启动时立即加载）、
   `inject` 声明它需要会话 UI 与 locale 服务已就绪。
-- 浏览器半由 `window.__ModuleLoader__.load({ id: '@local/dsh-github-projects', factory })` 异步装配；
+- 浏览器半由 `window.__ModuleLoader__.load({ id: '@ceasarxuu/dsh-github-projects', factory })` 异步装配；
   factory 的返回值声明依赖（`inject: ['slots', 'locale']`）并导出 `apply(ctx)`。
 - **生命周期**：宿主半的路由注册包在 `ctx.effect(() => webServer.register(...))` 里，浏览器半的
   locale/CSS/slot 注册也包在 `ctx.effect` 中。插件被停用或重载时，effect 逆序释放：路由被移除、slot
@@ -1108,7 +1129,7 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 ```yaml
 - id: github-projects
-  name: '@local/dsh-github-projects'
+  name: '@ceasarxuu/dsh-github-projects'
   config:
     ghCommand: /opt/homebrew/bin/gh
     requestTimeoutMs: 30000
@@ -1144,8 +1165,8 @@ profile 覆盖示例（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 - 宿主半要求 Node ≥ 22（`node:fs`/`node:child_process` 现代 API）；浏览器半只使用平台模块表提供的
   `react` / `react-dom`（选择器覆盖层用 `ReactDOM.createPortal` 挂载）。
-- 当前 `package.json` **没有** `engines.dsh` 字段：插件依赖 DSH 0.2.1-rc.3 的客户端 slot 与 locale API，
-  升级 DSH 后若 slot 声明或标准 props 变化，需要同步适配。这是已知的兼容性风险，路线图里列为改进项。
+- `package.json` 声明 `engines.dsh >=0.2.1-rc.3 <0.3.0` 与 `engines.node >=22`：插件依赖 DSH 0.2.1-rc.3
+  的客户端 slot 与 locale API；超出范围或 slot/标准 props 变化时需同步适配（仍只在 0.2.1-rc.3 实测）。
 - 零 npm 运行时依赖：宿主半只 import `node:*`，浏览器半只 `require('react')` / `require('react-dom')`
   （两者由宿主平台模块表提供，不随插件安装）；不存在 npm 供应链依赖面。
 
@@ -1438,7 +1459,8 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 
 | 依赖 | 要求 | 检查方式 |
 |---|---|---|
-| DSH | 0.2.1-rc.3（Web/Desktop 同一套客户端；本版本唯一实测版本） | `dsh --version` |
+| DSH | 0.2.1-rc.3（`engines.dsh >=0.2.1-rc.3 <0.3.0`；Web/Desktop 同一套客户端；唯一实测版本） | `dsh --version` |
+| npm 包 | 公开包 `@ceasarxuu/dsh-github-projects`（通过 Plugin Manager 或 `dsh plugin ... add` 安装） | `npm view @ceasarxuu/dsh-github-projects version` |
 | Node.js | ≥ 22（宿主半运行环境由 DSH 内置运行时提供） | `node --version` |
 | GitHub CLI | 需支持 Projects v2 的 JSON 输出（`gh project list/item-list --format json`）；本版本实测 2.96.0 | `gh --version` |
 | GitHub 认证 | `gh auth login` 完成，且 token 含 `project` scope | `gh auth status` |
@@ -1446,39 +1468,39 @@ Issue #240 及其评论、组织列表 `XuyuTech`/`BeanDoor`。来源与命令�
 
 ### 7.2 安装
 
-插件是本地路径包（`@local/dsh-github-projects`，未发布到 npm），装到 DSH 实际运行的 profile 里
-（本机 Desktop 的 profile 名为 `desktop`）。
+插件是 npm 公开包 **`@ceasarxuu/dsh-github-projects`**，装到 DSH 实际运行的 profile 里
+（本机 Desktop 的 profile 名为 `desktop`；跑 `web` / `headless` 用对应名字）。
 
-安装需要目标 profile 的写权限（Desktop 的 profile 由 Electron 应用持有，普通用户通过 CLI 或
-Plugin Manager 操作即可）。
+安装需要目标 profile 的写权限（Desktop 的 profile 由 Electron 应用持有）。
 
-**CLI（本机实际验证的方式）：**
+**Plugin Manager（推荐）：** 插件 → 添加 → 输入 `@ceasarxuu/dsh-github-projects` → 安装并保持启用。
+插件卡片显示包内 `locale/en.json` / `locale/zh.json` 的名称与描述，图标来自 `icon.svg`。
+
+**CLI：**
 
 ```sh
-# 安装到指定 profile（本地路径；link: 前缀可省略，效果相同）
-dsh plugin --profile desktop add /Volumes/inwolf-4T/projects/dsh-github-projects
-
-# 本机实际使用的等价形式（link: 显式指定本地链接）
-dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects
+# 从 npm 安装到指定 profile
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
 
 # 确认已加入 profile（依赖 + dsh.profile.bundles）
-dsh plugin --profile desktop why @local/dsh-github-projects
+dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
 
 # 卸载
-dsh plugin --profile desktop remove @local/dsh-github-projects
+dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 ```
 
-`dsh plugin ... add` 会把包记录为 `link:` 依赖，并追加到 profile `package.json` 的
-`dsh.profile.bundles`；运行中的 Desktop 会立即热重组并加载两个半身，**无需重启**，窗口会实时重载。
-命令也接受已发布包名（例如 `@ceasarxuu/dsh-github-projects`）。
+安装会把包写入 profile 并追加到 `package.json` 的 `dsh.profile.bundles`；运行中的 Desktop 立即
+热重组并加载两个半身，**无需重启**（窗口会回到工作区首页，属正常重组；会话与数据不受影响）。
 
-**注意（正常现象）**：安装触发 profile 重组后，Desktop 窗口会回到工作区首页，已打开会话的视图被重置；
-会话与数据不受影响，重新点开任意会话即可看到 `projects` / `issue` 页签。
+**开发场景（本地仓库）：**
 
-**Plugin Manager：** 插件管理界面的「添加」是等价的 UI 路径，适合不走命令行的用户；
-本机验收走的是上面的 CLI 路径。
+```sh
+# 链接本地检出（记录为 link: 依赖；link: 前缀可省略），仅用于开发
+dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
+```
 
-> 本机安装与现场验证记录见 [8.5](#85-安装验证本机-desktop-profile)。
+普通用户请使用上面的 npm 包；干净 profile 的 npm 安装 smoke 证据见 8.7，早期本地 link 的现场
+安装验证保留在 8.5。
 
 ### 7.3 首次使用
 
@@ -1499,7 +1521,7 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 ### 7.5 卸载与重置
 
 - **停用插件**：Plugin Manager 停用/移除；两个页签消失，出厂界面恢复，绑定文件保留。
-- **彻底移除**：`dsh plugin --profile desktop remove @local/dsh-github-projects`（同时删除依赖与 bundle 列表项）。
+- **彻底移除**：`dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects`（同时删除依赖与 bundle 列表项）。
 - **重置绑定**：删除 `~/.dsh/plugin-data/github-projects/state.json`（或删除当前 profile 的 `statePath`）。
   建议在 DSH 退出时操作；最坏情况是下一次读取时得到空 store。
 
@@ -1507,12 +1529,13 @@ dsh plugin --profile desktop remove @local/dsh-github-projects
 
 ## 8. 验收与验证证据
 
-> 以下为 v0.4.1 的最终验收，冻结输入为：`client.js` sha256
-> `e1ae2410f8e289c563561cdeb7140b7d957dc74975902a9a96ec450e18141879`、`index.js`
-> `b52964f7…9057`、`github.js` `a4d279f9…75a5d`、`state.js` `484af66b…75304`（2026-10-28）。
-> v0.4.0、v0.3.0、v1.1.1、v1.1、v1 的验收记录作为历史基线保留在 8.6。
+> **v1.0.0（首个公开发布）** 的功能代码与 0.4.1 完全一致，因此 8.1–8.6 的 v0.4.1 验收结论
+> （冻结输入 `client.js` sha256 `e1ae2410…`、`index.js` `b52964f7…`、`github.js` `a4d279f9…`、
+> `state.js` `484af66b…`，2026-10-28）继续适用；发布面的门禁（改名包的 e2e、干净 profile 的
+> npm 安装 smoke、`npm pack` 内容检查、Plugin Manager 元数据）见 **8.7**。
+> v0.4.1 及更早的验收记录作为公开发布前的历史基线保留在 8.6。
 
-### 8.1 验收清单
+### 8.1 验收清单（v0.4.1 功能验收；1.0.0 代码未变，结论沿用）
 
 | # | 验收项 | 状态 | 证据 |
 |---|---|---|---|
@@ -1581,7 +1604,7 @@ v0.4.1 阶段（契约 §5）与截图的对应关系：
 > issue-detail, [issue-comments], sidebar-subtitle, projects-warm, console`；
 > **两个模式均 18/18 阶段通过**。
 
-**最终验收（v0.4.1，2026-10-28；冻结输入见 §8 开头）：**
+**发布前最终验收（v0.4.1，2026-10-28；冻结输入见 §8 开头）：**
 
 | 模式 | 命令 / exit | 运行目录 | 结果 |
 |---|---|---|---|
@@ -1635,18 +1658,18 @@ v0.4.1 阶段（契约 §5）与截图的对应关系：
 > 绑定变化通过 `GET /bindings` 约 4s 轮询/`binding-changed` 事件同步；点击副标题在内置浏览器打开
 > 该 Issue，不切换当前会话。
 
-### 8.5 安装验证（本机 Desktop profile）
+### 8.5 安装验证（发布前，本机 Desktop profile）
 
 2026-10-28 以 **v0.4.1 冻结代码**在真实运行环境完成（DSH Desktop 0.2.1-rc.3、`gh` 2.96.0，
-profile `desktop`）：
+profile `desktop`）；当时用本地 link 安装。v1.0.0 的**干净 profile npm 安装 smoke** 见 8.7。
 
 | 步骤 | 命令 / 结果 |
 |---|---|
 | 安装 | `dsh plugin --profile desktop add link:/Volumes/inwolf-4T/projects/dsh-github-projects`（见 7.2） |
-| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@local/dsh-github-projects`；HMR 重载，无需重启 |
+| profile 变化 | 依赖与 `dsh.profile.bundles` 均含 `@ceasarxuu/dsh-github-projects`；HMR 重载，无需重启 |
 | 健康检查 | `curl http://127.0.0.1:49342/plugin/github-projects/health` → `gh 2.96.0 / ceasarXuu` |
 | 现场验证 | 左侧栏两个已绑定会话行显示第二行 `#240 [v1.2.0]…` 副标题，打开的会话头部也显示同一副标题；`10-desktop-tabs.png`（2560×1370 全窗口，sha256 `5347164c…8226`）在 agent 工具绑定期间拍摄，随后解除测试绑定（用户自己的绑定保留） |
-| 回滚 | `dsh plugin --profile desktop remove @local/dsh-github-projects`（见 7.5） |
+| 回滚 | `dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects`（见 7.5） |
 
 ### 8.6 历史基线与未验证项
 
@@ -1692,6 +1715,26 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
   real 冷启动看板 3.70 s（记录值，未断言 ≤3.5 s）。
 - 未做长时间运行/大 Project（数千条目）、弱网、限流风暴等压力场景验证。
 - 未做无障碍（屏幕阅读器）实测。
+
+### 8.7 v1.0.0 发布门禁（release gate）
+
+> 状态：**发布前门禁已通过**。1.0.0 的功能代码与 0.4.1 一致，8.1–8.6 的 91/91、18/18 阶段、
+> 14 张截图结论继续适用；发布面的验证如下：改名包 e2e 重跑 PASS，打包 tarball 在干净 `web`
+> profile 安装 smoke 通过（`/plugin/github-projects/health` → 200）。npm registry 安装 smoke 的
+> 结果记录于仓库最新验收章节（npm 包内文档是发布时快照）。
+
+| # | 门禁项 | 状态 | 证据 |
+|---|---|---|---|
+| P1 | 改名包 `@ceasarxuu/dsh-github-projects` 下 e2e fixture/real 仍 PASS | ✅ 通过 | 改名包重跑 `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0（run dir `2026-10-28T00-29-38-905Z`）与 `--mode real --keep --extra-comments` → exit 0（run dir `2026-10-28T00-29-54-817Z`），阶段/截图与 8.3 一致 |
+| P2 | npm registry 安装 smoke：发布 1.0.0 后立即在干净 profile 执行 `dsh plugin --profile <profile> add @ceasarxuu/dsh-github-projects@1.0.0`，结果记录于仓库最新验收章节（npm 包内文档为发布时快照） | ✅ 发布前等价门禁通过 | 发布前用打包 tarball `ceasarxuu-dsh-github-projects-1.0.0.tgz` 在干净 `web` profile 安装：`/plugin/github-projects/health` → **200**，页签正常；registry 安装 smoke 的正式记录见仓库最新验收章节 |
+| P3 | `npm pack --dry-run` 内容检查：文件清单完整、无私有数据；`name` / `version` / `engines` / `license` / `repository` 正确 | ✅ 通过 | `@ceasarxuu/dsh-github-projects@1.0.0`，**14 个文件 / 约 144 kB**（packed）；包含 `index.js`、`github.js`、`state.js`、`client.js`、`cordis.patch.yml`、`icon.svg`、README、LICENSE、CHANGELOG、`locale/*.json`、`docs/DESIGN.zh.md`；不含 `test/`、`scripts/`、`dev/` 或私有数据 |
+| P4 | Plugin Manager 元数据：名称/描述/图标来自 `locale/en.json` + `locale/zh.json` + `icon.svg` | ✅ 通过 | 包内 `locale/en.json` = *GitHub Projects & Issues*、`locale/zh.json` = **GitHub 项目与议题**，描述与图标（`icon.svg`，`exports["./icon"]`）随包发布；`market/index.json` 的 1.0.0 条目与之一致 |
+| P5 | 文档安装口径：README/DESIGN 以 npm/Plugin Manager 为主，本地 link 仅作开发场景 | ✅ 通过 | 本次文档更新（README Install / DESIGN §7.2） |
+
+历史 run dirs（`2026-10-27T22-59-08-920Z` / `2026-10-27T22-59-24-532Z`）保留为 0.4.1 发布前基线；
+改名包 run dirs（`2026-10-28T00-29-38-905Z` / `2026-10-28T00-29-54-817Z`）为上表 P1 证据。
+发布后如 verifier 产出 `15-published-install.png`，在仓库后续提交中补充到 8.4 截图表（npm 包内文档
+不要求包含该图）。
 
 ---
 
@@ -1753,7 +1796,8 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 - `gh` 必须在宿主进程的 `PATH` 里，或通过 `ghCommand` 配绝对路径；GUI 应用继承的 `PATH` 往往比终端短，
   这是"终端里 `gh` 能用、插件报 `gh-missing`"的最常见原因。
 - `gh` 未登录或缺少 `project` scope → `gh-auth`，界面提示登录；组织 Project 可能还需要 `read:org`。
-- DSH 升级可能改变 slot/标准 props：当前没有 `engines.dsh` 门禁，升级后若页签不出现/报错需要适配。
+- DSH 升级可能改变 slot/标准 props：`engines.dsh` 只允许 `>=0.2.1-rc.3 <0.3.0`（且仅在 0.2.1-rc.3
+  实测）；超出范围或升级后页签不出现/报错时需要适配。
 - 插件依赖 `conversation.view` slot 与 `useWorkspaces` 等标准 props；这些是宿主 API，不是稳定公测接口。
 
 ### 9.4 安全边界
