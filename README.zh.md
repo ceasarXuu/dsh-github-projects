@@ -20,8 +20,8 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
 
 ## 1.0.2 发布说明（右侧栏看板 + 选择器重复弹出修复）
 
-当前版本，发布为 `1.0.2`。看板离开会话头部、改为从左侧栏打开的右侧栏页签；ProjectPicker 重复弹出的
-缺陷已修复。
+当前版本，已发布到 npm（`latest` = `1.0.2`）。看板离开会话头部、改为从左侧栏打开的右侧栏页签；
+ProjectPicker 重复弹出的缺陷已修复。
 
 | | |
 |---|---|
@@ -45,13 +45,16 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
   捕获请求，并把同一页签的导航改写为只含 `{ workspaceId }` 来消费该意图。已验证：显式
   **从项目选择** 只打开一次；选择/关闭会收起；切换会话/返回、折叠/展开、反复重挂载都不再重放；
   绑定保持；只有一个右侧栏页签。
-- **验收——发布前门禁已 GREEN。** 冻结 `client.js` sha256
+- **验收——已发布并验证。** 冻结 `client.js` sha256
   `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`；宿主测试 **92/92** 通过；
   修复通过独立 picker-replay 验证器全部 **6 项检查**；v1.0.2 权威 repo-e2e **PASS**——fixture
   **18/18** executed stages（run dir `2026-10-28T22-18-34-867Z`）、real **19/19** stages（run dir
   `2026-10-28T22-20-03-025Z`），两模式 console **0/0/0**，含新增 `project-picker-replay` 阶段与
-  重采的权威截图集（`01`–`14`；`11` 为最大化右侧栏 2200×1300）。仅剩发布后事项——npm `1.0.2`
-  上线（`latest` dist-tag）、干净 profile `release-smoke` 安装与 tag/release 确认——发布后补记到
+  重采的权威截图集（`01`–`14`；`11` 为最大化右侧栏 2200×1300）。**发布门禁：** npm
+  `@ceasarxuu/dsh-github-projects@1.0.2` 已上线（`latest`；tarball 14 文件、打包 167.1 kB）；
+  干净 profile `release-smoke` 安装 **PASS**（run dir
+  `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`；tabs `对话 / 轨迹 / issue` +
+  工作区看板入口图标、console 0/0/0）；tag `v1.0.2` → `69d799a` 已推送——见
   [验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。
 
 ## 1.0.1 发布说明（缺陷修复）
@@ -192,8 +195,8 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
 
 以下均为 **v1.0.2 权威 e2e 截图集**（2026-10-29 重采：fixture 18/18、real 19/19 阶段 PASS，
 console 0/0/0）。`01`–`09`、`12`–`14` 为 1280×800 harness 截图，`11` 为最大化右侧栏的
-**2200×1300**，`10` 为真实 Desktop 手动截图，`15` 由发布后的 release-smoke 重生成。阶段定义与
-截图清单见 [`scripts/e2e/README.md`](scripts/e2e/README.md)。
+**2200×1300**，`10` 为真实 Desktop 手动截图，`15` 为已发布 `1.0.2` 的干净 profile 安装截图。阶段
+定义与截图清单见 [`scripts/e2e/README.md`](scripts/e2e/README.md)。
 
 | | |
 |---|---|
@@ -212,12 +215,13 @@ console 0/0/0）。`01`–`09`、`12`–`14` 为 1280×800 harness 截图，`11`
 | ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | ![真实 Desktop 手动截图](artifacts/screenshots/10-desktop-tabs.png) |
 | 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px，无横向溢出）；副标题**不可交互**，点会话行只会打开该会话；绑定变化经 `/bindings` 同步。 | **真实 Desktop 应用**安装后的手动截图：三个已绑定会话行各显示第二行 Issue 副标题（`#240 …` / `#289 …` / `#240 …`，均裁在行内），footer/头像区域干净（`1438×1370`，sha256 `3860f7b9…988c`；头部页签 `对话 / 轨迹 / issue`）。 |
 | ![发布版安装](artifacts/screenshots/15-published-install.png) | |
-| 由发布后的 release-smoke 重生成（当前文件仍是 v1.0.1 历史图）。 | |
+| 从 npm 安装已发布 `1.0.2` 到干净 `web` profile：新会话头部显示 `对话 / 轨迹 / issue` + 工作区看板图标（发布后 release-smoke **PASS**，run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`）。 | |
 
 `01`–`09`、`12`–`14` 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
 1280×800；`09` 需 `--extra-comments`）；`11` 为同一 harness 在 **2200×1300** 下最大化右侧栏采集。
 `10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 产出）。`15-published-install.png`
-在 v1.0.2 发布后由 release-smoke 重生成，因此在此之前仍显示上一版本。看板/选择器截图
+为已发布 `1.0.2` 的干净 profile 安装截图（发布后 `release-smoke` PASS，run dir
+`/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`）。看板/选择器截图
 （`02`–`06`、`12`）为 v1.0.2 右侧栏面板形态；`07`/`08`/`13`/`14` 与之前一样在右侧栏收起时采集。
 
 ## 前置条件
@@ -423,7 +427,7 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | v1.0.2 发布前门禁 **GREEN**：冻结 `client.js` sha256 `684f2953…384e2`；宿主测试 **92/92**；独立 picker-replay 验证器 **6/6 项检查**；权威 repo-e2e **PASS**——fixture **18/18** executed stages（run dir `2026-10-28T22-18-34-867Z`）、real **19/19** stages（run dir `2026-10-28T22-20-03-025Z`）、两模式 console **0/0/0**、新增 `project-picker-replay` 阶段 PASS、权威截图集 `01`–`14` 已重采（`11` 为 2200×1300，`10` 为手动）。仅剩发布后事项：npm 1.0.2 上线（`latest` dist-tag）、干净 profile release-smoke 安装与 tag/release 确认——发布后补记到[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。v1.0.1 已上线并通过干净 profile 安装 smoke **PASS**、fixture 17/17 + real 18/18 e2e PASS、宿主测试 91/91、15 张截图。 |
+| 验收 | v1.0.2 已发布并验证：冻结 `client.js` sha256 `684f2953…384e2`；宿主测试 **92/92**；独立 picker-replay 验证器 **6/6 项检查**；权威 repo-e2e **PASS**——fixture **18/18** executed stages（run dir `2026-10-28T22-18-34-867Z`）、real **19/19** stages（run dir `2026-10-28T22-20-03-025Z`）、两模式 console **0/0/0**、新增 `project-picker-replay` 阶段 PASS、权威截图集 `01`–`14`（`11` 为 2200×1300，`10` 为手动）；npm `1.0.2` 已上线（`latest`，tarball 14 文件 / 打包 167.1 kB，shasum `217f2e88…041d`）；干净 profile `release-smoke` 安装 **PASS**（run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`；tabs `对话 / 轨迹 / issue` + 工作区看板图标、console 0/0/0）；tag `v1.0.2` → commit `69d799a` 已推送 origin——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。v1.0.1 已上线并通过干净 profile 安装 smoke **PASS**、fixture 17/17 + real 18/18 e2e PASS、宿主测试 91/91、15 张截图。 |
 
 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了
 `conversation.view` slot、会话标准 props、`sidebarRight` / `sidebarRightTabs` 客户端服务、

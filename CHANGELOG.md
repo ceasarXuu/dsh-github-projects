@@ -38,9 +38,9 @@ ProjectPicker replay. No DSH compatibility change (`engines.dsh` still
   **PASS** — fixture **18/18** executed stages (run dir `2026-10-28T22-18-34-867Z`) and real **19/19**
   stages (run dir `2026-10-28T22-20-03-025Z`), console **0/0/0** in both modes, including the new
   `project-picker-replay` stage; the authoritative screenshot set `01`–`14` was re-captured (`11` is
-  the maximized right-sidebar pane at 2200×1300). Only the post-publish items — npm `1.0.2` live
-  (dist-tag `latest`), the clean-profile npm install smoke and the tag/release confirmation — are
-  recorded in `docs/DESIGN.zh.md` §8.9 after publication.
+  the maximized right-sidebar pane at 2200×1300). Post-publish gates are also green: npm `1.0.2` is
+  live (`latest`), the clean-profile npm install smoke is **PASS**, and the source commit + tag
+  `v1.0.2` are pushed (details in `docs/DESIGN.zh.md` §8.9).
 
 ## 1.0.1 — 2026-10-28
 

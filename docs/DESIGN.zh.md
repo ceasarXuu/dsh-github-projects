@@ -270,12 +270,12 @@
 `openTab(kind, { params: { workspaceId } })` 重写同一页签的导航，从而消费 `pick`/`pickToken`；
 选择器只在显式请求时打开。
 
-发布前验收（详见 §8.9）：冻结 `client.js` sha256
+发布验收（详见 §8.9）：冻结 `client.js` sha256
 `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`；宿主单测 **92/92**；
 独立 picker-replay 验证器 **6/6 项检查**通过；**权威 e2e 门禁 GREEN**——fixture **18/18**、
 real **19/19** 阶段 PASS（console 0/0/0，新增 `project-picker-replay` 阶段），权威截图 `01`–`14`
-已重采（`11` 为最大化右侧栏 2200×1300）。仅剩发布后 npm 上线 + release-smoke 与 tag/release 确认
-（§8.9）。
+已重采（`11` 为最大化右侧栏 2200×1300）。**发布门禁亦 GREEN**：npm `1.0.2` 已上线（`latest`）、
+clean-profile `release-smoke` PASS、tag `v1.0.2` 已推送（§8.9）。
 
 ---
 
@@ -1613,8 +1613,8 @@ dsh plugin --profile desktop remove @ceasarxuu/dsh-github-projects
 dsh plugin --profile desktop add /absolute/path/to/dsh-github-projects
 ```
 
-普通用户请使用上面的 npm 包；干净 profile 的 registry 安装 smoke 证据见 8.7（v1.0.0）与 8.8（v1.0.1）；
-v1.0.2 的安装 smoke 在发布后记录于 8.9。
+普通用户请使用上面的 npm 包；干净 profile 的 registry 安装 smoke 证据见 8.7（v1.0.0）、8.8（v1.0.1）；
+v1.0.2 的安装 smoke 已记录于 8.9（发布版 `@1.0.2`，PASS）。
 
 > registry 里还列有一个内部 staging 版本 `0.0.0-stage`；安装时请显式 pin `@1.0.2`（`latest` 已是
 > 1.0.2）。
@@ -1749,8 +1749,8 @@ node scripts/e2e/run.mjs --mode real --keep --extra-comments
 `08-issue-detail`、`12-external-open`、`13-issue-subtitle`、`14-sidebar-subtitle` 为 harness real 模式
 1280×800；`09-issue-comments` 为 real + `--extra-comments`；`11-projects-wide` 为 **2200×1300**（最大化
 右侧栏看板：pane 2199px = 窗口 100%、`.ghp-page` 2191px = pane 99.6%、列宽均分）；`10-desktop-tabs.png`
-仍为真实 Desktop 手动截图（非 harness 产出，保持不变）；`15-published-install.png` 由发布后的
-release-smoke 重生成（当前仍是 v1.0.1 历史图）。逐图核对点见 8.9 与
+仍为真实 Desktop 手动截图（非 harness 产出，保持不变）；`15-published-install.png` 已由发布后的
+clean-profile 安装 smoke 重采（发布版 1.0.2）。逐图核对点见 8.9 与
 [`scripts/e2e/README.md`](../scripts/e2e/README.md)。
 
 > 下表是 **v1.0.1** 的官方截图集（历史基线，保留作版本对比；v1.0.2 下同号文件已按上一段重采）。
@@ -1903,13 +1903,14 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 缺陷均有直接断言（外部浏览器打开、侧栏非交互、无横向溢出、无多余滚动条矩形）；npm 1.0.1 已上线并
 通过干净 profile 安装 smoke；15 张截图齐全。
 
-### 8.9 v1.0.2 回归与发布前验收（2026-10-29，最终）
+### 8.9 v1.0.2 回归与发布验收（2026-10-29，最终）
 
 > 冻结输入：`client.js` sha256
 > `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`（`shasum -a 256 client.js`）；
 > `package.json` 1.0.2；2026-10-29 工作树。1.0.2 同时改动宿主半（`/bindings` 增加 `workspaces`，
-> `index.js`）与浏览器半。**发布前门禁已 GREEN**：fixture/real 两模式 e2e PASS、宿主单测 92/92、
-> 权威截图 01–14 已重采；仅剩发布后条目见本节末尾。
+> `index.js`）与浏览器半。**发布前门禁 GREEN**：fixture/real 两模式 e2e PASS、宿主单测 92/92、
+> 权威截图 01–14 已重采。**发布门禁亦 GREEN**：npm `1.0.2` 已上线（`latest`）、clean-profile
+> `release-smoke` PASS、commit + tag `v1.0.2` 已推送（结果见本节末尾）。
 
 **权威 e2e（repo harness `scripts/e2e/run.mjs`；阶段定义与截图清单见
 [`scripts/e2e/README.md`](../scripts/e2e/README.md)）**
@@ -1944,8 +1945,8 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 `03-projects-picker`、`04-projects-board`、`05-projects-list`、`06-projects-milestone`、`07-issue-empty`、
 `08-issue-detail`、`12-external-open`、`13-issue-subtitle`、`14-sidebar-subtitle`（1280×800，real）；
 `09-issue-comments`（1280×800，real + `--extra-comments`）；`11-projects-wide`（**2200×1300**，最大化
-右侧栏看板）；`10-desktop-tabs.png` 仍为真实 Desktop 手动截图；`15-published-install.png` 由发布后
-release-smoke 重生成。
+右侧栏看板）；`10-desktop-tabs.png` 仍为真实 Desktop 手动截图；`15-published-install.png` 已由发布后的
+clean-profile 安装 smoke 重采（发布版 1.0.2）。
 
 **发布前其它证据**
 
@@ -1959,19 +1960,17 @@ release-smoke 重生成。
 | C6 | 降级路径 | 宿主无 `sidebarRight` 服务时不注入工作区图标（无异常），`issue` 页签与两处副标题保持工作（代码路径走 `ctx.inject(['sidebarRight','sidebarRightTabs'])`，缺失即不执行） |
 | C7 | 行为回归（人工/预览） | 工作区图标 click/Enter 不展开工作区；重复点击聚焦已有页签（无重复 tab）；窄栏下工具栏换行、看板横向滚动、列表可用；`/bindings` 返回 `{sessions, workspaces, updatedAt}` 且不调用 `gh` |
 
-**发布后仍需补记（仅剩发布面，由维护者在 follow-up commit 写入本节）**
+**发布结果（2026-10-29，已上线）**
 
-- npm `@ceasarxuu/dsh-github-projects@1.0.2` 上线：`dist-tags.latest = 1.0.2`、public。
-- 发布后的**干净 profile npm 安装 smoke**：`node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.2 --keep`
-  → exit/PASS、run dir、registry 安装结果、`/plugin/github-projects/health` 状态、页签
-  `对话/轨迹/issue` + 工作区看板入口、console 0/0/0、tarball 文件数/体积；同时重生成
-  `15-published-install.png`。
-- GitHub tag/release [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) 确认；
-  `market/index.json` 的 `publishTimestamp` 更新。
+| # | 发布门禁 | 结果 |
+|---|---|---|
+| P1 | npm publish | `script -q … npm publish --access public` → exit 0，输出 `+ @ceasarxuu/dsh-github-projects@1.0.2`；tarball **14 文件**，package size **167.1 kB**，unpacked **566.3 kB**，shasum `217f2e88f2c7f937f5de309bab828634d8dc041d`；tarball <https://registry.npmjs.org/@ceasarxuu/dsh-github-projects/-/dsh-github-projects-1.0.2.tgz> |
+| P2 | registry + 源码 | `npm view … dist-tags` → `latest = 1.0.2`（versions `1.0.0, 1.0.1, 1.0.2`，另有内部 `0.0.0-stage`）；发布 commit `69d799a`（`feat(v1.0.2): right-sidebar project board, workspace entry icon, picker replay fix`）已推送 `origin/main`；tag `v1.0.2` → `69d799a` 已推送 origin；GitHub tag [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) |
+| P3 | clean-profile 安装 smoke | `node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.2 --keep` → **PASS / exit 0**，run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`：pnpm 安装 `@ceasarxuu/dsh-github-projects 1.0.2`（profile `web` bundles `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@ceasarxuu/dsh-github-projects`；依赖 pin `1.0.2`）；boot `/plugin/github-projects/health` ok（gh 2.96.0 / ceasarXuu）；tabs `["对话","轨迹","issue"]` + 工作区入口图标（`aria=打开 GitHub Project`、`bound=0`）；console **0 errors / 0 exceptions / 0 warnings** |
+| P4 | 截图与 market | `artifacts/screenshots/15-published-install.png` 已由上述 clean-profile 安装 smoke 重采（发布版 1.0.2）；`market/index.json` 的 `publishTimestamp` 已更新为 `1793226974`（v1.0.2） |
 
-> v1.0.2 发布前结论：fixture 18/18、real 19/19 e2e PASS，console 全 0；宿主 92/92；独立 verifier
-> 6/6；权威截图 01–14 与预览人工证据齐备。发布后只差 npm 上线 + release-smoke 与 tag/release
-> 确认（上一段），不涉及新的功能验证。
+> v1.0.2 最终结论：预发布门禁（fixture 18/18、real 19/19、console 全 0、宿主 92/92、独立 verifier
+> 6/6）+ 发布门禁（npm 1.0.2 上线 + clean-profile release-smoke PASS + commit/tag 推送）全部通过。
 
 ---
 
