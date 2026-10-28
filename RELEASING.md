@@ -54,7 +54,9 @@ Post-publish checks:
 - Clean DSH profile: Plugin Manager → Add →
   `@ceasarxuu/dsh-github-projects`, or
   `dsh plugin --profile smoke add @ceasarxuu/dsh-github-projects`; after a
-  restart the session header must show the `projects` / `issue` tabs and
+  restart the session header must show the `issue` tab, the left-sidebar
+  workspace row must show the plugin's board icon (v1.0.2 right-sidebar board
+  entry; the `projects` conversation tab no longer exists), and
   `/plugin/github-projects/health` must answer.
 - Plugin Manager card shows the localized title/description
   (`locale/en.json`, `locale/zh.json`) and the icon.

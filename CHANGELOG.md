@@ -3,6 +3,45 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.0.2 — 2026-10-29
+
+**The Project board moves into DSH's right sidebar.** v1.0.2 replaces the conversation-header
+`projects` tab with a left-sidebar workspace entry and a right-sidebar tab, extends the local
+`/bindings` endpoint with the workspace → Project map behind that entry, and fixes a user-reported
+ProjectPicker replay. No DSH compatibility change (`engines.dsh` still
+`>=0.2.1-rc.3 <0.3.0`, tested on 0.2.1-rc.3) and no new runtime dependencies.
+
+- **The board opens in the right sidebar, from the left sidebar.** The `projects` conversation view
+  is removed (`issue` stays as the plugin's only conversation-header view). Every left-sidebar
+  workspace row now carries one small board icon, visible without hovering and highlighted when
+  that workspace has a bound Project; click/Enter opens the board as a right-sidebar tab without
+  toggling the workspace's expansion, and clicking again focuses the existing tab instead of adding
+  a duplicate. The pane adapts to the narrow sidebar (toolbar wraps, board scrolls horizontally,
+  list stays usable), and the `issue` tab's unbound `从项目选择` opens the same board with the
+  picker. If the host does not offer the `sidebarRight` services the icon is not injected, and the
+  `issue` tab and subtitles keep working.
+- **`GET /bindings` also returns the workspace → Project map (local only).** `workspaces` joins
+  `sessions` in the response so the workspace entry icon can show the bound/highlighted state
+  without a `gh` call; host tests were extended (92/92 pass) and `dev/mock-host.js` mirrors the
+  shape.
+- **Fixed: the ProjectPicker reopened by itself on a bound session (P-001, user report).** Returning
+  to a session whose workspace already had a bound Project — after choosing or dismissing the
+  picker, after a session switch, a sidebar collapse/expand, or any remount — replayed the one-shot
+  `pick` navigation intent and opened the picker again. The client now captures the request locally
+  and consumes the intent by rewriting the same tab's navigation to `{ workspaceId }` only, so the
+  picker appears only on an explicit request. Verified: an explicit `从项目选择` opens once;
+  choosing/dismissing closes it; session switch/return, collapse/expand and repeated remounts do not
+  replay it; bindings are kept; one sidebar tab.
+- Acceptance evidence for this release: frozen `client.js` sha256
+  `684f2953fa6818bc982e51b76b5bb3c3dcc6ec51cdfb12d8338b2d8a43d384e2`; host tests **92/92** pass;
+  an independent picker-replay verifier passed all **6 checks**; the authoritative repo-e2e gate is
+  **PASS** — fixture **18/18** executed stages (run dir `2026-10-28T22-18-34-867Z`) and real **19/19**
+  stages (run dir `2026-10-28T22-20-03-025Z`), console **0/0/0** in both modes, including the new
+  `project-picker-replay` stage; the authoritative screenshot set `01`–`14` was re-captured (`11` is
+  the maximized right-sidebar pane at 2200×1300). Only the post-publish items — npm `1.0.2` live
+  (dist-tag `latest`), the clean-profile npm install smoke and the tag/release confirmation — are
+  recorded in `docs/DESIGN.zh.md` §8.9 after publication.
+
 ## 1.0.1 — 2026-10-28
 
 Bug-fix release for the sidebar issue subtitle and Issue link opening (user reports).
