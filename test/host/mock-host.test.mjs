@@ -1,0 +1,187 @@
+/**
+ * Tests for `dev/mock-host.js` (the fixture-mode host the e2e harness mounts).
+ *
+ * v1.1.0 adds the write surface the e2e write/read-only stages depend on:
+ * `/config.writes`, `GET /project-meta`, `POST /item-status` (gated by
+ * `allowWrites`, in-memory status updates), the deterministic failure item and
+ * the mock-only `/mock-state` assertion aid. These tests pin that mock contract
+ * so the client/e2e halves cannot silently drift from the fixtures.
+ */
+
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { test } from 'node:test'
+
+import { apply } from '../../dev/mock-host.js'
+
+const PREFIX = '/plugin/github-projects'
+const TODO_ID = '8fc1d6c9'
+const IN_PROGRESS_ID = '47fc9ee4'
+const IN_REVIEW_ID = 'edd18149'
+
+/** Mount the mock host on a real loopback HTTP server. */
+async function startMock(t, config = {}) {
+  const routes = []
+  const ctx = {
+    get(name) {
+      if (name !== 'webServer') return undefined
+      return {
+        register(route) {
+          routes.push(route)
+          return () => {
+            const index = routes.indexOf(route)
+            if (index !== -1) routes.splice(index, 1)
+          }
+        },
+      }
+    },
+    effect(callback) {
+      const dispose = callback()
+      return () => { if (typeof dispose === 'function') dispose() }
+    },
+  }
+  apply(ctx, config)
+  assert.equal(routes.length, 1, 'mock host must register exactly one prefix route')
+  const server = createServer((req, res) => routes[0].handler(req, res))
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  t.after(() => { server.close() })
+  const base = `http://127.0.0.1:${String(server.address().port)}${PREFIX}`
+  const request = async (path, options = {}) => {
+    const response = await fetch(`${base}${path}`, options)
+    return { status: response.status, body: await response.json() }
+  }
+  const postJson = (path, payload) => request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return { request, postJson }
+}
+
+test('mock /config mirrors writes.allowed from the overlay allowWrites flag', async (t) => {
+  const readOnly = await startMock(t)
+  assert.deepEqual((await readOnly.request('/config')).body.writes, { allowed: false })
+
+  const writable = await startMock(t, { allowWrites: true })
+  assert.deepEqual((await writable.request('/config')).body.writes, { allowed: true })
+})
+
+test('mock /project-meta serves the captured Project node/Status field ids', async (t) => {
+  const mock = await startMock(t)
+  const body = (await mock.request('/project-meta?owner=ceasarXuu&number=9')).body
+  assert.deepEqual(body.project, {
+    id: 'PVT_kwHOAwDbXM4Bocj3',
+    owner: 'ceasarXuu',
+    number: 9,
+    title: 'Astropath-issues',
+  })
+  assert.equal(body.statusField.id, 'PVTSSF_lAHOAwDbXM4Bocj3zhm8pxg')
+  assert.equal(body.statusField.name, 'Status')
+  assert.deepEqual(body.statusField.options, [
+    { id: TODO_ID, name: 'TODO' },
+    { id: IN_PROGRESS_ID, name: 'In Progress' },
+    { id: IN_REVIEW_ID, name: 'In Review' },
+    { id: '98236657', name: 'Done' },
+  ])
+  assert.equal(body.stale, false)
+  assert.equal((await mock.request('/project-meta?owner=ceasarXuu&number=99999')).status, 404)
+})
+
+test('mock POST /item-status is 403 writes-disabled unless allowWrites is true', async (t) => {
+  const mock = await startMock(t)
+  const response = await mock.postJson('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs',
+    optionId: null,
+  })
+  assert.equal(response.status, 403)
+  assert.equal(response.body.error.code, 'writes-disabled')
+})
+
+test('mock POST /item-status updates the in-memory status and logs the write', async (t) => {
+  const mock = await startMock(t, { allowWrites: true })
+  const itemId = 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs' // fixture item #240, In Progress
+
+  const moved = await mock.postJson('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId,
+    optionId: IN_REVIEW_ID,
+  })
+  assert.equal(moved.status, 200)
+  assert.deepEqual(moved.body.item, { id: itemId })
+  assert.deepEqual(moved.body.status, { optionId: IN_REVIEW_ID, name: 'In Review' })
+
+  // GET /items reflects the in-memory move (the e2e reload assertion).
+  const items = (await mock.request('/items?owner=ceasarXuu&number=9')).body.items
+  assert.equal(items.find(item => item.id === itemId).status, 'In Review')
+
+  const cleared = await mock.postJson('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId,
+    optionId: null,
+  })
+  assert.deepEqual(cleared.body.status, { optionId: null, name: null })
+  assert.equal((await mock.request('/items?owner=ceasarXuu&number=9')).body.items.find(item => item.id === itemId).status, null)
+
+  const state = (await mock.request('/mock-state')).body
+  assert.equal(state.allowWrites, true)
+  assert.equal(state.writes.length, 2)
+  assert.deepEqual(state.writes[0], {
+    at: state.writes[0].at,
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId,
+    optionId: IN_REVIEW_ID,
+    name: 'In Review',
+    ok: true,
+  })
+  assert.equal(state.writes[1].optionId, null)
+})
+
+test('mock POST /item-status validates option/item/project ids', async (t) => {
+  const mock = await startMock(t, { allowWrites: true })
+  const valid = { owner: 'ceasarXuu', number: 9, itemId: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs', optionId: null }
+  assert.equal((await mock.postJson('/item-status', { ...valid, optionId: 'f0000000' })).status, 400)
+  assert.equal((await mock.postJson('/item-status', { ...valid, itemId: 'PVTI_missing' })).status, 404)
+  assert.equal((await mock.postJson('/item-status', { ...valid, number: 99999 })).status, 404)
+  assert.equal((await mock.postJson('/item-status', { ...valid, itemId: '' })).status, 400)
+  const missingOption = await mock.postJson('/item-status', { owner: 'ceasarXuu', number: 9, itemId: valid.itemId })
+  assert.equal(missingOption.status, 400)
+})
+
+test('mock failure item always answers 502 and is visible to the e2e harness', async (t) => {
+  const mock = await startMock(t, { allowWrites: true })
+  const state = (await mock.request('/mock-state')).body
+  assert.deepEqual(state.failureItem, {
+    id: 'PVTI_mock_write_failure',
+    title: '[mock] 写入失败条目（e2e 回滚验证）',
+    number: 9005,
+  })
+
+  const items = (await mock.request('/items?owner=ceasarXuu&number=9')).body.items
+  const failureItem = items.find(item => item.id === 'PVTI_mock_write_failure')
+  assert.ok(failureItem, 'the failure item must be on the board')
+  assert.equal(failureItem.title, state.failureItem.title)
+  assert.equal(failureItem.status, 'TODO')
+
+  const response = await mock.postJson('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: 'PVTI_mock_write_failure',
+    optionId: IN_PROGRESS_ID,
+  })
+  assert.equal(response.status, 502)
+  assert.equal(response.body.error.code, 'gh-failed')
+
+  const after = (await mock.request('/mock-state')).body
+  assert.equal(after.writes.at(-1).ok, false)
+  assert.equal(after.writes.at(-1).code, 'gh-failed')
+  // The failed write must not change the item's status.
+  assert.equal((await mock.request('/items?owner=ceasarXuu&number=9')).body.items.find(item => item.id === 'PVTI_mock_write_failure').status, 'TODO')
+})

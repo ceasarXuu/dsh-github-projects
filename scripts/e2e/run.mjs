@@ -43,6 +43,7 @@ const STAGES = [
   'projects-empty',
   'projects-picker',
   'projects-board',
+  'projects-read-only',
   'projects-external-open',
   'projects-list',
   'projects-milestone',
@@ -54,6 +55,7 @@ const STAGES = [
   'sidebar-subtitle',
   'project-picker-replay',
   'projects-warm',
+  'projects-status-write',
   'console',
 ]
 
@@ -119,7 +121,7 @@ Options:
   --timeout-scale=<n>   multiply all stage timeouts (default: 1)
   -h, --help            show this help
 
-Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-external-open, 13-issue-subtitle, 14-sidebar-subtitle; board shots capture the v1.0.2 right-sidebar pane)
+Artifacts: artifacts/screenshots/*.png (01–09, 11-projects-wide, 12-external-open, 13-issue-subtitle, 14-sidebar-subtitle, 16-projects-status-write; board shots capture the v1.0.2 right-sidebar pane, 16 is fixture-only write-path evidence)
 Temp root: /tmp/dsh-github-projects-e2e/<timestamp>/
 `
 
@@ -168,6 +170,9 @@ async function main() {
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
     '10-desktop-tabs.png', '11-projects-wide.png', '12-external-open.png',
     '13-issue-subtitle.png', '14-sidebar-subtitle.png',
+    // 16 is written only by the fixture `projects-status-write` stage (the
+    // second, allowWrites:true fixture stack); a real run preserves it.
+    '16-projects-status-write.png',
     // 15 is produced by scripts/e2e/release-smoke.mjs (published-install gate),
     // never by this harness — preserve it as release evidence.
     '15-published-install.png',
@@ -185,6 +190,8 @@ async function main() {
   const screenshots = {}
   const failures = []
   let lastStep = null
+  /** Temp run dir of the fixture write stack (kept with --keep or on failure). */
+  let writeStackRunDir = null
 
   const shot = async (name) => {
     const file = join(SCREENSHOT_DIR, name)
@@ -527,6 +534,75 @@ async function main() {
         }
       })
       if (projectsBoardOk === false) throw new Error('projects-board stage failed')
+    }
+
+    // ---------------------------------------------------- projects read-only --
+    // v1.1.0 (§4.8): the shipped default is read-only (`allowWrites: false` in
+    // both fixture and real mode — the write stack below is separate). Asserted
+    // here: no draggable cards, no drag handle, no `移动到` action/menu, no lane
+    // drop targets, the toolbar read-only hint, `/config.writes.allowed=false`,
+    // and a direct page-context POST /item-status refused with 403
+    // `writes-disabled`. The `console` stage allowlists exactly this one probe.
+    if (gated('projects-read-only')) {
+      const readOnlyOk = await runStage('projects-read-only', async () => {
+        await waitForBoard(resources.cdp, emitTimeout(20_000))
+        const refs = await projectSessionRefs(resources.cdp)
+        assert(refs.sessionId !== '' && refs.workspaceId !== '', `could not read the session/workspace ids: ${JSON.stringify(refs)}`)
+        const config = await pageFetch(resources.cdp, `/plugin/github-projects/config?sessionId=${encodeURIComponent(refs.sessionId)}&workspaceId=${encodeURIComponent(refs.workspaceId)}`)
+        assert(config.status === 200, `GET /config failed in read-only mode: ${JSON.stringify(config).slice(0, 400)}`)
+        assert(config.json?.writes?.allowed === false, `default config must be read-only, got writes=${JSON.stringify(config.json?.writes)}`)
+        const project = config.json?.workspace?.project ?? null
+        assert(project !== null && typeof project.owner === 'string' && Number.isInteger(project.number), `bound project is missing from /config: ${JSON.stringify(config.json?.workspace)}`)
+        const hooks = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const board = document.querySelector('[data-ghp-board]')
+          const cards = board === null ? [] : [...board.querySelectorAll('[data-ghp-card]')].filter(vis)
+          return {
+            cardCount: cards.length,
+            draggableCards: cards.filter(card => card.getAttribute('draggable') === 'true').length,
+            dragHandles: [...document.querySelectorAll('[data-ghp-drag-handle]')].filter(vis).length,
+            moveActions: [...document.querySelectorAll('[data-ghp-board] [data-ghp-card-action="move"]')].filter(vis).length,
+            moveMenu: document.querySelector('[data-ghp-move-menu]') !== null,
+            laneDropTargets: [...document.querySelectorAll('[data-ghp-board] [data-ghp-lane][data-ghp-lane-drop]')].filter(vis).length,
+            readOnlyHints: [...document.querySelectorAll('[data-ghp-board-readonly]')].filter(vis).map(el => (el.innerText || '').trim()),
+          }
+        })()`)
+        assert(hooks.cardCount >= 1, `read-only board renders no cards: ${JSON.stringify(hooks)}`)
+        assert(hooks.draggableCards === 0, `read-only board has ${hooks.draggableCards} draggable card(s)`)
+        assert(hooks.dragHandles === 0, `read-only board renders ${hooks.dragHandles} drag handle(s)`)
+        assert(hooks.moveActions === 0, `read-only board renders ${hooks.moveActions} 移动到 action(s)`)
+        assert(hooks.moveMenu === false, 'read-only board rendered a move menu')
+        assert(hooks.laneDropTargets === 0, `read-only board renders ${hooks.laneDropTargets} lane drop target(s)`)
+        assert(hooks.readOnlyHints.length === 1 && /只读看板/u.test(hooks.readOnlyHints[0]), `read-only hint missing or unexpected: ${JSON.stringify(hooks.readOnlyHints)}`)
+        // §4.8: the client never reads write-side metadata while read-only.
+        const metaRequests = resources.cdp.pluginRequests.filter(entry => /\/plugin\/github-projects\/project-meta(?:\?|$)/u.test(entry.url))
+        assert(metaRequests.length === 0, `read-only client requested /project-meta: ${JSON.stringify(metaRequests.slice(0, 5))}`)
+        // Direct write probe — must be refused by the host gate before any write.
+        const probeBody = { owner: project.owner, number: project.number, itemId: 'PVTI_e2e_readonly_probe', optionId: WRITE_STATUS_OPTIONS.inProgress }
+        const probe = await pageFetch(resources.cdp, '/plugin/github-projects/item-status', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(probeBody),
+        })
+        assert(probe.status === 403, `read-only POST /item-status answered ${probe.status}, expected 403 (${JSON.stringify(probe).slice(0, 400)})`)
+        assert(probe.json?.error?.code === 'writes-disabled', `read-only POST /item-status error code is ${JSON.stringify(probe.json?.error?.code)}, expected "writes-disabled"`)
+        const responses = await readPluginResponses(resources.cdp)
+        const statusResponses = responses.filter(entry => /\/plugin\/github-projects\/item-status(?:\?|$)/u.test(entry.url))
+        assert(statusResponses.length === 1 && statusResponses[0].status === 403, `expected exactly one /item-status response (403), got ${JSON.stringify(statusResponses.map(entry => entry.status))}`)
+        assert(statusResponses.every(entry => entry.status !== 200), 'read-only stack accepted a write response')
+        await settle(300)
+        return {
+          mode: options.mode,
+          configWrites: config.json?.writes ?? null,
+          project: { owner: project.owner, number: project.number },
+          hooks,
+          probe: { status: probe.status, code: probe.json?.error?.code ?? null, itemId: probeBody.itemId },
+          projectMetaRequests: metaRequests.length,
+          itemStatusResponses: statusResponses.map(entry => entry.status),
+          writesPerformed: 0,
+        }
+      })
+      if (readOnlyOk === false) throw new Error('projects-read-only stage failed')
     }
 
     // -------------------------------------------- projects external open --
@@ -1319,6 +1395,202 @@ async function main() {
       if (warmOk === false) throw new Error('projects-warm stage failed')
     }
 
+    // ------------------------------------------------ projects status write --
+    // v1.1.0 (§4.8) fixture-only write path. The default stack above is
+    // read-only; this stage boots a SECOND isolated fixture stack with
+    // `allowWrites: true` in the overlay row config and drives the shipped write
+    // UI: move menu TODO → In Progress (optimistic paint, host payload from the
+    // mock-only /mock-state, success toast + Undo), then the deterministic mock
+    // 502 failure item (rollback + failure toast).
+    if (gated('projects-status-write')) {
+      const statusWriteOk = await runStage('projects-status-write', async () => {
+        if (options.mode !== 'fixture') {
+          return {
+            skipped: true,
+            fixtureOnly: true,
+            writesPerformed: 0,
+            reason: 'real mode is read-only by contract (§4.8); the write path is only exercisable against dev/mock-host.js with allowWrites: true',
+          }
+        }
+        let stack = null
+        let succeeded = false
+        try {
+          stack = await bootWriteFixtureStack({ runId, llmBaseUrl: resources.llm.baseUrl, timeoutMs: emitTimeout(90_000) })
+          const cdp = stack.cdp
+          await sendComposerMessage(cdp, 'write stage session', { timeoutMs: emitTimeout(45_000) })
+          await waitForText(cdp, 'mock assistant reply', { timeoutMs: emitTimeout(30_000), label: 'write-stack mock reply' })
+          const refs = await projectSessionRefs(cdp)
+          assert(refs.sessionId !== '' && refs.workspaceId !== '', `could not read the write-stack session/workspace ids: ${JSON.stringify(refs)}`)
+          // Bind the fixture Project through the host API: a host-local binding,
+          // not a GitHub write (the only GitHub write is POST /item-status).
+          const bind = await pageFetch(cdp, '/plugin/github-projects/bind-workspace', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionId: refs.sessionId, workspaceId: refs.workspaceId, project: WRITE_PROJECT }),
+          })
+          assert(bind.status === 200, `write-stack bind-workspace failed: ${JSON.stringify(bind).slice(0, 400)}`)
+          await openProjectBoard(cdp, { expectWorkspaceId: refs.workspaceId })
+          // The pane mounts before `/config` resolves; wait for the bound board.
+          await waitForBoard(cdp, emitTimeout(30_000))
+          assert((await sidebarBoardState(cdp)).board === true, 'write-stack board is not rendered after /config resolved')
+          // The move action appears once /project-meta resolved (write UI only).
+          await cdp.waitFor(`document.querySelector('[data-ghp-board] [data-ghp-card-action="move"]') !== null`, {
+            timeoutMs: emitTimeout(30_000), intervalMs: 100, label: 'move action (project-meta ready)',
+          })
+          const writeHooks = await cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const board = document.querySelector('[data-ghp-board]')
+            const cards = [...board.querySelectorAll('[data-ghp-card]')].filter(vis)
+            return {
+              cardCount: cards.length,
+              draggableCards: cards.filter(card => card.getAttribute('draggable') === 'true').length,
+              dragHandles: [...board.querySelectorAll('[data-ghp-drag-handle]')].filter(vis).length,
+              moveActions: [...board.querySelectorAll('[data-ghp-card-action="move"]')].filter(vis).length,
+              readOnlyHints: [...document.querySelectorAll('[data-ghp-board-readonly]')].filter(vis).length,
+              lanes: [...board.querySelectorAll('[data-ghp-lane][data-ghp-lane-key]')].map(el => el.getAttribute('data-ghp-lane-key')),
+              dropLanes: [...board.querySelectorAll('[data-ghp-lane][data-ghp-lane-drop="1"]')].filter(vis).map(el => el.getAttribute('data-ghp-lane-key')),
+            }
+          })()`)
+          assert(writeHooks.cardCount >= 1, `write board renders no cards: ${JSON.stringify(writeHooks)}`)
+          assert(writeHooks.draggableCards === writeHooks.cardCount, `write board: only ${writeHooks.draggableCards}/${writeHooks.cardCount} cards are draggable`)
+          assert(writeHooks.dragHandles === writeHooks.cardCount, `write board renders ${writeHooks.dragHandles} drag handle(s) for ${writeHooks.cardCount} cards`)
+          assert(writeHooks.moveActions === writeHooks.cardCount, `write board renders ${writeHooks.moveActions} 移动到 action(s) for ${writeHooks.cardCount} cards`)
+          assert(writeHooks.readOnlyHints === 0, 'write board rendered the read-only hint')
+          assert(JSON.stringify(writeHooks.dropLanes) === JSON.stringify(['no-status', 'todo', 'in-progress', 'in-review', 'done']), `write board drop targets are ${JSON.stringify(writeHooks.dropLanes)}`)
+          const metaRequests = cdp.pluginRequests.filter(entry => /\/plugin\/github-projects\/project-meta(?:\?|$)/u.test(entry.url))
+          assert(metaRequests.length >= 1, 'write board never requested /project-meta')
+          const before = await readMockState(cdp)
+          assert(before.status === 200 && before.json?.allowWrites === true, `write-stack mock-state does not report allowWrites:true: ${JSON.stringify(before).slice(0, 300)}`)
+          assert(Array.isArray(before.json.writes) && before.json.writes.length === 0, `write-stack mock-state has prior writes: ${JSON.stringify(before.json.writes)}`)
+          const failureItem = before.json.failureItem
+          assert(failureItem?.id === 'PVTI_mock_write_failure' && typeof failureItem.title === 'string', `mock-state failureItem is malformed: ${JSON.stringify(failureItem)}`)
+          const todoCard = WRITE_TODO_ITEM_ID
+          const todo = WRITE_STATUS_OPTIONS.todo
+          const inProgress = WRITE_STATUS_OPTIONS.inProgress
+          // 1) TODO → In Progress through the shipped move menu.
+          assert(await openCardMoveMenu(cdp, todoCard), `could not open the move menu for ${todoCard}`)
+          await cdp.waitFor(`document.querySelector('[data-ghp-move-menu]') !== null`, { timeoutMs: emitTimeout(10_000), label: 'move menu' })
+          const menu = await cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            return [...document.querySelectorAll('[data-ghp-move-menu] [data-ghp-move-option]')].filter(vis).map(el => ({
+              id: el.getAttribute('data-ghp-move-option'),
+              label: (el.innerText || '').trim(),
+              active: el.getAttribute('data-active') === 'true',
+            }))
+          })()`)
+          const menuIds = menu.map(entry => entry.id)
+          assert(
+            JSON.stringify(menuIds) === JSON.stringify([todo, inProgress, WRITE_STATUS_OPTIONS.inReview, WRITE_STATUS_OPTIONS.done, 'clear']),
+            `move menu options are ${JSON.stringify(menuIds)} (expected canonical options + clear)`,
+          )
+          const activeOptions = menu.filter(entry => entry.active)
+          assert(activeOptions.length === 1 && activeOptions[0].id === todo, `move menu current option is ${JSON.stringify(activeOptions)} (expected TODO/${todo})`)
+          const optimisticStarted = Date.now()
+          assert(await clickMoveOption(cdp, inProgress), `could not click the In Progress move option (${inProgress})`)
+          const optimisticLaneMs = await waitForCardLane(cdp, todoCard, 'in-progress', emitTimeout(5_000))
+          const optimisticState = await readMockState(cdp)
+          const writesWhenPainted = optimisticState.json?.writes?.length ?? null
+          const successToast = await waitForToast(cdp, 'success', emitTimeout(10_000))
+          assert(successToast.undo, `success toast has no Undo action: ${JSON.stringify(successToast)}`)
+          assert(successToast.text.includes('In Progress'), `success toast text is ${JSON.stringify(successToast.text)}`)
+          const afterMove = await readMockState(cdp)
+          const moves = afterMove.json?.writes ?? []
+          assert(moves.length === 1, `mock-state writes after the first move: ${JSON.stringify(moves)}`)
+          const firstWrite = moves[0]
+          assert(firstWrite.itemId === todoCard, `first write itemId is ${JSON.stringify(firstWrite.itemId)}, expected ${JSON.stringify(todoCard)}`)
+          assert(firstWrite.optionId === inProgress, `first write optionId is ${JSON.stringify(firstWrite.optionId)}, expected ${JSON.stringify(inProgress)}`)
+          assert(firstWrite.owner === WRITE_PROJECT.owner && firstWrite.number === WRITE_PROJECT.number, `first write owner/number is ${JSON.stringify({ owner: firstWrite.owner, number: firstWrite.number })}`)
+          assert(firstWrite.name === 'In Progress' && firstWrite.ok === true, `first write result is ${JSON.stringify(firstWrite)}`)
+          assert(afterMove.json.statuses?.[todoCard] === 'In Progress', `mock-state status for ${todoCard} is ${JSON.stringify(afterMove.json.statuses?.[todoCard])}`)
+          // Evidence shot: moved card in In Progress + success toast with Undo.
+          const writeShot = join(SCREENSHOT_DIR, '16-projects-status-write.png')
+          await cdp.screenshot(writeShot)
+          screenshots['16-projects-status-write.png'] = writeShot
+          // 2) Undo: repaints into TODO and re-POSTs the previous optionId.
+          const undoClicked = await cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const undo = [...document.querySelectorAll('[data-ghp-toast-action="undo"]')].find(vis)
+            if (undo === undefined) return false
+            undo.click()
+            return true
+          })()`)
+          assert(undoClicked, 'could not click the success toast Undo action')
+          await waitForCardLane(cdp, todoCard, 'todo', emitTimeout(5_000))
+          let afterUndo = null
+          const undoDeadline = Date.now() + emitTimeout(10_000)
+          while (Date.now() < undoDeadline) {
+            afterUndo = await readMockState(cdp)
+            if ((afterUndo.json?.writes?.length ?? 0) >= 2) break
+            await sleep(60)
+          }
+          const writesAfterUndo = afterUndo?.json?.writes ?? []
+          assert(writesAfterUndo.length === 2, `mock-state writes after Undo: ${JSON.stringify(writesAfterUndo.map(entry => entry.optionId))}`)
+          const secondWrite = writesAfterUndo[1]
+          assert(secondWrite.itemId === todoCard, `undo write itemId is ${JSON.stringify(secondWrite.itemId)}`)
+          assert(secondWrite.optionId === todo, `undo write optionId is ${JSON.stringify(secondWrite.optionId)}, expected the previous TODO option ${JSON.stringify(todo)}`)
+          assert(secondWrite.name === 'TODO' && secondWrite.ok === true, `undo write result is ${JSON.stringify(secondWrite)}`)
+          assert(afterUndo.json.statuses?.[todoCard] === 'TODO', `mock-state status after Undo is ${JSON.stringify(afterUndo.json.statuses?.[todoCard])}`)
+          // 3) Deterministic failure item: 502 → rollback to TODO + failure toast.
+          assert(await openCardMoveMenu(cdp, failureItem.id), `could not open the move menu for the failure item ${failureItem.id}`)
+          await cdp.waitFor(`document.querySelector('[data-ghp-move-menu]') !== null`, { timeoutMs: emitTimeout(10_000), label: 'failure-item move menu' })
+          assert(await clickMoveOption(cdp, inProgress), 'could not click In Progress on the failure item')
+          const failureToast = await waitForToast(cdp, 'error', emitTimeout(10_000))
+          assert(failureToast.text.length > 0, 'failure toast text is empty')
+          await waitForCardLane(cdp, failureItem.id, 'todo', emitTimeout(5_000))
+          let afterFailure = null
+          const failureDeadline = Date.now() + emitTimeout(10_000)
+          while (Date.now() < failureDeadline) {
+            afterFailure = await readMockState(cdp)
+            if ((afterFailure.json?.writes?.length ?? 0) >= 3) break
+            await sleep(60)
+          }
+          const writes = afterFailure?.json?.writes ?? []
+          assert(writes.length === 3, `mock-state writes after the failure move: ${JSON.stringify(writes)}`)
+          const failedWrite = writes[2]
+          assert(failedWrite.itemId === failureItem.id, `failure write itemId is ${JSON.stringify(failedWrite.itemId)}`)
+          assert(failedWrite.optionId === inProgress, `failure write optionId is ${JSON.stringify(failedWrite.optionId)}`)
+          assert(failedWrite.ok === false && failedWrite.code === 'gh-failed', `failure write result is ${JSON.stringify(failedWrite)}`)
+          assert(afterFailure.json.statuses?.[failureItem.id] === 'TODO', `failure item status changed in mock-state: ${JSON.stringify(afterFailure.json.statuses?.[failureItem.id])}`)
+          // Write-stack network/console evidence.
+          const pluginResponses = await readPluginResponses(cdp)
+          const itemStatusResponses = pluginResponses
+            .filter(entry => /\/plugin\/github-projects\/item-status(?:\?|$)/u.test(entry.url))
+            .map(entry => entry.status)
+          assert(JSON.stringify(itemStatusResponses) === JSON.stringify([200, 200, 502]), `write-stack /item-status responses are ${JSON.stringify(itemStatusResponses)} (expected [200,200,502])`)
+          const stackErrors = cdp.errors()
+          assert(stackErrors.consoleErrors.length === 0 && stackErrors.exceptions.length === 0, `write-stack browser reported errors: ${JSON.stringify([...stackErrors.consoleErrors, ...stackErrors.exceptions].slice(0, 3))}`)
+          succeeded = true
+          return {
+            mode: 'fixture',
+            allowWrites: true,
+            writeStackRunDir: options.keep ? stack.root.root : null,
+            writeHooks,
+            projectMetaRequests: metaRequests.length,
+            moveMenuOptions: menuIds,
+            target: { itemId: todoCard, from: 'todo', to: 'in-progress', optionId: inProgress },
+            optimistic: { laneMs: optimisticLaneMs, writesWhenPainted, observedAfterMs: Date.now() - optimisticStarted },
+            firstWrite,
+            statusAfterMove: afterMove.json.statuses?.[todoCard] ?? null,
+            undo: { clicked: undoClicked, write: secondWrite, statusAfterUndo: afterUndo.json.statuses?.[todoCard] ?? null },
+            failure: { item: failureItem, write: failedWrite, statusAfterRollback: afterFailure.json.statuses?.[failureItem.id] ?? null },
+            itemStatusResponses,
+            screenshot: writeShot,
+          }
+        } finally {
+          if (stack !== null) {
+            await stopWriteFixtureStack(stack)
+            if (options.keep || !succeeded) {
+              writeStackRunDir = stack.root.root
+              process.stderr.write(`write-fixture run directory kept: ${stack.root.root}\n`)
+            } else {
+              try { rmSync(stack.root.root, { recursive: true, force: true }) } catch { /* ignore */ }
+            }
+          }
+        }
+      })
+      if (statusWriteOk === false) throw new Error('projects-status-write stage failed')
+    }
+
     // ------------------------------------------------------------- console --
     await runStage('console', async () => {
       const { consoleErrors, consoleWarnings, exceptions } = resources.cdp.errors()
@@ -1331,7 +1603,14 @@ async function main() {
       }
       assert(unexpected.length === 0, `browser reported ${unexpected.length} unexpected console error(s)/exception(s): ${JSON.stringify(unexpected.slice(0, 5))}`)
       const pluginHttpErrors = resources.cdp.httpErrors.filter(entry => entry.url.includes('/plugin/github-projects'))
-      assert(pluginHttpErrors.length === 0, `plugin HTTP error responses: ${JSON.stringify(pluginHttpErrors.slice(0, 5))}`)
+      // v1.1.0 (§4.8): the `projects-read-only` stage deliberately POSTs
+      // /item-status once from the page to prove the 403 `writes-disabled` gate.
+      // Exactly that one probe is allowlisted; every other ≥400 still fails.
+      const writeProbeErrors = pluginHttpErrors.filter(entry => entry.status === 403
+        && /\/plugin\/github-projects\/item-status(?:\?|$)/u.test(entry.url))
+      const unexpectedHttpErrors = pluginHttpErrors.filter(entry => !writeProbeErrors.includes(entry))
+      assert(writeProbeErrors.length === 1, `expected exactly one allowlisted read-only /item-status 403 probe, got ${JSON.stringify(writeProbeErrors.slice(0, 5))}`)
+      assert(unexpectedHttpErrors.length === 0, `plugin HTTP error responses: ${JSON.stringify(unexpectedHttpErrors.slice(0, 5))}`)
       const pluginNetworkFailures = resources.cdp.networkFailures.filter(entry => String(entry.url ?? '').includes('/plugin/github-projects'))
       assert(pluginNetworkFailures.length === 0, `plugin network failures: ${JSON.stringify(pluginNetworkFailures.slice(0, 5))}`)
 
@@ -1345,6 +1624,15 @@ async function main() {
       const missingStale = dataRoutes.filter(entry => typeof entry.json?.stale !== 'boolean')
       assert(missingStale.length === 0, `plugin data responses without a boolean "stale" field: ${JSON.stringify(missingStale.slice(0, 5))}`)
       const staleTrue = dataRoutes.filter(entry => entry.json?.stale === true)
+      // v1.1.0 read-only proof: the default/real stack must never read write-side
+      // metadata and must never accept a write. The only /item-status response
+      // is the intentional 403 probe from `projects-read-only`.
+      const projectMetaRequests = resources.cdp.pluginRequests.filter(entry => /\/plugin\/github-projects\/project-meta(?:\?|$)/u.test(entry.url))
+      assert(projectMetaRequests.length === 0, `read-only stack requested /project-meta: ${JSON.stringify(projectMetaRequests.slice(0, 5))}`)
+      const itemStatusResponses = pluginResponses.filter(entry => /\/plugin\/github-projects\/item-status(?:\?|$)/u.test(entry.url))
+      assert(itemStatusResponses.length === 1 && itemStatusResponses[0].status === 403, `read-only stack saw unexpected /item-status response(s): ${JSON.stringify(itemStatusResponses.map(entry => entry.status))}`)
+      const acceptedWrites = itemStatusResponses.filter(entry => entry.status >= 200 && entry.status < 300)
+      assert(acceptedWrites.length === 0, `read-only stack accepted ${acceptedWrites.length} write response(s)`)
       const configResponses = pluginResponses.filter(entry => entry.status >= 200 && entry.status < 300
         && /\/plugin\/github-projects\/config(?:\?|$)/u.test(entry.url))
       const configPending = configResponses.filter(entry => entry.json?.gh?.error === 'pending' || entry.json?.gh?.available === false)
@@ -1391,6 +1679,13 @@ async function main() {
         bindings: {
           responses: pluginResponses.filter(entry => /\/plugin\/github-projects\/bindings(?:\?|$)/u.test(entry.url)).length,
         },
+        writePath: {
+          probe: 'projects-read-only direct POST /item-status',
+          probeStatuses: itemStatusResponses.map(entry => entry.status),
+          acceptedWrites: acceptedWrites.length,
+          projectMetaRequests: projectMetaRequests.length,
+          writeStackRunDir: writeStackRunDir,
+        },
         clientModule: {
           renamed: renamedModuleLoaded,
           oldIdLoaded: oldModuleLoaded,
@@ -1429,6 +1724,7 @@ async function main() {
     harnessScreenshots: screenshots,
     manualEvidence,
     runDir: root.root,
+    writeRunDir: writeStackRunDir,
     keep: options.keep,
   }
   writeFileSync(join(root.logs, 'summary.json'), JSON.stringify(summary, null, 2), 'utf8')
@@ -2016,6 +2312,198 @@ async function unbindCurrentIssue(cdp, timeoutMs = 20_000) {
   assert(confirmed, 'could not confirm the issue unbind')
   await waitForText(cdp, '为当前会话绑定 Issue', { timeoutMs, label: 'issue unbound prompt after reset' })
   return { alreadyUnbound: false, clicked: true, confirmed: true }
+}
+
+// ------------------------------------- v1.1.0 write-path helpers --
+// The default/real stack is read-only (`allowWrites: false`, contract §3.0). The
+// fixture write stage boots a SECOND fully isolated stack whose overlay row sets
+// `allowWrites: true`, so one harness run proves both the read-only default and
+// the opt-in write path without touching the main stack's config.
+
+/** The fixture Project used by the write-path stage (mock host `projects[0]`). */
+const WRITE_PROJECT = Object.freeze({
+  owner: 'ceasarXuu',
+  number: 9,
+  title: 'Astropath-issues',
+  url: 'https://github.com/users/ceasarXuu/projects/9',
+  itemCount: 195,
+})
+
+/** Status option ids captured in `test/fixtures/graphql-project-meta.json`. */
+const WRITE_STATUS_OPTIONS = Object.freeze({
+  todo: '8fc1d6c9',
+  inProgress: '47fc9ee4',
+  inReview: 'edd18149',
+  done: '98236657',
+})
+
+/** Deterministic mock-host write payload for the fixture TODO item #246. */
+const WRITE_TODO_ITEM_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFe-U'
+
+/** Selected session id + workspace id from the left-sidebar rows. */
+async function projectSessionRefs(cdp) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const rows = [...document.querySelectorAll('[data-row-key]')].filter(vis)
+    const keyOf = (el) => el.getAttribute('data-row-key') || ''
+    const sessionRow = rows.find(el => keyOf(el).startsWith('session:') && el.getAttribute('aria-selected') === 'true')
+      ?? rows.find(el => keyOf(el).startsWith('session:'))
+    const workspaceRow = rows.find(el => keyOf(el).startsWith('workspace:'))
+    return {
+      sessionId: sessionRow === undefined ? '' : keyOf(sessionRow).slice('session:'.length),
+      workspaceId: workspaceRow === undefined ? '' : keyOf(workspaceRow).slice('workspace:'.length),
+    }
+  })()`)
+}
+
+/** Same-origin fetch from the page context (keeps the app's origin/cookies). */
+async function pageFetch(cdp, path, init = null) {
+  const initSource = init === null ? 'undefined' : JSON.stringify(init)
+  return cdp.evaluate(`fetch(${JSON.stringify(path)}, ${initSource}).then(async (response) => {
+    const text = await response.text()
+    let json = null
+    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
+    return { status: response.status, ok: response.ok, json, text: text.slice(0, 400) }
+  })`)
+}
+
+/** Mock-only assertion aid (`GET /plugin/github-projects/mock-state`). */
+async function readMockState(cdp) {
+  return pageFetch(cdp, '/plugin/github-projects/mock-state')
+}
+
+/** Card id → current lane key (`data-ghp-lane-key`), or null. */
+async function cardLaneKey(cdp, cardId) {
+  return cdp.evaluate(`(() => {
+    const card = [...document.querySelectorAll('[data-ghp-board] [data-ghp-card]')]
+      .find(el => el.getAttribute('data-ghp-card-id') === ${JSON.stringify(cardId)})
+    if (card === undefined) return null
+    const lane = card.closest('[data-ghp-lane][data-ghp-lane-key]')
+    return lane === null ? null : lane.getAttribute('data-ghp-lane-key')
+  })()`)
+}
+
+/** Wait until the card is rendered in `laneKey`; returns the elapsed ms. */
+async function waitForCardLane(cdp, cardId, laneKey, timeoutMs) {
+  const started = Date.now()
+  let last = null
+  while (Date.now() - started < timeoutMs) {
+    last = await cardLaneKey(cdp, cardId)
+    if (last === laneKey) return Date.now() - started
+    await sleep(20)
+  }
+  throw new Error(`card ${cardId} did not render in lane ${laneKey} within ${timeoutMs}ms (last lane: ${JSON.stringify(last)})`)
+}
+
+/** Open a card's `移动到` menu through its `[data-ghp-card-action="move"]`. */
+async function openCardMoveMenu(cdp, cardId) {
+  return cdp.evaluate(`(() => {
+    const card = [...document.querySelectorAll('[data-ghp-board] [data-ghp-card]')]
+      .find(el => el.getAttribute('data-ghp-card-id') === ${JSON.stringify(cardId)})
+    if (card === undefined) return false
+    const trigger = card.querySelector('[data-ghp-card-action="move"]')
+    if (trigger === null) return false
+    trigger.click()
+    return true
+  })()`)
+}
+
+/** Click one visible `[data-ghp-move-option]` in the open move menu. */
+async function clickMoveOption(cdp, optionId) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const option = [...document.querySelectorAll('[data-ghp-move-menu] [data-ghp-move-option]')]
+      .find(el => vis(el) && el.getAttribute('data-ghp-move-option') === ${JSON.stringify(optionId)})
+    if (option === undefined) return false
+    option.click()
+    return true
+  })()`)
+}
+
+/** The visible toast of a given tone, or null. */
+async function toastState(cdp, tone) {
+  return cdp.evaluate(`(() => {
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const toast = [...document.querySelectorAll('[data-ghp-toast]')]
+      .find(el => vis(el) && el.getAttribute('data-ghp-toast') === ${JSON.stringify(tone)})
+    if (toast === undefined) return null
+    return {
+      tone: toast.getAttribute('data-ghp-toast'),
+      text: (toast.innerText || '').trim(),
+      undo: toast.querySelector('[data-ghp-toast-action="undo"]') !== null,
+    }
+  })()`)
+}
+
+/** Wait for a visible toast of the given tone. */
+async function waitForToast(cdp, tone, timeoutMs) {
+  const started = Date.now()
+  let last = null
+  while (Date.now() - started < timeoutMs) {
+    last = await toastState(cdp, tone)
+    if (last !== null) return last
+    await sleep(50)
+  }
+  throw new Error(`no visible [data-ghp-toast="${tone}"] within ${timeoutMs}ms`)
+}
+
+/**
+ * Boot a second fully isolated fixture stack with `allowWrites: true` in the
+ * overlay row config (own DSH_HOME/workspace/documents/Chrome; the offline mock
+ * LLM of the main run is reused). Returns the live resources for the stage.
+ */
+async function bootWriteFixtureStack({ runId, llmBaseUrl, timeoutMs }) {
+  const stackRoot = createRunRoot({ name: `${runId}-write-fixture` })
+  const overlayPath = writeOverlay({
+    root: stackRoot.root,
+    pluginEntry: MODES.fixture.pluginEntry,
+    documentsDirectory: stackRoot.documents,
+    pluginConfig: { allowWrites: true },
+  })
+  const dsh = startDshWeb({
+    ...stackRoot,
+    overlayPath,
+    logPath: join(stackRoot.logs, 'dsh.log'),
+    env: { DEEPSEEK_API_KEY: 'sk-e2e-mock', DEEPSEEK_BASE_URL: llmBaseUrl },
+  })
+  let chrome = null
+  let cdp = null
+  try {
+    const url = await dsh.waitForUrl(timeoutMs)
+    await waitForHttpReady(url, { timeoutMs: Math.min(30_000, timeoutMs) })
+    chrome = launchChrome({ root: stackRoot.root, logPath: join(stackRoot.logs, 'chrome.log') })
+    const port = await waitForDevToolsPort(chrome.userDataDir, Math.min(30_000, timeoutMs))
+    cdp = await connectPageTarget(port)
+    await cdp.enable({ width: 1280, height: 800 })
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PLUGIN_FETCH_INSTRUMENTATION })
+    let booted = false
+    let lastError = null
+    for (let attempt = 1; attempt <= 2 && !booted; attempt++) {
+      try {
+        await cdp.navigate(url, { timeoutMs: Math.min(60_000, timeoutMs) })
+        await waitForAppShell(cdp, { timeoutMs: Math.min(60_000, timeoutMs) })
+        booted = true
+      } catch (error) {
+        lastError = error
+        await sleep(1000)
+      }
+    }
+    if (!booted) throw new Error(`write-fixture stack web app did not boot after 2 navigations: ${lastError?.message ?? 'unknown'}`)
+    await prepareConversationUi(cdp, { timeoutMs: Math.min(45_000, timeoutMs) })
+    return { root: stackRoot, dsh, chrome, cdp, url, origin: new URL(url).origin }
+  } catch (error) {
+    try { cdp?.close() } catch { /* ignore */ }
+    try { await chrome?.stop() } catch { /* ignore */ }
+    try { await dsh.stop() } catch { /* ignore */ }
+    throw error
+  }
+}
+
+/** Stop (and stop leaking) the isolated write-fixture stack. */
+async function stopWriteFixtureStack(stack) {
+  try { stack.cdp?.close() } catch { /* ignore */ }
+  try { await stack.chrome?.stop() } catch { /* ignore */ }
+  try { await stack.dsh?.stop() } catch { /* ignore */ }
 }
 
 // ---------------------------------------- v0.4.0 browser / subtitle helpers --

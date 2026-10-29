@@ -7,8 +7,8 @@ the e2e harness, and the docs. Do not change it without asking the Lead; propose
 Goal (user request, verbatim intent): 给工作区绑定 GitHub Projects，在 session 界面看到 `projects`
 页签；并支持给每个对话 session 绑定 issue，在 `issue` 页签直接看到该 issue。
 
-Reference screenshot: the session header has the shipped `对话` / `轨迹` tabs; the plugin adds two
-more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
+Reference screenshot: the session header has the shipped `对话` / `轨迹` tabs plus the plugin's `issue`
+tab; the Project board lives in the right sidebar, opened from the workspace-row board icon (v1.0.2+).
 
 ## 1. Product shape
 
@@ -32,7 +32,13 @@ more tabs labelled exactly `projects` and `issue` (lowercase, no translation).
 - The model can bind / unbind / switch the current session's Issue through three agent tools
   (`github_issue_bind` / `github_issue_switch` / `github_issue_unbind`, v0.4.0); the UI updates
   without a manual refresh.
-- Everything is read-only against GitHub. No writes to GitHub in v1.
+- Read-only by default; **item status writes are opt-in (v1.1.0)**. With `allowWrites: true` (§3.0)
+  the board can move a Project item between Status lanes (drag, or the card's `移动到` menu) and the
+  `github_project_item_status` agent tool (§3.4) can do the same. When `allowWrites` is false
+  (default) every write is refused with `writes-disabled` (403), the write tool is not registered,
+  and the board is read-only with a hint. No other GitHub write exists in v1.1.
+- Status writes change only the Project item's `Status` single-select field through `gh api graphql`;
+  GitHub auth still lives in the `gh` CLI — the plugin never reads or stores tokens.
 - Binding state is durable plugin data, shared by all sessions of a profile (workspace → Project is
   per workspace; session → Issue is per session).
 
@@ -47,8 +53,8 @@ Repo root: `/Volumes/inwolf-4T/projects/dsh-github-projects`
 | `state.js` | host-github | Durable binding store (atomic JSON write) |
 | `client.js` | client-ui | Browser plugin: slots, views, UI, fetch client, CSS, locale dicts |
 | `package.json`, `cordis.patch.yml`, `icon.svg`, `docs/CONTRACT.md` | Lead | package manifest / bundle patch / identity |
-| `dev/mock-host.js` | Lead | contract-shaped mock host for UI/e2e development (fixtures, no `gh`) |
-| `test/fixtures/*` | Lead | real `gh` outputs captured 2026-10-28 (provenance in `test/fixtures/README.md`) |
+| `dev/mock-host.js` | Lead → host-github (v1.1.0 write support) | contract-shaped mock host for UI/e2e development (fixtures, no `gh`; v1.1.0 adds `allowWrites` + `POST /item-status` + `GET /project-meta` fixtures) |
+| `test/fixtures/*` | Lead → host-github (v1.1.0 write fixtures) | real `gh` outputs captured 2026-10-28 (provenance in `test/fixtures/README.md`); v1.1.0 adds the project-meta/mutation GraphQL fixtures |
 | `test/host/**` | host-github | `node --test` unit tests |
 | `scripts/e2e/**`, `artifacts/**` | verifier | isolated `dsh web` + headless Chrome harness, screenshots |
 | `README*.md`, `docs/DESIGN.zh.md` | doc-writer | installation + design doc (Chinese) |
@@ -101,6 +107,7 @@ whole `config` object, so restate every key you need there.
 | `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health probe; `/config` never waits for it, `/health` awaits a fresh probe. |
 | `healthFirstReadTimeoutMs` | `3000` | Legacy key still accepted so old profile patches load; unused by v0.4.0 (config is non-blocking). |
 | `statePath` | `$DSH_HOME/plugin-data/github-projects/state.json` | Durable binding file (`null` resolves the default). |
+| `allowWrites` | `false` | **Opt-in GitHub writes (v1.1.0)**: enables `POST /item-status`, the board drag / `移动到` menu, and the `github_project_item_status` agent tool. When false, writes are refused with `writes-disabled` (403), the tool is not registered, and the board stays read-only. |
 
 ### 3.1 HTTP API (prefix `/plugin/github-projects`)
 
@@ -110,15 +117,17 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 | Method + path | Purpose | 2xx body |
 |---|---|---|
 | `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
-| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding}` |
+| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health + write capability (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding,"writes":{"allowed":boolean}}` |
 | `GET /bindings` | every durable Issue + workspace Project binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"workspaces":{WorkspaceId:Project},"updatedAt":ISO}` |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
 | `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
+| `GET /project-meta?owner=&number=&refresh=1` | **v1.1.0** write-side metadata: Project node id + Status field id/options | `{"project":{"id":string,"owner":string,"number":number,"title":string},"statusField":{"id":string,"name":"Status","options":[{"id":string,"name":string}]},"fetchedAt":ISO,"stale":bool}` |
 | `POST /bind-workspace` | bind Project to a workspace | `{"ok":true,"workspace":WorkspaceBinding}` |
 | `POST /unbind-workspace` | clear workspace binding | `{"ok":true}` |
 | `POST /bind-issue` | bind Issue to a session | `{"ok":true,"session":SessionBinding}` |
 | `POST /unbind-issue` | clear session binding | `{"ok":true}` |
+| `POST /item-status` | **v1.1.0** move one Project item to a Status option (or clear it); requires `allowWrites` | `{"item":{"id":string},"status":{"optionId":string\|null,"name":string\|null},"fetchedAt":ISO}` |
 
 Types (exact field names; extra fields are allowed but should be avoided):
 
@@ -154,6 +163,22 @@ type ProjectItem = {
   status: string | null        // Projects v2 Status field value, e.g. "In Progress"
   labels: string[]
   milestone: string | null
+}
+
+// v1.1.0 — write-side metadata for one Project (GET /project-meta).
+type ProjectMeta = {
+  project: { id: string, owner: string, number: number, title: string }
+  statusField: { id: string, name: 'Status', options: { id: string, name: string }[] }
+  fetchedAt: string
+  stale: boolean
+}
+
+// v1.1.0 — POST /item-status request body.
+type ItemStatusRequest = {
+  owner: string
+  number: number               // Project number
+  itemId: string               // ProjectV2Item node id ("PVTI_...")
+  optionId: string | null      // Status single-select option id; null clears the field (No status)
 }
 
 type IssueSummary = {
@@ -235,7 +260,20 @@ Behaviour rules:
   yield `project: null` / `issue: null` (not errors). It NEVER waits for GitHub: the `gh` field is the
   last cached health snapshot, or `{available:false,version:null,account:null,error:'pending'}` on a
   cold start, while one background probe refreshes it (`healthCacheTtlMs`). A failed probe never
-  fails the endpoint. (v0.4.0 supersedes the earlier bounded first read.)
+  fails the endpoint. (v0.4.0 supersedes the earlier bounded first read.) **v1.1.0** adds
+  `writes: { allowed: boolean }` — the resolved `allowWrites` (§3.0); the client uses it to choose
+  between read-only and write UI. It never changes the read endpoints.
+- `/project-meta` (v1.1.0) returns the write-side metadata for one Project: the Project node id, the
+  single-select `Status` field id, and its option ids/names. It is a read (never writes), is served
+  from the SWR cache under `project-meta:<owner>/<number>` (`refresh=1` forces a fresh read), and is
+  available regardless of `allowWrites` (the client only calls it when writes are allowed).
+- `/item-status` (v1.1.0) is the **only GitHub write**: body `ItemStatusRequest` (§3.1 types).
+  Refused with `writes-disabled` (403) unless `allowWrites` is true. `optionId: null` clears the
+  Status field (`clearProjectV2ItemFieldValue` → No status); a string must be one of the Project's
+  Status option ids (unknown → `bad-request`). `itemId` must start with `PVTI_`. On success the host
+  invalidates the `items:<owner>/<number>` cache entry (next `/items` re-reads) and returns the
+  applied `status` (`optionId`/`name`, `null` when cleared). A missing scope surfaces as `gh-auth`
+  (503) whose message names `gh auth refresh -s project`.
 - `/items` and `/issue` never write GitHub. Without `gh`, all GitHub reads fail with `gh-missing`
   (503) or `gh-auth` (503) while `/config` still works.
 - Caching (v0.4.0): SWR in-memory cache per key (`projects`, `items:<owner>/<number>`,
@@ -246,10 +284,10 @@ Behaviour rules:
   `$DSH_HOME/plugin-data/github-projects/cache.json` (bounded, atomic; disable with
   `diskCache: false`) and load at plugin start. See §3.5.
 - Error codes: `bad-request` 400, `not-found` 404, `issue-not-found` 404,
-  `project-not-found` 404, `gh-missing` 503, `gh-auth` 503, `gh-failed` 502, `timeout` 504,
-  `state-write-failed` 500, `internal` 500. Gate-level answers use their own codes:
-  `forbidden` 403 (Origin), `unsupported-media-type` 415 (POST content type), `payload-too-large`
-  413 (body cap).
+  `project-not-found` 404, `item-not-found` 404, `gh-missing` 503, `gh-auth` 503, `gh-failed` 502,
+  `timeout` 504, `state-write-failed` 500, `internal` 500. Gate-level answers use their own codes:
+  `forbidden` 403 (Origin), `writes-disabled` 403 (write attempted while `allowWrites` is false),
+  `unsupported-media-type` 415 (POST content type), `payload-too-large` 413 (body cap).
 - Request gating: reject a POST when an `Origin` header is present and is not `dsh-app://app` or a
   loopback authority (`http(s)://127.0.0.1[:port]` / `http(s)://localhost[:port]` / `[::1]`) (403);
   a missing `Origin` is allowed (the Desktop shell forwards same-origin requests without one).
@@ -257,6 +295,11 @@ Behaviour rules:
   unauthenticated (loopback server only). Never echo environment variables or tokens.
 
 ### 3.2 `gh` adapter (`github.js`)
+
+> v0.4.0+ note: the shipped read path uses **`gh api graphql`** for projects and project items
+> (`GRAPHQL_PROJECTS_QUERY` / `GRAPHQL_ITEMS_QUERY` in `github.js`, paginated at 100 nodes/page, with
+> `test/fixtures/queries/*.graphql`); the `gh project …` CLI bullets below describe the original v0.1
+> read path and are kept as historical context. The v1.1.0 write path also uses GraphQL (below).
 
 Use `child_process.execFile` (promisified) with `{ env: process.env, timeout: config.requestTimeoutMs,
 maxBuffer: 32 * 1024 * 1024 }`. Spawn the configured `ghCommand`; capture stdout; on nonzero exit
@@ -291,6 +334,19 @@ Queries (verified 2026-10-28, `gh` 2.96.0 — fixtures in `test/fixtures/`):
 5. `parseIssueRef(text)` accepts `https://github.com/<owner>/<repo>/issues/<n>` (also `http`, trailing
    slash/query), `github.com/...`, `owner/repo#123`, `owner/repo 123`. Returns `{repo, number}` or
    `null`.
+6. **v1.1.0 write path (GraphQL, only reached through `allowWrites: true`)**:
+   - `getProjectMeta(owner, number)` — one `gh api graphql` read:
+     `repositoryOwner(login:){ __typename ... on ProjectV2Owner { projectV2(number:){ id title
+     field(name:"Status"){ ... on ProjectV2SingleSelectField { id name options { id name } } } } } }`.
+     Missing Project → `project-not-found`. Result backs `GET /project-meta` and the write calls.
+   - `findProjectItem(owner, number, repo, contentNumber)` — resolves a content reference
+     (`owner/name#N`) to a `ProjectV2Item` id by paging the same items query as §3.5; not found →
+     `item-not-found`.
+   - `updateItemStatus({ owner, number, itemId, optionId })` — `updateProjectV2ItemFieldValue(input:
+     { projectId, itemId, fieldId, value: { singleSelectOptionId } })`; `optionId: null` uses
+     `clearProjectV2ItemFieldValue({ projectId, itemId, fieldId })`. The mutation never reads tokens
+     and returns the applied `{ optionId, name }`. GraphQL `NOT_FOUND` → `item-not-found`; a
+     scope/permission error maps to `gh-auth` with the `gh auth refresh -s project` hint.
 
 ### 3.3 Binding store (`state.js`)
 
@@ -340,11 +396,18 @@ writes the binding store, and returns the canonical value.
 | `github_issue_bind` | `ref: string` (issue URL or `owner/repo#123`) | bind the Issue to the current session; output `{"bound":true,"issue":IssueSummary,"previous":IssueSummary\|null}`; refuses when already bound (use switch) |
 | `github_issue_switch` | `ref: string` | replace the binding; `not bound` error when nothing is bound yet; output `{"switched":true,"issue":IssueSummary,"previous":IssueSummary}` |
 | `github_issue_unbind` | — | clear the binding; output `{"unbound":true,"previous":IssueSummary\|null}` |
+| `github_project_item_status` (v1.1.0, registered only when `allowWrites` is true) | `{"itemId":string}` **or** `{"repo":string,"number":number}` (content reference), plus `{"status":string\|null}` | move that item in the current session's workspace-bound Project to the named Status option (`null` clears it → No status); output `{"moved":true,"item":{"id","repo","number","title"},"previous":{"optionId","name"},"status":{"optionId","name"}}`; `previous`/`status` carry `null` names when unset |
 
 Rules: tools require an owning agent (`no current session` error otherwise); `gh`/ref failures surface
 as the contract error codes; after a write the client reflects the binding within ≤4 s (subtitle +
 `issue` tab) without a manual refresh; `output.render` returns one text block such as
 `已绑定 #240 [v1.2.0]…`. Registration is owned by `ctx.effect` so disabling the plugin removes it.
+`github_project_item_status` (v1.1.0) is registered **only** when `allowWrites` is true; it requires
+a workspace-bound Project (`project-not-found` with a "bind a Project first" message otherwise),
+resolves `itemId` directly or through `findProjectItem`, matches `status` against the Project's Status
+option names case-insensitively (`bad-request` listing the valid names on a miss), writes only the
+Status field, and renders one text block such as `已把 #240 移到 In Progress`. It never writes Issues
+or any other field.
 
 ### 3.5 Caching and latency (v0.4.0)
 
@@ -617,6 +680,38 @@ session title:
 - Compatibility: if `sidebarRight`/`sidebarRightTabs` are unavailable the workspace icon is not
   injected (no throw); the `issue` tab and subtitles keep working.
 
+### 4.8 Board status writes (v1.1.0, opt-in)
+
+The board is read-only unless `GET /config` answers `writes.allowed === true` (host config
+`allowWrites`, §3.0). No write request may be attempted while it is false.
+
+- **Read-only mode (default)**: cards are not draggable, no `移动到` action/menu is rendered, and the
+  board toolbar shows a read-only hint (`board.readOnlyHint`). The client still fetches nothing
+  write-side (`/project-meta` is only requested in allowed mode).
+- **Drag between lanes**: cards expose `draggable="true"`; each canonical Status lane is a drop
+  target (`[data-ghp-lane][data-ghp-lane-key]` + `data-ghp-lane-drop="1"`); dragging over a lane
+  highlights it; dropping on another lane moves the card optimistically (the card appears in the
+  target lane immediately) and sends `POST /item-status` with the target lane's `optionId`. Dropping
+  on `No status` sends `optionId: null` (clear). `other:*` (unknown custom status) lanes are read-only
+  — never a drop target, never a menu entry.
+- **Move menu**: every card has `[data-ghp-card-action="move"]` opening a menu
+  (`[data-ghp-move-menu]`) listing every Status option plus `No status`
+  (`[data-ghp-move-option="<optionId|clear>"]`). The menu is keyboard-accessible (Enter/Space opens,
+  Arrow keys move, Enter applies, Esc closes) and is the primary path in the narrow right sidebar.
+- **Result handling**: success replaces the optimistic state with the host's answer and shows a toast
+  (`[data-ghp-toast]` + `[data-ghp-toast-action="undo"]`) for a few seconds; Undo sends the previous
+  `optionId` (or `null`) back. A failure (any non-2xx) rolls the card back to its previous lane and
+  shows `board.statusUpdateFailed` with the error message; `item-not-found`/`project-not-found` also
+  triggers one `/items?refresh=1` reload.
+- **Concurrency**: the mutation is keyed by `itemId`; a concurrent GitHub-side change wins — the host
+  answer is authoritative and the optimistic state is replaced by it.
+- i18n keys (zh/en): `board.readOnlyHint`, `board.moveTo`, `board.moveToAria`, `board.moveMenuAria`,
+  `board.noStatus`, `board.statusUpdated`, `board.statusUpdateFailed`, `board.undo`,
+  `board.undoAria`, `board.scopeHint`.
+- Test hooks: `[data-ghp-lane][data-ghp-lane-key]`, `[data-ghp-lane-drop]`,
+  `[data-ghp-card][data-ghp-card-id]`, `[data-ghp-card-action="move"]`, `[data-ghp-move-menu]`,
+  `[data-ghp-move-option]`, `[data-ghp-toast]`, `[data-ghp-toast-action="undo"]`.
+
 ### 4.6 Sidebar session subtitle (v0.4.1)
 
 Every session row in the left sidebar session tree that has a bound Issue shows the same subtitle
@@ -655,6 +750,11 @@ information under its title:
   chip, `[data-ghp-sidebar-subtitle-title]` on the truncated title.
 
 ## 5. e2e harness (verifier)
+
+> Stage definitions, selectors and current assertions are owned by `scripts/e2e/README.md`
+> (authoritative). This section fixes the contract-level environment and coverage; where the bullets
+> below still mention a conversation `projects` tab they are historical (v1.0.2 moved the board into
+> the right sidebar, opened from the workspace-row board icon).
 
 Isolated environment, never the user's `~/.dsh` profile or port:
 1. temp root under `/tmp/dsh-github-projects-e2e/<run>/` with `home/` and `workspace/` dirs;
@@ -718,6 +818,14 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      `projects-board`); no screenshot;
    - `console` — zero browser console errors/exceptions, zero plugin HTTP ≥400, zero plugin network
      failures;
+   - **v1.1.0 `projects-read-only`** (fixture and real modes, default config): the board renders no
+     drag handle / `移动到` action, and `POST /item-status` answers 403 `writes-disabled`; real mode
+     performs **zero** GitHub writes.
+   - **v1.1.0 `projects-status-write`** (fixture mode only, with `allowWrites: true` in the fixture
+     overlay and mutation support in `dev/mock-host.js`): move a card TODO → In Progress through the
+     move menu; assert the optimistic lane change, the host mutation payload (`itemId`/`optionId`),
+     the success toast + Undo (which moves it back), and that an injected failure item rolls the card
+     back with the failure toast; screenshot.
    - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
      captured by the Lead after the final install; `11-projects-wide.png`,
      `12-external-open.png` and `13-issue-subtitle.png` are harness output.
@@ -736,12 +844,19 @@ at least one milestone) for the board and filter stages.
   `12-external-open.png`, `13-issue-subtitle.png`, `14-sidebar-subtitle.png`, in fixture mode and
   (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
   milestone-filter, wide-layout, system-browser-open, conversation-header subtitle, sidebar
-  subtitle (non-interactive, no overflow, row click selects the session) and warm-open latency
-  stages.
+  subtitle (non-interactive, no overflow, row click selects the session), warm-open latency,
+  **v1.1.0 read-only default** and **v1.1.0 fixture write path** stages.
 - Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
-  and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures.
-- Plugin loads with zero console errors in the browser and one `projects` + one `issue` tab.
+  and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures. v1.1.0 adds tests
+  for `GET /project-meta` (node id/field/options, `project-not-found`), `POST /item-status`
+  (`writes-disabled` 403 when off, option move, clear, invalid option 400, `item-not-found` 404,
+  `items` cache invalidation), `/config.writes`, and `github_project_item_status` being registered
+  only when `allowWrites` is true.
+- Plugin loads with zero console errors in the browser, the `issue` conversation tab and the
+  workspace-row board icon.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
-  design doc in Chinese, known limitations, verification evidence.
+  design doc in Chinese, known limitations, verification evidence; v1.1.0 documents the opt-in
+  write capability, the `project` scope prerequisite and the read-only default.
 - Installed into the user's Desktop profile (`~/.dsh/profiles/desktop`) by the Lead, verified with a
-  live screenshot of the session header showing the two tabs, with the profile restorable.
+  live screenshot of the session header showing the plugin tab/board entry, with the profile
+  restorable.

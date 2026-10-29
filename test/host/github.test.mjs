@@ -19,6 +19,7 @@ import {
   normalizeIssueComment,
   normalizeProject,
   normalizeProjectItem,
+  normalizeProjectMeta,
   ownerTypeFromProjectUrl,
   parseIssueRef,
   parseOwnerParam,
@@ -36,9 +37,12 @@ import {
   ghMissingError,
   ghNotFound,
   ghTimeoutError,
+  PROJECT_META_IDS,
 } from './support.mjs'
 
 const REPO = 'ceasarXuu/Astropath'
+const ITEM_240_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs'
+const ITEM_91_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFgtI'
 
 function tempDir() {
   return mkdtempSync(join(tmpdir(), 'ghp-gh-'))
@@ -266,6 +270,39 @@ test('normalizeGraphqlItem maps Issue / PullRequest / DraftIssue nodes', () => {
     content: { __typename: 'Issue', number: 1, title: 't' },
   })
   assert.equal(noStatus.status, null)
+})
+
+test('normalizeProjectMeta maps the captured Project status-field payload', () => {
+  const node = fixture.graphqlProjectMeta.data.repositoryOwner.projectV2
+  assert.deepEqual(normalizeProjectMeta(node, { owner: 'ceasarXuu', number: 9 }), {
+    project: {
+      id: PROJECT_META_IDS.projectId,
+      owner: 'ceasarXuu',
+      number: 9,
+      title: 'Astropath-issues',
+    },
+    statusField: {
+      id: PROJECT_META_IDS.statusFieldId,
+      name: 'Status',
+      options: [
+        { id: PROJECT_META_IDS.options.TODO, name: 'TODO' },
+        { id: PROJECT_META_IDS.options['In Progress'], name: 'In Progress' },
+        { id: PROJECT_META_IDS.options['In Review'], name: 'In Review' },
+        { id: PROJECT_META_IDS.options.Done, name: 'Done' },
+      ],
+    },
+  })
+
+  // Defensive: a Project without a single-select Status field has none.
+  assert.equal(normalizeProjectMeta({ id: 'PVT_x', title: 't' }, { owner: 'o', number: 2 }).statusField, null)
+  assert.equal(normalizeProjectMeta({ id: 'PVT_x', field: { id: '', options: [] } }, { owner: 'o', number: 2 }).statusField, null)
+  // Missing option names fall back to the option id; a missing field name is `Status`.
+  const sparse = normalizeProjectMeta({ id: 'PVT_x', field: { id: 'F', options: [{ id: 'o1' }] } }, { owner: 'o', number: 3 })
+  assert.equal(sparse.project.id, 'PVT_x')
+  assert.equal(sparse.project.number, 3)
+  assert.equal(sparse.statusField.id, 'F')
+  assert.equal(sparse.statusField.name, 'Status')
+  assert.deepEqual(sparse.statusField.options, [{ id: 'o1', name: 'o1' }])
 })
 
 test('normalizeIssue maps the captured REST issue + comments payload', () => {
@@ -497,6 +534,202 @@ test('resolveIssueRef resolves valid refs and returns null for invalid ones', as
   assert.equal(resolved.summary.repo, REPO)
   assert.equal(resolved.summary.number, 240)
   assert.equal(resolved.summary.state, 'open')
+})
+
+/* ------------------------------------------------------------------ */
+/* Adapter: v1.1.0 write path (contract §3.2)                          */
+/* ------------------------------------------------------------------ */
+
+test('getProjectMeta makes ONE GraphQL read and maps a missing Project to project-not-found', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const meta = await gh.getProjectMeta('ceasarXuu', 9)
+  assert.equal(meta.project.id, PROJECT_META_IDS.projectId)
+  assert.equal(meta.project.owner, 'ceasarXuu')
+  assert.equal(meta.project.number, 9)
+  assert.equal(meta.statusField.id, PROJECT_META_IDS.statusFieldId)
+  assert.equal(meta.statusField.options.length, 4)
+  assert.equal(runner.calls.length, 1, 'one gh api graphql read')
+  assert.match(runner.calls[0].join(' '), /field\(name:"Status"\)/u)
+
+  await assert.rejects(gh.getProjectMeta('ceasarXuu', 99999), { code: 'project-not-found' })
+  await assert.rejects(gh.getProjectMeta('bad/owner', 9), { code: 'bad-request' })
+  await assert.rejects(gh.getProjectMeta('ceasarXuu', 0), { code: 'bad-request' })
+})
+
+test('getProjectMeta raises gh-failed when the Project has no Status single-select field', async () => {
+  const runner = createRunner(async () => ({
+    stdout: `${JSON.stringify({ data: { repositoryOwner: { projectV2: { id: 'PVT_x', title: 't', field: null } } } })}\n`,
+    stderr: '',
+  }))
+  await assert.rejects(createGh({ run: runner }).getProjectMeta('ceasarXuu', 9), { code: 'gh-failed' })
+})
+
+test('findProjectItem resolves content references by paging the items read', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const item = await gh.findProjectItem('ceasarXuu', 9, REPO, 240)
+  assert.equal(item.id, ITEM_240_ID)
+  assert.equal(item.number, 240)
+  assert.equal(item.status, 'In Progress')
+  // GitHub repo names are case-insensitive; the comparison is too.
+  const second = await gh.findProjectItem('ceasarXuu', 9, 'CEASARXUU/Astropath', 91)
+  assert.equal(second.id, ITEM_91_ID)
+  // Page 1 already contains #240/#91, but a later page is reachable for the miss.
+  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, REPO, 999999), { code: 'item-not-found' })
+  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, 'not-a-repo', 240), { code: 'bad-request' })
+  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, REPO, 0), { code: 'bad-request' })
+  assert.ok(!runner.calls.some(args => args.some(arg => typeof arg === 'string' && /ItemFieldValue/u.test(arg))))
+})
+
+test('findProjectItemById requires a PVTI_ node id and resolves from the items read', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const item = await gh.findProjectItemById('ceasarXuu', 9, ITEM_91_ID)
+  assert.equal(item.number, 91)
+  await assert.rejects(gh.findProjectItemById('ceasarXuu', 9, 'PVTI_missing'), { code: 'item-not-found' })
+  await assert.rejects(gh.findProjectItemById('ceasarXuu', 9, 'not-a-node'), { code: 'bad-request' })
+})
+
+test('updateItemStatus writes the Status field with the real project/field ids', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const result = await gh.updateItemStatus({
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options['In Review'],
+  })
+  assert.deepEqual(result, {
+    item: { id: ITEM_240_ID },
+    status: { optionId: PROJECT_META_IDS.options['In Review'], name: 'In Review' },
+  })
+  // One metadata read + one mutation.
+  assert.equal(runner.calls.length, 2)
+  const mutation = runner.calls.find(args => args.some(arg => typeof arg === 'string' && /updateProjectV2ItemFieldValue/u.test(arg)))
+  assert.ok(mutation, 'no updateProjectV2ItemFieldValue mutation')
+  const command = mutation.join(' ')
+  assert.ok(command.includes(`-f projectId=${PROJECT_META_IDS.projectId}`))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+  assert.ok(command.includes(`-f fieldId=${PROJECT_META_IDS.statusFieldId}`))
+  assert.ok(command.includes(`-f optionId=${PROJECT_META_IDS.options['In Review']}`))
+  // `gh -F` would infer the real all-digit Done option id as a JSON number, so
+  // mutation variables are passed as raw strings (`-f`) and the mutation
+  // declares the GitHub schema's `singleSelectOptionId: String`.
+  assert.match(command, /\$optionId:String!/u)
+  assert.ok(command.includes('-f optionId='))
+})
+
+test('updateItemStatus accepts the real all-digit Done option id', async () => {
+  assert.equal(PROJECT_META_IDS.options.Done, '98236657')
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const result = await gh.updateItemStatus({
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options.Done,
+  })
+  assert.deepEqual(result.status, { optionId: '98236657', name: 'Done' })
+  const mutation = runner.calls.find(args => args.some(arg => typeof arg === 'string' && /updateProjectV2ItemFieldValue/u.test(arg)))
+  assert.ok(mutation.join(' ').includes('-f optionId=98236657'))
+})
+
+test('updateItemStatus clears with clearProjectV2ItemFieldValue and no optionId', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  const result = await gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null })
+  assert.deepEqual(result, {
+    item: { id: ITEM_240_ID },
+    status: { optionId: null, name: null },
+  })
+  const mutation = runner.calls.find(args => args.some(arg => typeof arg === 'string' && /clearProjectV2ItemFieldValue/u.test(arg)))
+  assert.ok(mutation, 'no clearProjectV2ItemFieldValue mutation')
+  const command = mutation.join(' ')
+  assert.ok(!command.includes('optionId='))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+})
+
+test('updateItemStatus rejects bad item/option ids before mutating', async () => {
+  const runner = fixtureRunner()
+  const gh = createGh({ run: runner })
+  await assert.rejects(
+    gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: 'not-a-node-id', optionId: null }),
+    { code: 'bad-request' },
+  )
+  await assert.rejects(
+    gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: 'f0000000' }),
+    { code: 'bad-request' },
+  )
+  const mutations = runner.calls.filter(args => args.some(arg => typeof arg === 'string' && /ItemFieldValue/u.test(arg)))
+  assert.deepEqual(mutations, [])
+})
+
+test('updateItemStatus maps GraphQL NOT_FOUND / scope / auth failures to contract codes', async () => {
+  const notFound = createRunner(async (args) => {
+    if (args.some(arg => typeof arg === 'string' && /updateProjectV2ItemFieldValue/u.test(arg))) {
+      throw ghError("gh: Could not resolve to a node with the global id of 'PVTI_stale'")
+    }
+    return fixtureRun(args)
+  })
+  await assert.rejects(
+    createGh({ run: notFound }).updateItemStatus({
+      owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
+    }),
+    (error) => {
+      assert.equal(error.code, 'item-not-found')
+      assert.match(error.message, /找不到该 Project 条目/u)
+      return true
+    },
+  )
+
+  const scope = createRunner(async (args) => {
+    if (args.some(arg => typeof arg === 'string' && /updateProjectV2ItemFieldValue/u.test(arg))) {
+      throw ghError('gh: Your token has not been granted the required scopes to execute this query.')
+    }
+    return fixtureRun(args)
+  })
+  await assert.rejects(
+    createGh({ run: scope }).updateItemStatus({
+      owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
+    }),
+    (error) => {
+      assert.equal(error.code, 'gh-auth')
+      assert.match(error.message, /gh auth refresh -s project/u)
+      return true
+    },
+  )
+
+  const auth = createRunner(async (args) => {
+    if (args.some(arg => typeof arg === 'string' && /clearProjectV2ItemFieldValue/u.test(arg))) {
+      throw ghAuthError()
+    }
+    return fixtureRun(args)
+  })
+  await assert.rejects(
+    createGh({ run: auth }).updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }),
+    (error) => {
+      assert.equal(error.code, 'gh-auth')
+      assert.match(error.message, /gh auth refresh -s project/u)
+      return true
+    },
+  )
+})
+
+test('updateItemStatus maps a GraphQL errors payload to the write error code', async () => {
+  const runner = createRunner(async (args) => {
+    if (args.some(arg => typeof arg === 'string' && /clearProjectV2ItemFieldValue/u.test(arg))) {
+      return {
+        stdout: `${JSON.stringify({ errors: [{ message: "Could not resolve to a node with the global id of 'PVTI_stale'" }] })}\n`,
+        stderr: '',
+      }
+    }
+    return fixtureRun(args)
+  })
+  await assert.rejects(
+    createGh({ run: runner }).updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }),
+    { code: 'item-not-found' },
+  )
 })
 
 /* ------------------------------------------------------------------ */

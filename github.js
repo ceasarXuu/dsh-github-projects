@@ -65,6 +65,15 @@ const AUTH_PATTERN = /auth login|authenticate|authentication|not logged in|no oa
 /** `gh api` 404 markers for GitHub REST reads. */
 const NOT_FOUND_PATTERN = /http 404|\b404\b|not found/i
 
+/** v1.1.0 GraphQL write errors for a missing ProjectV2Item / node. */
+const NODE_NOT_FOUND_PATTERN = /could not resolve to a node|does not exist|no node with id|not found/i
+
+/** v1.1.0 GraphQL write errors caused by a missing `project`/`repo` scope. */
+const WRITE_SCOPE_PATTERN = /scope|permission|forbidden|not accessible|unauthorized|not authorized/i
+
+/** Hint appended to `gh-auth` write failures (contract §3.1 v1.1.0). */
+const PROJECT_SCOPE_HINT = 'GitHub CLI 令牌缺少 project 权限，请运行 gh auth refresh -s project'
+
 function lastChars(text, max) {
   const value = typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : ''
   return value.length <= max ? value : value.slice(-max)
@@ -481,6 +490,45 @@ export const GRAPHQL_ITEMS_QUERY = `query($owner:String!,$number:Int!,$limit:Int
   }
 }`
 
+/**
+ * v1.1.0 write-side metadata (contract §3.2): Project node id + the
+ * single-select `Status` field id/options, in ONE read. Mirrors
+ * `test/fixtures/queries/project-meta.graphql`.
+ */
+export const GRAPHQL_PROJECT_META_QUERY = `query($owner:String!,$number:Int!){
+  repositoryOwner(login:$owner){
+    __typename
+    ... on ProjectV2Owner {
+      projectV2(number:$number){
+        id
+        title
+        field(name:"Status"){
+          __typename
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options { id name }
+          }
+        }
+      }
+    }
+  }
+}`
+
+/** v1.1.0: set one Project item's `Status` single-select value. */
+export const GRAPHQL_UPDATE_ITEM_STATUS_MUTATION = `mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!){
+  updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:{singleSelectOptionId:$optionId}}){
+    projectV2Item { id }
+  }
+}`
+
+/** v1.1.0: clear one Project item's `Status` field (`optionId: null`). */
+export const GRAPHQL_CLEAR_ITEM_STATUS_MUTATION = `mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!){
+  clearProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId}){
+    projectV2Item { id }
+  }
+}`
+
 /** Nodes of one GraphQL connection, tolerating a missing/`null` connection. */
 function graphqlNodes(connection) {
   return isRecord(connection) && Array.isArray(connection.nodes) ? connection.nodes : []
@@ -622,6 +670,45 @@ export function normalizeGraphqlItem(raw) {
   }
 }
 
+/**
+ * One GraphQL `ProjectV2` node from `GRAPHQL_PROJECT_META_QUERY` → the
+ * `project` + `statusField` halves of contract `ProjectMeta` (v1.1.0).
+ * `statusField` is `null` when the Project has no single-select `Status`
+ * field (the adapter turns that into `gh-failed`, since writes cannot work).
+ */
+export function normalizeProjectMeta(raw, context = {}) {
+  const source = isRecord(raw) ? raw : {}
+  const owner = typeof context.owner === 'string' ? context.owner : ''
+  const number = Number.isInteger(context.number) && context.number > 0 ? context.number : 0
+  const field = isRecord(source.field) ? source.field : null
+  const rawOptions = field !== null && Array.isArray(field.options) ? field.options : []
+  const options = rawOptions
+    .filter(option => isRecord(option) && typeof option.id === 'string' && option.id.length > 0)
+    .map(option => ({
+      id: option.id,
+      name: typeof option.name === 'string' && option.name.length > 0 ? option.name : option.id,
+    }))
+  const statusField = field === null
+    || typeof field.id !== 'string'
+    || field.id.length === 0
+    || options.length === 0
+    ? null
+    : {
+        id: field.id,
+        name: typeof field.name === 'string' && field.name.length > 0 ? field.name : 'Status',
+        options,
+      }
+  return {
+    project: {
+      id: typeof source.id === 'string' ? source.id : '',
+      owner,
+      number,
+      title: typeof source.title === 'string' ? source.title : '',
+    },
+    statusField,
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 6. The adapter.                                                     */
 /* ------------------------------------------------------------------ */
@@ -729,12 +816,21 @@ export function createGh(options = {}) {
     }
   }
 
-  /** One `gh api graphql` invocation; variables become typed `-F` fields. */
-  async function execGraphql(query, variables = {}) {
+  /**
+   * One `gh api graphql` invocation.
+   *
+   * Variables use `-F` (typed): reads need it for `Int!` variables such as
+   * `$number`/`$limit`. v1.1.0 mutations pass `rawStrings: true` and use `-f`
+   * (raw string) instead, because `-F` infers all-digit values as JSON numbers
+   * and a real Status option id such as Done (`98236657`) must arrive as the
+   * GraphQL `String` argument `singleSelectOptionId`.
+   */
+  async function execGraphql(query, variables = {}, options = {}) {
+    const rawStrings = isRecord(options) && options.rawStrings === true
     const args = ['api', 'graphql', '-f', `query=${query}`]
     for (const [key, value] of Object.entries(variables)) {
       if (value === undefined || value === null) continue
-      args.push('-F', `${key}=${String(value)}`)
+      args.push(rawStrings ? '-f' : '-F', `${key}=${String(value)}`)
     }
     return execJson(args)
   }
@@ -783,12 +879,13 @@ export function createGh(options = {}) {
   }
 
   /**
-   * One Project's items (contract §3.5) via paginated GraphQL, 100 nodes per
-   * page, stopping at `totalCount`/`maxProjectItems`. The Project summary comes
-   * from the same payload, so there is no second `gh project view` read.
+   * Page one Project's items (contract §3.5): `gh api graphql` at 100 nodes
+   * per page until `totalCount`/`maxProjectItems`/`maxPages`. The Project
+   * summary comes from the same payload (no second `gh project view` read).
+   * `onItem` may return `true` to stop paging early (used by the v1.1.0
+   * `findProjectItem` write-side helper).
    */
-  async function projectItems(owner, number) {
-    const target = validateProjectRequest(owner, number)
+  async function paginateProjectItems(target, onItem) {
     const collected = []
     let project = null
     let totalCount = null
@@ -820,18 +917,35 @@ export function createGh(options = {}) {
       const itemsNode = isRecord(projectNode.items) ? projectNode.items : null
       if (itemsNode === null) throw new GhError('gh-failed', 'GraphQL 响应缺少 items')
       if (Number.isInteger(itemsNode.totalCount) && itemsNode.totalCount >= 0) totalCount = itemsNode.totalCount
-      for (const node of graphqlNodes(itemsNode)) collected.push(normalizeGraphqlItem(node))
+      for (const node of graphqlNodes(itemsNode)) {
+        const item = normalizeGraphqlItem(node)
+        collected.push(item)
+        if (typeof onItem === 'function' && onItem(item, project) === true) {
+          return { project, totalCount, items: collected, stopped: true }
+        }
+      }
       const pageInfo = isRecord(itemsNode.pageInfo) ? itemsNode.pageInfo : null
       hasNextPage = pageInfo !== null
         && pageInfo.hasNextPage === true
         && typeof pageInfo.endCursor === 'string'
         && pageInfo.endCursor.length > 0
+        && collected.length < maxProjectItems
       cursor = hasNextPage ? pageInfo.endCursor : null
     }
-    const items = collected.slice(0, maxProjectItems)
-    const total = totalCount === null ? items.length : totalCount
+    return { project, totalCount, items: collected, stopped: false }
+  }
+
+  /**
+   * One Project's items (contract §3.5) via paginated GraphQL, 100 nodes per
+   * page, stopping at `totalCount`/`maxProjectItems`.
+   */
+  async function projectItems(owner, number) {
+    const target = validateProjectRequest(owner, number)
+    const result = await paginateProjectItems(target)
+    const items = result.items.slice(0, maxProjectItems)
+    const total = result.totalCount === null ? items.length : result.totalCount
     return {
-      project: project ?? {
+      project: result.project ?? {
         owner: target.owner,
         ownerType: 'user',
         number: target.number,
@@ -843,6 +957,170 @@ export function createGh(options = {}) {
       },
       items,
       truncated: total > items.length,
+    }
+  }
+
+  /**
+   * Locate one Project item by predicate, paging the §3.5 items query and
+   * stopping as soon as a node matches. Returns the normalized item or `null`.
+   */
+  async function locateProjectItem(owner, number, predicate) {
+    const target = validateProjectRequest(owner, number)
+    let found = null
+    await paginateProjectItems(target, (item) => {
+      if (predicate(item) === true) {
+        found = item
+        return true
+      }
+      return false
+    })
+    return found
+  }
+
+  /**
+   * v1.1.0 (contract §3.2): resolve a content reference (`owner/name#N`) to
+   * its `ProjectV2Item` node, paging the same items query as §3.5.
+   * Not found → `item-not-found`.
+   */
+  async function findProjectItem(owner, number, repo, contentNumber) {
+    const parsedRepo = parseRepoParam(repo)
+    if (parsedRepo === null) throw new GhError('bad-request', 'repo 必须是 owner/name')
+    const content = toPositiveInt(contentNumber)
+    if (content === null) throw new GhError('bad-request', 'number 参数无效')
+    const wantedRepo = parsedRepo.repo.toLowerCase()
+    const item = await locateProjectItem(owner, number, candidate => (
+      typeof candidate.repo === 'string'
+      && candidate.repo.toLowerCase() === wantedRepo
+      && candidate.number === content
+    ))
+    if (item === null) {
+      throw new GhError('item-not-found', `Project 中没有 ${parsedRepo.repo}#${String(content)}`)
+    }
+    return item
+  }
+
+  /**
+   * v1.1.0: locate one item by its `ProjectV2Item` node id (the agent tool's
+   * direct `itemId` form), using the same paginated items read.
+   */
+  async function findProjectItemById(owner, number, itemId) {
+    const id = typeof itemId === 'string' ? itemId.trim() : ''
+    if (!id.startsWith('PVTI_') || id.length > 200) {
+      throw new GhError('bad-request', 'itemId 必须是 ProjectV2Item 节点 id（PVTI_ 开头）')
+    }
+    const item = await locateProjectItem(owner, number, candidate => candidate.id === id)
+    if (item === null) throw new GhError('item-not-found', `Project 中没有条目 ${id}`)
+    return item
+  }
+
+  /**
+   * One Project's write-side metadata (contract §3.2): Project node id plus
+   * the single-select `Status` field id/options, from ONE GraphQL read.
+   * A missing/unauthorized Project → `project-not-found`.
+   */
+  async function getProjectMeta(owner, number) {
+    const target = validateProjectRequest(owner, number)
+    const payload = await execGraphql(GRAPHQL_PROJECT_META_QUERY, {
+      owner: target.owner,
+      number: target.number,
+    })
+    const data = isRecord(payload.data) ? payload.data : null
+    const ownerNode = data !== null && isRecord(data.repositoryOwner) ? data.repositoryOwner : null
+    const projectNode = ownerNode !== null && isRecord(ownerNode.projectV2) ? ownerNode.projectV2 : null
+    if (projectNode === null) {
+      const tail = graphqlErrorTail(payload)
+      throw new GhError('project-not-found', `找不到该 Project（或无权访问）${tail === null ? '' : `：${tail}`}`)
+    }
+    const meta = normalizeProjectMeta(projectNode, { owner: target.owner, number: target.number })
+    if (meta.project.id === '') throw new GhError('gh-failed', 'GraphQL 响应缺少 Project id')
+    if (meta.statusField === null) {
+      throw new GhError('gh-failed', '该 Project 没有名为 Status 的单选字段，无法修改状态')
+    }
+    return meta
+  }
+
+  /**
+   * Classify one failed mutation (thrown by the runner or carried in a
+   * GraphQL `errors` array) into the contract write error codes (v1.1.0):
+   * `item-not-found` for a stale/deleted item id, `gh-auth` with the
+   * `gh auth refresh -s project` hint for missing scopes/permissions.
+   */
+  function asWriteError(error) {
+    const classified = classifyGhError(error)
+    const text = classified.message
+    if (NODE_NOT_FOUND_PATTERN.test(text)) {
+      return new GhError('item-not-found', '找不到该 Project 条目（或无权访问）')
+    }
+    if (classified.code === 'gh-auth') {
+      return new GhError('gh-auth', `${classified.message}；${PROJECT_SCOPE_HINT}`)
+    }
+    if (WRITE_SCOPE_PATTERN.test(text)) {
+      const tail = lastChars(text, 300)
+      return new GhError('gh-auth', `${PROJECT_SCOPE_HINT}（${tail}）`)
+    }
+    return classified
+  }
+
+  /**
+   * v1.1.0 (contract §3.2): the ONLY GitHub write. Moves one Project item's
+   * `Status` single-select value through `gh api graphql`
+   * (`updateProjectV2ItemFieldValue`; `optionId: null` clears the field via
+   * `clearProjectV2ItemFieldValue`). The adapter itself fetches the Project
+   * metadata the mutation needs, so callers only pass ids. Returns the applied
+   * `{ item: { id }, status: { optionId, name } }` (`name` null when cleared).
+   * Never reads tokens; scopes stay owned by `gh`.
+   */
+  async function updateItemStatus(input) {
+    const settings = isRecord(input) ? input : {}
+    const target = validateProjectRequest(settings.owner, settings.number)
+    const itemId = typeof settings.itemId === 'string' ? settings.itemId.trim() : ''
+    if (!itemId.startsWith('PVTI_') || itemId.length > 200) {
+      throw new GhError('bad-request', 'itemId 必须是 ProjectV2Item 节点 id（PVTI_ 开头）')
+    }
+    let optionId = null
+    if (settings.optionId !== null && settings.optionId !== undefined) {
+      if (typeof settings.optionId !== 'string' || settings.optionId.trim() === '') {
+        throw new GhError('bad-request', 'optionId 必须是非空字符串或 null')
+      }
+      optionId = settings.optionId.trim()
+    }
+    const meta = await getProjectMeta(target.owner, target.number)
+    const option = optionId === null
+      ? null
+      : meta.statusField.options.find(entry => entry.id === optionId) ?? null
+    if (optionId !== null && option === null) {
+      const valid = meta.statusField.options.map(entry => `${entry.id}=${entry.name}`).join(', ')
+      throw new GhError('bad-request', `未知的 Status 选项 id：${optionId}（可选：${valid}）`)
+    }
+    const variables = { projectId: meta.project.id, itemId, fieldId: meta.statusField.id }
+    let payload
+    try {
+      // Raw strings: all mutation variables are GraphQL String/ID values, and
+      // `-f` keeps an all-digit option id (Done `98236657`) a string.
+      payload = option === null
+        ? await execGraphql(GRAPHQL_CLEAR_ITEM_STATUS_MUTATION, variables, { rawStrings: true })
+        : await execGraphql(
+          GRAPHQL_UPDATE_ITEM_STATUS_MUTATION,
+          { ...variables, optionId: option.id },
+          { rawStrings: true },
+        )
+    } catch (error) {
+      throw asWriteError(error)
+    }
+    const graphqlError = firstGraphqlError(payload)
+    if (graphqlError !== null) throw asWriteError(new GhError('gh-failed', String(graphqlError.message)))
+    const data = isRecord(payload.data) ? payload.data : null
+    const mutated = data !== null && isRecord(data.updateProjectV2ItemFieldValue)
+      ? data.updateProjectV2ItemFieldValue
+      : data !== null && isRecord(data.clearProjectV2ItemFieldValue)
+        ? data.clearProjectV2ItemFieldValue
+        : null
+    if (mutated === null) throw new GhError('gh-failed', 'GraphQL 写入响应缺少 mutation 结果')
+    return {
+      item: { id: itemId },
+      status: option === null
+        ? { optionId: null, name: null }
+        : { optionId: option.id, name: option.name },
     }
   }
 
@@ -908,6 +1186,11 @@ export function createGh(options = {}) {
     projectItems,
     getIssue,
     resolveIssueRef,
+    // v1.1.0 write path (only reached through `allowWrites: true`).
+    getProjectMeta,
+    findProjectItem,
+    findProjectItemById,
+    updateItemStatus,
     maxComments,
     maxProjectItems,
     config: { ghCommand, timeoutMs, maxBuffer },

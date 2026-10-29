@@ -1,19 +1,24 @@
 /**
- * Host half of the `github-projects` DSH plugin (contract §3, v0.4.0).
+ * Host half of the `github-projects` DSH plugin (contract §3, v0.4.0; the
+ * v1.1.0 opt-in write path is described in §3.0/§3.1/§3.2/§3.4).
  *
  * One Cordis plugin that:
  * - registers a single prefix route `/plugin/github-projects` on the
  *   composition's `webServer` (owned by `ctx.effect`, removed on unload);
- * - serves the eight JSON endpoints of contract §3.1 from GraphQL/REST reads,
- *   with an SWR cache (fresh window + stale-serve window, single-flight,
- *   optional bounded disk snapshot) so a tab switch never blocks on GitHub
- *   once data exists (contract §3.5);
+ * - serves the JSON endpoints of contract §3.1 from GraphQL/REST reads, with
+ *   an SWR cache (fresh window + stale-serve window, single-flight, optional
+ *   bounded disk snapshot) so a tab switch never blocks on GitHub once data
+ *   exists (contract §3.5);
  * - registers three agent tools on `ctx.tools` so the model can bind / switch /
- *   unbind the current session's Issue (contract §3.4);
+ *   unbind the current session's Issue (contract §3.4), plus the v1.1.0
+ *   `github_project_item_status` write tool — only when `allowWrites` is true;
  * - persists workspace → Project and session → Issue bindings via `state.js`.
  *
- * It is read-only against GitHub, has no npm dependencies, never logs tokens
- * or issue bodies, and answers every failure as
+ * It is read-only against GitHub unless the operator opts in with
+ * `allowWrites: true` (default false). The only write is `POST /item-status`
+ * and its agent tool, both routed through `gh api graphql` (the `gh` CLI owns
+ * auth; this module never reads tokens). Reads never write. There are no npm
+ * dependencies, no token/body logging, and every failure answers
  * `{"error":{"code","message"}}` with a contract status code. The handler owns
  * the full `node:http` request/response; `webServer` matches the prefix and
  * passes the *unstripped* pathname, which this module tolerates either way.
@@ -69,16 +74,18 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['not-found', 404],
   ['issue-not-found', 404],
   ['project-not-found', 404],
+  ['item-not-found', 404],
   ['gh-missing', 503],
   ['gh-auth', 503],
   ['gh-failed', 502],
   ['timeout', 504],
+  ['writes-disabled', 403],
   ['state-write-failed', 500],
   ['internal', 500],
 ])
 
-const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/projects', '/items', '/issue'])
-const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue'])
+const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/projects', '/items', '/issue', '/project-meta'])
+const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
 const MALFORMED_PERCENT_PATTERN = /%(?![0-9a-fA-F]{2})/u
@@ -131,6 +138,9 @@ export function resolveConfig(raw) {
     // Legacy v0.1 key: `/config` no longer waits at all (contract §3.1 v0.4.0),
     // but the key stays accepted so existing profile patches keep loading.
     healthFirstReadTimeoutMs: boundedInt(config.healthFirstReadTimeoutMs, 0, 60_000, 3_000),
+    // v1.1.0 opt-in GitHub writes (contract §3.0): only an explicit `true`
+    // enables `POST /item-status`, the board write UI, and the write tool.
+    allowWrites: config.allowWrites === true,
     statePath,
     // Test seam: the same injectable runner `github.js` accepts.
     run: typeof config.run === 'function' ? config.run : undefined,
@@ -431,6 +441,23 @@ function createSwrCache({ cacheTtlMs, staleTtlMs, disk }) {
       const loaded = await loadNow(key, load)
       return { value: loaded.value, fetchedAt: loaded.fetchedAt, stale: false }
     },
+    /**
+     * Drop one cached read (v1.1.0: after a successful Status write, so the
+     * next `/items` re-reads from GitHub — contract §3.1). Best-effort disk
+     * snapshot update so a restart does not resurrect the stale value.
+     */
+    invalidate(key) {
+      const existed = entries.delete(key)
+      pending.delete(key)
+      if (existed) {
+        try {
+          void disk.save(entries)
+        } catch {
+          /* best-effort */
+        }
+      }
+      return existed
+    },
     /** Diagnostic helper: number of in-memory entries. */
     size() { return entries.size },
   }
@@ -607,6 +634,60 @@ const TOOL_REF_PARAMETERS = Object.freeze({
 
 const TOOL_EMPTY_PARAMETERS = Object.freeze({ type: 'object', additionalProperties: false, properties: {} })
 
+/** v1.1.0: one applied/previous Status value (`{optionId,name}`, nulls when cleared). */
+const TOOL_OPTION_VALUE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    optionId: {
+      oneOf: [{ type: 'string' }, { type: 'null' }],
+      description: 'Status single-select option id; null when the field is cleared.',
+    },
+    name: {
+      oneOf: [{ type: 'string' }, { type: 'null' }],
+      description: 'Status option name; null when the field is cleared.',
+    },
+  },
+  required: ['optionId', 'name'],
+})
+
+/** `{optionId,name} | null` (the previous Status value, or none). */
+const TOOL_PREVIOUS_OPTION_SCHEMA = Object.freeze({
+  oneOf: [TOOL_OPTION_VALUE_SCHEMA, { type: 'null' }],
+})
+
+/** v1.1.0: the moved item (`itemId` or content-reference form resolved). */
+const TOOL_STATUS_ITEM_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', description: 'ProjectV2Item node id ("PVTI_…").' },
+    repo: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Repository as owner/name; null for drafts.' },
+    number: { oneOf: [{ type: 'integer' }, { type: 'null' }], description: 'Issue/PR number; null for drafts.' },
+    title: { type: 'string', description: 'Item title.' },
+  },
+  required: ['id', 'repo', 'number', 'title'],
+})
+
+/** `github_project_item_status` parameters (contract §3.4). */
+const TOOL_ITEM_STATUS_PARAMETERS = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    itemId: {
+      type: 'string',
+      description: 'ProjectV2Item node id ("PVTI_…"). Supply this OR repo+number, never both.',
+    },
+    repo: { type: 'string', description: 'Issue/PR repository as "owner/name" (content-reference form).' },
+    number: { type: 'integer', description: 'Issue/PR number (content-reference form).' },
+    status: {
+      oneOf: [{ type: 'string' }, { type: 'null' }],
+      description: 'Target Status option name (case-insensitive), or null to clear the Status field (No status).',
+    },
+  },
+  required: ['status'],
+})
+
 /** One text block, the contract's `output.render` shape. */
 function toolText(text) {
   return [{ type: 'text', text }]
@@ -650,16 +731,106 @@ function refArgument(args) {
   return ref.trim()
 }
 
+/** `#240` (or the draft title) for `github_project_item_status` render output. */
+function shortItemLabel(item) {
+  const number = item !== null && typeof item === 'object' && Number.isInteger(item.number) ? item.number : null
+  if (number !== null) return `#${String(number)}`
+  const title = item !== null && typeof item === 'object' && typeof item.title === 'string' ? item.title.trim() : ''
+  return title.length > 60 ? `${title.slice(0, 60)}…` : title
+}
+
 /**
- * Build the three plain-JSON-Schema agent tool definitions (contract §3.4).
+ * The v1.1.0 tool's `status` argument: a non-empty option name (matched
+ * case-insensitively later) or `null` to clear the Status field.
+ */
+function itemStatusArgument(args) {
+  if (!isRecord(args)) throw toolFailure('bad-request', 'arguments must be a JSON object')
+  if (!Object.hasOwn(args, 'status')) {
+    throw toolFailure('bad-request', 'status must be provided: a Status option name, or null to clear it')
+  }
+  if (args.status === null) return null
+  if (typeof args.status !== 'string' || args.status.trim().length === 0) {
+    throw toolFailure('bad-request', 'status must be a non-empty Status option name or null')
+  }
+  return args.status.trim()
+}
+
+/**
+ * The v1.1.0 tool's item locator: exactly one of `{ itemId }` or
+ * `{ repo, number }` (contract §3.4).
+ */
+function itemLocatorArgument(args) {
+  if (!isRecord(args)) throw toolFailure('bad-request', 'arguments must be a JSON object')
+  const hasItemId = typeof args.itemId === 'string' && args.itemId.trim().length > 0
+  const hasRepo = args.repo !== undefined && args.repo !== null
+  const hasNumber = args.number !== undefined && args.number !== null
+  if (hasItemId && (hasRepo || hasNumber)) {
+    throw toolFailure('bad-request', 'provide either itemId or repo+number, not both')
+  }
+  if (hasRepo || hasNumber) {
+    if (!hasRepo || !hasNumber) throw toolFailure('bad-request', 'repo and number must be provided together')
+    const repo = parseRepoParam(args.repo)
+    if (repo === null) throw toolFailure('bad-request', `invalid repo: ${String(args.repo).slice(0, 120)} (expected owner/name)`)
+    const number = parsePositiveInt(args.number)
+    if (number === null) throw toolFailure('bad-request', `invalid number: ${String(args.number).slice(0, 32)}`)
+    return { kind: 'content', repo: repo.repo, number }
+  }
+  if (hasItemId) return { kind: 'id', itemId: args.itemId.trim() }
+  throw toolFailure('bad-request', 'provide the Project item as itemId, or as repo+number')
+}
+
+/**
+ * The Project bound to the calling session's workspace (v1.1.0 tool). A
+ * session or workspace without a binding is a clear `project-not-found` with
+ * the "bind a Project first" instruction.
+ */
+function sessionWorkspaceProject(store, sessionId) {
+  const session = store.getSession(sessionId)
+  const workspaceId = session !== null && typeof session === 'object' ? session.workspaceId : null
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    throw toolFailure('project-not-found', 'no Project bound: this session has no workspace; bind a Project first (请先为工作区绑定一个 Project)')
+  }
+  const workspace = store.getWorkspace(workspaceId)
+  const project = workspace !== null && typeof workspace === 'object' ? workspace.project : null
+  if (project === null
+    || typeof project !== 'object'
+    || typeof project.owner !== 'string'
+    || !Number.isInteger(project.number)
+    || project.number <= 0) {
+    throw toolFailure('project-not-found', 'no Project bound: the current workspace has no bound Project; bind a Project first (请先为当前工作区绑定一个 Project)')
+  }
+  return project
+}
+
+/** Re-classify adapter failures for the model-facing tool error text. */
+async function asToolCall(operation) {
+  try {
+    return await operation()
+  } catch (error) {
+    if (error instanceof GhError) {
+      throw new GhError(
+        error.code,
+        error.message.startsWith(`${error.code}: `) ? error.message : `${error.code}: ${error.message}`,
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * Build the plain-JSON-Schema agent tool definitions (contract §3.4).
  *
  * No `@deepseek-ai/*` import: the raw
  * `{ name, description, parameters, output: { schema, render }, execute }`
  * shape is what `ctx.tools.register` accepts. Tools only address the calling
- * session (`exec.agent.session.id`), only write the local binding store, and
- * never write to GitHub.
+ * session (`exec.agent.session.id`); the three Issue tools only write the local
+ * binding store and never write to GitHub.
+ *
+ * The fourth tool, `github_project_item_status` (v1.1.0), is appended **only**
+ * when `allowWrites` is true: on the default read-only host it is not
+ * registered at all, so no code path can call a mutation.
  */
-export function createAgentToolDefinitions({ gh, store }) {
+export function createAgentToolDefinitions({ gh, store, allowWrites = false }) {
   async function resolveSummary(ref) {
     const parsed = parseIssueRef(ref)
     if (parsed === null) throw toolFailure('bad-request', `invalid issue reference: ${ref.slice(0, 120)}`)
@@ -672,7 +843,7 @@ export function createAgentToolDefinitions({ gh, store }) {
     }
   }
 
-  return [
+  const definitions = [
     {
       name: 'github_issue_bind',
       description: 'Bind a GitHub Issue to the CURRENT session so the session shows its issue subtitle and the issue tab. Refuses when the session already has a bound Issue (use github_issue_switch to replace it). Read-only against GitHub.',
@@ -759,13 +930,85 @@ export function createAgentToolDefinitions({ gh, store }) {
       },
     },
   ]
+
+  if (allowWrites === true) {
+    definitions.push({
+      name: 'github_project_item_status',
+      description: 'Move ONE item of the CURRENT session workspace-bound GitHub Project to another Status option (or clear the Status field with status: null). Requires allowWrites on the host; updates only the Project item Status single-select field, never the Issue itself.',
+      parameters: TOOL_ITEM_STATUS_PARAMETERS,
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            moved: { type: 'boolean', const: true },
+            item: TOOL_STATUS_ITEM_SCHEMA,
+            previous: TOOL_PREVIOUS_OPTION_SCHEMA,
+            status: TOOL_OPTION_VALUE_SCHEMA,
+          },
+          required: ['moved', 'item', 'previous', 'status'],
+        },
+        render: (_args, value) => toolText(
+          value.status === null || value.status.name === null
+            ? `已把 ${shortItemLabel(value.item)} 的状态清除（No status）`
+            : `已把 ${shortItemLabel(value.item)} 移到 ${value.status.name}`,
+        ),
+      },
+      async execute(args, exec) {
+        const sessionId = sessionIdOf(exec)
+        const desiredStatus = itemStatusArgument(args)
+        const locator = itemLocatorArgument(args)
+        const project = sessionWorkspaceProject(store, sessionId)
+        return asToolCall(async () => {
+          const meta = await gh.getProjectMeta(project.owner, project.number)
+          let targetOption = null
+          if (desiredStatus !== null) {
+            const wanted = desiredStatus.toLowerCase()
+            targetOption = meta.statusField.options.find(
+              option => typeof option.name === 'string' && option.name.trim().toLowerCase() === wanted,
+            ) ?? null
+            if (targetOption === null) {
+              const valid = meta.statusField.options.map(option => option.name).join(', ')
+              throw toolFailure('bad-request', `unknown status "${desiredStatus}"; valid statuses: ${valid}`)
+            }
+          }
+          const item = locator.kind === 'content'
+            ? await gh.findProjectItem(project.owner, project.number, locator.repo, locator.number)
+            : await gh.findProjectItemById(project.owner, project.number, locator.itemId)
+          const previousName = typeof item.status === 'string' && item.status.length > 0 ? item.status : null
+          const previousOption = previousName === null
+            ? null
+            : meta.statusField.options.find(
+              option => typeof option.name === 'string' && option.name.trim().toLowerCase() === previousName.toLowerCase(),
+            ) ?? null
+          const applied = await gh.updateItemStatus({
+            owner: project.owner,
+            number: project.number,
+            itemId: item.id,
+            optionId: targetOption === null ? null : targetOption.id,
+          })
+          return {
+            moved: true,
+            item: { id: item.id, repo: item.repo, number: item.number, title: item.title },
+            previous: previousName === null
+              ? null
+              : { optionId: previousOption === null ? null : previousOption.id, name: previousName },
+            status: applied.status,
+          }
+        })
+      },
+    })
+  }
+
+  return definitions
 }
 
 /* ------------------------------------------------------------------ */
 /* 6. The HTTP API.                                                    */
 /* ------------------------------------------------------------------ */
 
-function createApi({ gh, store, cache, health, logFault }) {
+function createApi({ gh, store, cache, health, logFault, writesAllowed = false }) {
+  const writesAllowedNow = writesAllowed === true
   const iso = (timestamp) => new Date(timestamp).toISOString()
 
   /* ---- GET handlers (read-only; no GitHub writes) ---- */
@@ -781,7 +1024,9 @@ function createApi({ gh, store, cache, health, logFault }) {
     const session = storedSession === null
       ? { sessionId: sessionId ?? '', issue: null, workspaceId: workspaceId ?? null }
       : { ...storedSession, workspaceId: storedSession.workspaceId ?? workspaceId ?? null }
-    return { gh: ghHealth, workspace, session }
+    // v1.1.0: the client chooses read-only vs write UI from this flag; the
+    // host's own write gate uses the same resolved `allowWrites` (contract §3.0).
+    return { gh: ghHealth, workspace, session, writes: { allowed: writesAllowedNow } }
   }
 
   /**
@@ -845,6 +1090,30 @@ function createApi({ gh, store, cache, health, logFault }) {
       items: record.value.items,
       fetchedAt: iso(record.fetchedAt),
       truncated: record.value.truncated === true,
+      stale: record.stale === true,
+    }
+  }
+
+  /**
+   * `GET /project-meta` (v1.1.0, contract §3.1): write-side metadata for one
+   * Project — Project node id, `Status` field id and its option ids/names.
+   * A READ (never writes), available regardless of `allowWrites`, served from
+   * the SWR cache under `project-meta:<owner>/<number>`.
+   */
+  async function readProjectMeta(query) {
+    const owner = parseOwnerParam(query.get('owner'))
+    if (owner === null) throw badRequest('owner 参数无效')
+    const number = parsePositiveInt(query.get('number'))
+    if (number === null) throw badRequest('number 参数无效')
+    const record = await cache.get(
+      `project-meta:${owner}/${number}`,
+      isRefresh(query.get('refresh')),
+      () => gh.getProjectMeta(owner, number),
+    )
+    return {
+      project: record.value.project,
+      statusField: record.value.statusField,
+      fetchedAt: iso(record.fetchedAt),
       stale: record.stale === true,
     }
   }
@@ -931,6 +1200,42 @@ function createApi({ gh, store, cache, health, logFault }) {
     return { ok: true }
   }
 
+  /**
+   * `POST /item-status` (v1.1.0, contract §3.1) — the ONLY GitHub write.
+   * Dispatch already refused the request with `writes-disabled` (403) when
+   * `allowWrites` is false, so this handler is unreachable in read-only mode.
+   * `optionId: null` clears the Status field (No status); a non-null id must be
+   * one of the Project's Status option ids. On success the `items:` SWR entry
+   * is invalidated so the next `/items` re-reads from GitHub.
+   */
+  async function itemStatusRequest(body) {
+    const owner = parseOwnerParam(body.owner)
+    if (owner === null) throw badRequest('owner 参数无效')
+    const number = parsePositiveInt(body.number)
+    if (number === null) throw badRequest('number 参数无效')
+    const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : ''
+    if (!itemId.startsWith('PVTI_') || itemId.length > 200) {
+      throw badRequest('itemId 必须是 ProjectV2Item 节点 id（PVTI_ 开头）')
+    }
+    if (!Object.hasOwn(body, 'optionId')) {
+      throw badRequest('缺少 optionId（清除 Status 请显式传 null）')
+    }
+    let optionId = null
+    if (body.optionId !== null) {
+      if (typeof body.optionId !== 'string' || body.optionId.trim().length === 0) {
+        throw badRequest('optionId 必须是非空字符串或 null')
+      }
+      optionId = body.optionId.trim()
+    }
+    const applied = await gh.updateItemStatus({ owner, number, itemId, optionId })
+    cache.invalidate(`items:${owner}/${number}`)
+    return {
+      item: { id: itemId },
+      status: applied.status,
+      fetchedAt: new Date().toISOString(),
+    }
+  }
+
   /* ---- dispatch ---- */
 
   async function dispatch(req, res) {
@@ -953,16 +1258,23 @@ function createApi({ gh, store, cache, health, logFault }) {
       if (path === '/bindings') return sendJson(res, 200, readBindings())
       if (path === '/projects') return sendJson(res, 200, await readProjects(query))
       if (path === '/items') return sendJson(res, 200, await readItems(query))
+      if (path === '/project-meta') return sendJson(res, 200, await readProjectMeta(query))
       return sendJson(res, 200, await readIssue(query))
     }
 
     if (method === 'POST') {
       if (!POST_ROUTES.has(path)) throw new HttpError(404, 'not-found', `未知接口: POST ${path}`)
       checkOrigin(req)
+      // v1.1.0 write gate (contract §3.1): refuse before reading the body, so a
+      // read-only host never touches a mutation path.
+      if (path === '/item-status' && writesAllowedNow !== true) {
+        throw new HttpError(403, 'writes-disabled', '写操作未启用：请在插件配置中设置 allowWrites: true 后再试')
+      }
       const body = await readJsonBody(req)
       if (path === '/bind-workspace') return sendJson(res, 200, await bindWorkspaceRequest(body))
       if (path === '/unbind-workspace') return sendJson(res, 200, await unbindWorkspaceRequest(body))
       if (path === '/bind-issue') return sendJson(res, 200, await bindIssueRequest(body))
+      if (path === '/item-status') return sendJson(res, 200, await itemStatusRequest(body))
       return sendJson(res, 200, await unbindIssueRequest(body))
     }
 
@@ -1016,13 +1328,14 @@ export function apply(ctx, config) {
     if (typeof logger?.warn !== 'function') return
     logger.warn(error instanceof Error ? error : new Error(String(error)))
   }
-  const api = createApi({ gh, store, cache, health, logFault })
+  const api = createApi({ gh, store, cache, health, logFault, writesAllowed: settings.allowWrites })
 
   // Agent tools (contract §3.4): effect-owned registrations on the `tools`
-  // service, so unloading the plugin removes them.
+  // service, so unloading the plugin removes them. The v1.1.0 write tool is
+  // registered only when `allowWrites` is true.
   const tools = serviceOf(ctx, 'tools')
   if (tools !== undefined && tools !== null && typeof tools.register === 'function') {
-    for (const definition of createAgentToolDefinitions({ gh, store })) {
+    for (const definition of createAgentToolDefinitions({ gh, store, allowWrites: settings.allowWrites })) {
       ctx.effect(() => tools.register(definition), `github-projects: tool ${definition.name}`)
     }
   }
