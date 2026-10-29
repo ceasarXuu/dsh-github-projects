@@ -38,3 +38,7 @@
         # Durable binding file; null resolves to
         # $DSH_HOME/plugin-data/github-projects/state.json
         statePath: null
+        # Opt-in GitHub writes (v1.1.0): board drag / move menu and the
+        # `github_project_item_status` agent tool update a Project item's
+        # Status field. Requires the `project` scope on the `gh` token.
+        allowWrites: false

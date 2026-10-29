@@ -10,8 +10,10 @@
 //
 // Only `react` / `react-dom` from the platform module table are required. The
 // HTTP contract lives in the host half (`/plugin/github-projects`, see
-// docs/CONTRACT.md §3.1). Everything is read-only against GitHub; the only
-// writes are the durable bindings.
+// docs/CONTRACT.md §3.1). GitHub is read-only except for the durable bindings
+// and — only when `GET /config` answers `writes.allowed === true` — the opt-in
+// Project item Status write (`POST /item-status`, §4.8): drag between canonical
+// lanes or the per-card `移动到` menu, optimistically applied, host answer wins.
 window.__ModuleLoader__.load({
   id: '@ceasarxuu/dsh-github-projects',
   factory(require) {
@@ -150,6 +152,7 @@ window.__ModuleLoader__.load({
     function projectsCacheKey() { return 'projects' }
     function itemsCacheKey(owner, number) { return `items:${owner}/${number}` }
     function issueCacheKey(repo, number) { return `issue:${repo}#${number}` }
+    function projectMetaCacheKey(owner, number) { return `project-meta:${owner}/${number}` }
 
     function configRequestPath(sessionId, workspaceId) {
       return `/config${queryString({ sessionId, workspaceId })}`
@@ -157,6 +160,19 @@ window.__ModuleLoader__.load({
 
     function itemsRequestPath(owner, number, refresh) {
       return `/items${queryString({ owner, number, refresh: refresh === true ? 1 : undefined })}`
+    }
+
+    /**
+     * Write-side metadata read (v1.1.0, CONTRACT §3.1/§4.8). It is a read, but
+     * the client only ever calls it when `/config.writes.allowed === true`.
+     */
+    function projectMetaRequestPath(owner, number, refresh) {
+      return `/project-meta${queryString({ owner, number, refresh: refresh === true ? 1 : undefined })}`
+    }
+
+    /** True only when the host config explicitly allows GitHub writes. */
+    function writesAllowedOf(config) {
+      return isPlainObject(config) && isPlainObject(config.writes) && config.writes.allowed === true
     }
 
     function issueRequestPath(repo, number, refresh) {
@@ -201,6 +217,30 @@ window.__ModuleLoader__.load({
         responseCache.set(configCacheKey(sessionId, workspaceId), data)
         return data
       })
+    }
+
+    /**
+     * Fold one authoritative Status write result into the cached `/items`
+     * payload so a remount paints the moved card in its new lane immediately.
+     * The live view keeps its own optimistic override; the host has already
+     * invalidated its server-side cache, so the next read is authoritative.
+     */
+    function patchItemsCacheStatus(owner, number, itemId, status) {
+      if (typeof owner !== 'string' || owner === '') return
+      if (!isPositiveInteger(number) || typeof itemId !== 'string' || itemId === '') return
+      const key = itemsCacheKey(owner, number)
+      const data = cachedResponseOf(key)
+      if (!isPlainObject(data) || !Array.isArray(data.items)) return
+      const nextStatus = typeof status === 'string' && status !== '' ? status : null
+      let changed = false
+      const items = data.items.map((item) => {
+        if (!isPlainObject(item) || itemIdentity(item) !== itemId) return item
+        const currentStatus = typeof item.status === 'string' && item.status !== '' ? item.status : null
+        if (currentStatus === nextStatus) return item
+        changed = true
+        return { ...item, status: nextStatus }
+      })
+      if (changed) responseCache.set(key, { ...data, items })
     }
 
     /** Remember the workspace→Project mapping so items can start before config. */
@@ -519,6 +559,17 @@ window.__ModuleLoader__.load({
       'projects.loadFailed': '读取 Project 条目失败',
       'projects.bindFailed': '绑定 Project 失败',
 
+      'board.readOnlyHint': '只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。',
+      'board.moveTo': '移动到',
+      'board.moveToAria': '移动「{title}」到其他 Status',
+      'board.moveMenuAria': '选择目标 Status',
+      'board.noStatus': 'No status',
+      'board.statusUpdated': '已更新为「{status}」',
+      'board.statusUpdateFailed': '更新 Status 失败',
+      'board.undo': '撤销',
+      'board.undoAria': '撤销上一步 Status 修改',
+      'board.scopeHint': '写操作需要 project 权限，请运行 gh auth refresh -s project。',
+
       'issue.unboundTitle': '为当前会话绑定 Issue',
       'issue.unboundText': '绑定后，这个页签会直接显示该 Issue 的标题、正文、标签与评论。',
       'issue.unboundAction': '从项目选择',
@@ -635,6 +686,17 @@ window.__ModuleLoader__.load({
       'projects.bindIssueAria': 'Bind Issue: {title}',
       'projects.loadFailed': 'Failed to load Project items',
       'projects.bindFailed': 'Failed to bind the Project',
+
+      'board.readOnlyHint': 'Read-only board: enable allowWrites to drag cards and change their Status.',
+      'board.moveTo': 'Move to',
+      'board.moveToAria': 'Move “{title}” to another Status',
+      'board.moveMenuAria': 'Choose the target Status',
+      'board.noStatus': 'No status',
+      'board.statusUpdated': 'Moved to “{status}”',
+      'board.statusUpdateFailed': 'Failed to update the Status',
+      'board.undo': 'Undo',
+      'board.undoAria': 'Undo the last Status change',
+      'board.scopeHint': 'Writing needs the project scope; run gh auth refresh -s project.',
 
       'issue.unboundTitle': 'Bind an Issue to this session',
       'issue.unboundText': 'Once bound, this tab shows the Issue title, body, labels and comments directly.',
@@ -922,6 +984,67 @@ window.__ModuleLoader__.load({
         columns.push({ key, label: key.replace(/^other:/u, ''), items: buckets.get(key) ?? [] })
       }
       return { columns, hiddenLanes }
+    }
+
+    /* ---- v1.1.0 Status writes (CONTRACT §4.8): lane ↔ Status option bridge. -- */
+
+    /** Canonical lane key → case-insensitive Status option name. */
+    const STATUS_LANE_OPTION_NAMES = {
+      todo: 'todo',
+      'in-progress': 'in progress',
+      'in-review': 'in review',
+      done: 'done',
+    }
+    /** Canonical lanes that accept a drop (`other:*` lanes never do). */
+    const STATUS_WRITE_LANES = ['no-status', 'todo', 'in-progress', 'in-review', 'done']
+    const STATUS_WRITE_LANE_SET = new Set(STATUS_WRITE_LANES)
+
+    function normalizeStatusName(value) {
+      return textOf(value).trim().toLowerCase()
+    }
+
+    /**
+     * `{ optionId, name }` for one canonical lane. `No status` clears the field
+     * (`optionId: null`); `null` means the Project's Status field has no matching
+     * option, so this lane cannot be written to.
+     */
+    function statusOptionForLane(laneKey, statusOptions) {
+      if (laneKey === 'no-status') return { optionId: null, name: null }
+      const wanted = STATUS_LANE_OPTION_NAMES[laneKey]
+      if (wanted === undefined) return null
+      for (const option of asArray(statusOptions)) {
+        if (!isPlainObject(option) || typeof option.optionId !== 'string') continue
+        if (normalizeStatusName(option.name) === wanted) {
+          return { optionId: option.optionId, name: textOf(option.name) }
+        }
+      }
+      return null
+    }
+
+    /**
+     * Resolve a Status display name back to its option id (undo / rollback).
+     * `null` clears the field, `undefined` means "not a known option".
+     */
+    function statusOptionIdForName(statusName, statusOptions) {
+      const raw = textOf(statusName).trim()
+      if (raw === '') return null
+      const wanted = raw.toLowerCase()
+      for (const option of asArray(statusOptions)) {
+        if (!isPlainObject(option) || typeof option.optionId !== 'string') continue
+        if (normalizeStatusName(option.name) === wanted) return option.optionId
+      }
+      return undefined
+    }
+
+    /** `/project-meta` payload → `[{optionId, name}]`; malformed rows are dropped. */
+    function statusOptionsOf(projectMeta) {
+      if (!isPlainObject(projectMeta) || !isPlainObject(projectMeta.statusField)) return null
+      const options = []
+      for (const option of asArray(projectMeta.statusField.options)) {
+        if (!isPlainObject(option) || typeof option.id !== 'string' || option.id === '') continue
+        options.push({ optionId: option.id, name: textOf(option.name) || option.id })
+      }
+      return options
     }
 
     /** v0.3.0 status accents (contract §4.2.0). Tints are derived in CSS with
@@ -2409,7 +2532,190 @@ window.__ModuleLoader__.load({
           : null)
     }
 
-    function BoardCard({ t, item, boundIssue, bindingId, onBind }) {
+    /* ---- v1.1.0 write UI (§4.8): move menu + result toast. ---------------- */
+
+    const MOVE_MENU_WIDTH = 208
+    const MOVE_MENU_ITEM_HEIGHT = 30
+
+    /**
+     * Per-card `移动到` menu. The popover is portal'd to `document.body` so the
+     * lane body's `overflow-y` can never clip it (the primary write path in the
+     * narrow right sidebar). Enter/Space opens (native button), Arrow/Home/End
+     * roam the options, Enter applies (native button), Esc closes.
+     */
+    function BoardCardMoveMenu({ t, title, options, currentStatus, onSelect }) {
+      const [open, setOpen] = useState(false)
+      const [position, setPosition] = useState(null)
+      const triggerRef = useRef(null)
+      const menuRef = useRef(null)
+      const entries = asArray(options)
+      const current = normalizeStatusName(currentStatus)
+
+      const openMenu = useCallback(() => {
+        const trigger = triggerRef.current
+        if (trigger === null || trigger === undefined) return
+        const rect = trigger.getBoundingClientRect()
+        const estimatedHeight = Math.min(320, Math.max(1, entries.length) * MOVE_MENU_ITEM_HEIGHT + 14)
+        const viewportWidth = window.innerWidth || 1280
+        const viewportHeight = window.innerHeight || 800
+        const below = rect.bottom + 6
+        const top = below + estimatedHeight > viewportHeight - 8
+          ? Math.max(8, rect.top - estimatedHeight - 6)
+          : below
+        const left = Math.max(8, Math.min(rect.left, viewportWidth - MOVE_MENU_WIDTH - 8))
+        setPosition({ top, left })
+        setOpen(true)
+      }, [entries.length])
+
+      useEffect(() => {
+        if (!open) return undefined
+        const menu = menuRef.current
+        const first = menu === null || menu === undefined ? null : menu.querySelector('[data-ghp-move-option]')
+        if (first !== null && typeof first.focus === 'function') first.focus()
+        const onPointerDown = (event) => {
+          const target = event.target
+          if (!(target instanceof Node)) return
+          if (menu !== null && menu !== undefined && menu.contains(target)) return
+          const trigger = triggerRef.current
+          if (trigger !== null && trigger !== undefined && trigger.contains(target)) return
+          setOpen(false)
+        }
+        const onResize = () => setOpen(false)
+        document.addEventListener('pointerdown', onPointerDown, true)
+        window.addEventListener('resize', onResize)
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true)
+          window.removeEventListener('resize', onResize)
+        }
+      }, [open])
+
+      const onMenuKeyDown = (event) => {
+        const menu = menuRef.current
+        if (menu === null || menu === undefined) return
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          setOpen(false)
+          const trigger = triggerRef.current
+          if (trigger !== null && trigger !== undefined && typeof trigger.focus === 'function') trigger.focus()
+          return
+        }
+        if (event.key === 'Tab') {
+          setOpen(false)
+          return
+        }
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+        const items = Array.from(menu.querySelectorAll('[data-ghp-move-option]'))
+        if (items.length === 0) return
+        event.preventDefault()
+        const index = items.indexOf(document.activeElement)
+        let next
+        if (event.key === 'Home') next = 0
+        else if (event.key === 'End') next = items.length - 1
+        else if (event.key === 'ArrowDown') next = index < 0 ? 0 : (index + 1) % items.length
+        else next = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length
+        items[next].focus()
+      }
+
+      const menuNode = open && position !== null
+        ? ReactDOM.createPortal(
+          h('div', {
+            ref: menuRef,
+            className: 'ghp-move-menu',
+            'data-ghp-move-menu': '',
+            role: 'menu',
+            'aria-label': t('board.moveMenuAria'),
+            style: {
+              position: 'fixed',
+              top: `${position.top}px`,
+              left: `${position.left}px`,
+              width: `${MOVE_MENU_WIDTH}px`,
+            },
+            onKeyDown: onMenuKeyDown,
+          },
+          entries.map((option) => {
+            const isClear = option.optionId === null
+            const label = isClear ? t('board.noStatus') : textOf(option.name)
+            const active = isClear ? current === '' : (current !== '' && normalizeStatusName(option.name) === current)
+            return h('button', {
+              key: isClear ? 'clear' : option.optionId,
+              type: 'button',
+              role: 'menuitemradio',
+              'aria-checked': active ? 'true' : 'false',
+              className: `ghp-move-option${active ? ' ghp-move-option-active' : ''}`,
+              'data-ghp-move-option': isClear ? 'clear' : option.optionId,
+              'data-active': active ? 'true' : undefined,
+              title: label,
+              onClick: () => {
+                setOpen(false)
+                onSelect(option)
+              },
+            },
+            h('span', {
+              className: 'ghp-move-option-dot',
+              style: { '--ghp-lane-accent': laneAccentOf(boardColumnKeyOf({ status: isClear ? null : option.name })) },
+              'aria-hidden': true,
+            }),
+            h('span', { className: 'ghp-move-option-label' }, label),
+            active ? h('span', { className: 'ghp-move-option-check', 'aria-hidden': true }, h(IconCheck, { size: 13 })) : null)
+          })),
+          document.body,
+        )
+        : null
+
+      return h('div', { className: 'ghp-move' },
+        h('button', {
+          ref: triggerRef,
+          type: 'button',
+          className: `ghp-board-card-move${open ? ' ghp-board-card-move-open' : ''}`,
+          'data-ghp-card-action': 'move',
+          'aria-haspopup': 'menu',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-label': t('board.moveToAria', { title }),
+          title: t('board.moveTo'),
+          onClick: () => { if (open) setOpen(false); else openMenu() },
+        },
+        h('span', { className: 'ghp-board-card-move-label' }, t('board.moveTo')),
+        h('span', { className: 'ghp-btn-icon', 'aria-hidden': true }, h(IconChevronDown, { size: 12 }))),
+        menuNode)
+    }
+
+    /** Transient write result: success + Undo, or a rollback failure message. */
+    function StatusToast({ t, toast, onUndo, onDismiss }) {
+      if (!isPlainObject(toast)) return null
+      const tone = toast.tone === 'error' ? 'error' : 'success'
+      const undo = isPlainObject(toast.undo) ? toast.undo : null
+      return ReactDOM.createPortal(
+        h('div', {
+          className: `ghp-toast ghp-toast-${tone}`,
+          'data-ghp-toast': tone,
+          role: tone === 'error' ? 'alert' : 'status',
+          'aria-live': tone === 'error' ? 'assertive' : 'polite',
+        },
+        h('span', { className: 'ghp-toast-dot', 'aria-hidden': true }),
+        h('span', { className: 'ghp-toast-text' }, toast.message),
+        undo === null
+          ? null
+          : h('button', {
+            type: 'button',
+            className: 'ghp-toast-undo',
+            'data-ghp-toast-action': 'undo',
+            'aria-label': t('board.undoAria'),
+            title: t('board.undoAria'),
+            onClick: onUndo,
+          }, t('board.undo')),
+        h('button', {
+          type: 'button',
+          className: 'ghp-toast-close',
+          'aria-label': t('common.close'),
+          title: t('common.close'),
+          onClick: onDismiss,
+        }, h(IconClose, { size: 13 }))),
+        document.body,
+      )
+    }
+
+    function BoardCard({ t, item, boundIssue, bindingId, onBind, drag = null, move = null }) {
       const type = item.type === 'pr' || item.type === 'draft' ? item.type : 'issue'
       const repo = textOf(item.repo)
       const hasNumber = typeof item.number === 'number' && Number.isFinite(item.number)
@@ -2469,62 +2775,127 @@ window.__ModuleLoader__.load({
           onClick: () => openGithubUrl(item.url),
         }, ...content)
       const bindAction = isIssue
-        ? h('div', { className: 'ghp-board-card-actions' },
-          h('button', {
-            type: 'button',
-            className: `ghp-board-card-bind${isBound ? ' ghp-board-card-bind-active' : ''}`,
-            'data-ghp-card-action': 'bind',
-            'aria-pressed': isBound ? 'true' : 'false',
-            disabled: binding,
-            'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
-            onClick: (event) => {
-              if (event !== undefined && typeof event.stopPropagation === 'function') event.stopPropagation()
-              onBind(item)
-            },
+        ? h('button', {
+          type: 'button',
+          className: `ghp-board-card-bind${isBound ? ' ghp-board-card-bind-active' : ''}`,
+          'data-ghp-card-action': 'bind',
+          'aria-pressed': isBound ? 'true' : 'false',
+          disabled: binding,
+          'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
+          onClick: (event) => {
+            if (event !== undefined && typeof event.stopPropagation === 'function') event.stopPropagation()
+            onBind(item)
           },
-          binding ? h(Spinner, { size: 11 }) : null,
-          isBound ? t('common.bound') : t('common.bind')))
+        },
+        binding ? h(Spinner, { size: 11 }) : null,
+        isBound ? t('common.bound') : t('common.bind'))
         : null
-      return h('div', {
-        className: `ghp-board-card${isBound ? ' ghp-board-card-bound' : ''}${binding ? ' ghp-board-card-busy' : ''}`,
+      // v1.1.0 (§4.8): write UI only exists when `/config` allows writes; the
+      // read-only board renders neither the grip, the move action nor the menu.
+      const actions = []
+      if (drag !== null) {
+        actions.push(h('span', {
+          key: 'grip',
+          className: 'ghp-board-card-grip',
+          'data-ghp-drag-handle': '',
+          'aria-hidden': true,
+        }))
+      }
+      if (move !== null) {
+        actions.push(h(BoardCardMoveMenu, {
+          key: 'move',
+          t,
+          title: textOf(item.title),
+          options: move.options,
+          currentStatus: move.currentStatus,
+          onSelect: move.onSelect,
+        }))
+      }
+      if (bindAction !== null) actions.push(bindAction)
+      const actionRow = actions.length === 0 ? null : h('div', { className: 'ghp-board-card-actions' }, ...actions)
+      const cardProps = {
+        className: `ghp-board-card${isBound ? ' ghp-board-card-bound' : ''}${binding ? ' ghp-board-card-busy' : ''}${drag === null ? '' : ' ghp-board-card-draggable'}`,
         'data-ghp-card': '',
+        'data-ghp-card-id': itemIdentity(item),
         'aria-busy': binding ? 'true' : undefined,
         ...(isIssue ? { 'data-issue': `${repo}#${item.number}` } : {}),
-      }, body, bindAction)
+      }
+      if (drag !== null) {
+        cardProps.draggable = 'true'
+        cardProps.onDragStart = drag.onDragStart
+        cardProps.onDragEnd = drag.onDragEnd
+      }
+      return h('div', cardProps, body, actionRow)
     }
 
-    function BoardView({ t, columns, hiddenLanes, sessionIssue, bindingId, onBind }) {
+    function BoardView({ t, columns, hiddenLanes, sessionIssue, bindingId, onBind, write = null }) {
       return h('div', {
         className: 'ghp-board',
         'data-ghp-board': '',
         'data-ghp-hidden-lanes': asArray(hiddenLanes).join(','),
       },
-      columns.map((column) => h('section', {
-        key: column.key,
-        className: 'ghp-board-column',
-        style: { '--ghp-lane-accent': laneAccentOf(column.key) },
-        'data-ghp-column': column.key,
-        'data-ghp-count': String(column.items.length),
-        'aria-label': `${column.label} (${column.items.length})`,
-      },
-      h('header', { className: 'ghp-board-column-head' },
-        h('span', { className: 'ghp-lane-dot', 'aria-hidden': true }),
-        h('span', { className: 'ghp-board-column-title' }, column.label),
-        h('span', { className: 'ghp-lane-count' }, String(column.items.length))),
-        h('div', { className: 'ghp-board-column-body' },
-          column.items.length === 0
-            ? h('div', { className: 'ghp-board-empty' }, t('projects.board.emptyColumn'))
-            : column.items.map((item) => h(BoardCard, {
-              key: itemIdentity(item),
-              t,
-              item,
-              boundIssue: sessionIssue,
-              bindingId,
-              onBind,
-            }))))))
+      columns.map((column) => {
+        // v1.1.0 (§4.8): only canonical Status lanes are drop targets, and only
+        // in allowed mode; `other:*` lanes stay read-only.
+        const droppable = write !== null && write.dropTargets.has(column.key)
+        const dragging = droppable && write.dragOverLane === column.key
+        const sectionProps = {
+          key: column.key,
+          className: `ghp-board-column${droppable ? ' ghp-board-column-drop' : ''}${dragging ? ' ghp-board-column-dragover' : ''}`,
+          style: { '--ghp-lane-accent': laneAccentOf(column.key) },
+          'data-ghp-column': column.key,
+          'data-ghp-lane': '',
+          'data-ghp-lane-key': column.key,
+          'data-ghp-count': String(column.items.length),
+          'aria-label': `${column.label} (${column.items.length})`,
+        }
+        if (droppable) {
+          sectionProps['data-ghp-lane-drop'] = '1'
+          sectionProps.onDragEnter = (event) => { write.onDragEnter(column.key, event) }
+          sectionProps.onDragOver = (event) => {
+            event.preventDefault()
+            if (event.dataTransfer !== null && event.dataTransfer !== undefined) event.dataTransfer.dropEffect = 'move'
+            write.onDragOver(column.key, event)
+          }
+          sectionProps.onDragLeave = (event) => { write.onDragLeave(column.key, event) }
+          sectionProps.onDrop = (event) => {
+            event.preventDefault()
+            write.onDrop(column.key, event)
+          }
+        }
+        return h('section', sectionProps,
+          h('header', { className: 'ghp-board-column-head' },
+            h('span', { className: 'ghp-lane-dot', 'aria-hidden': true }),
+            h('span', { className: 'ghp-board-column-title' }, column.label),
+            h('span', { className: 'ghp-lane-count' }, String(column.items.length))),
+          h('div', { className: 'ghp-board-column-body' },
+            column.items.length === 0
+              ? h('div', { className: 'ghp-board-empty' }, t('projects.board.emptyColumn'))
+              : column.items.map((item) => h(BoardCard, {
+                key: itemIdentity(item),
+                t,
+                item,
+                boundIssue: sessionIssue,
+                bindingId,
+                onBind,
+                drag: write === null
+                  ? null
+                  : {
+                    onDragStart: (event) => write.onCardDragStart(item, event),
+                    onDragEnd: () => write.onCardDragEnd(item),
+                  },
+                move: write === null || write.metaReady !== true
+                  ? null
+                  : {
+                    options: write.moveOptions,
+                    currentStatus: textOf(item.status).trim() === '' ? null : textOf(item.status).trim(),
+                    onSelect: (option) => write.onSelect(item, option),
+                  },
+              }))))
+      }))
     }
 
-    function ProjectToolbar({ t, project, itemCount, refreshing, updating, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding }) {
+    function ProjectToolbar({ t, project, itemCount, refreshing, updating, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding, readOnly = false }) {
       const title = textOf(project.title) || `${textOf(project.owner)} #${project.number}`
       const meta = []
       meta.push(h('span', { key: 'owner', className: 'ghp-repochip' }, `${textOf(project.owner)} / #${project.number}`))
@@ -2532,6 +2903,13 @@ window.__ModuleLoader__.load({
       meta.push(h('span', { key: 'count', className: 'ghp-count-pill' }, isPositiveInteger(itemCount) || itemCount === 0 ? t('common.items', { count: itemCount }) : t('common.itemsUnknown')))
       if (project.closed === true) {
         meta.push(h('span', { key: 'closed', className: 'ghp-badge ghp-badge-closed' }, t('common.closed')))
+      }
+      if (readOnly) {
+        meta.push(h('span', {
+          key: 'readonly',
+          className: 'ghp-toolbar-hint',
+          'data-ghp-board-readonly': '',
+        }, t('board.readOnlyHint')))
       }
       return h('div', { className: 'ghp-toolbar' },
         h('div', { className: 'ghp-toolbar-main' },
@@ -2765,6 +3143,14 @@ window.__ModuleLoader__.load({
         && textOf(bootstrapProject.owner) !== '' && isPositiveInteger(bootstrapProject.number)
         ? cachedResponseOf(itemsCacheKey(bootstrapProject.owner, bootstrapProject.number))
         : null
+      // v1.1.0 write capability: `/config.writes.allowed`, default false (§4.8).
+      const bootstrapWrites = writesAllowedOf(bootstrapConfig)
+      const bootstrapMeta = bootstrapWrites
+        && isPlainObject(bootstrapProject)
+        && textOf(bootstrapProject.owner) !== ''
+        && isPositiveInteger(bootstrapProject.number)
+        ? cachedResponseOf(projectMetaCacheKey(textOf(bootstrapProject.owner), bootstrapProject.number))
+        : null
 
       const [configState, setConfigState] = useState(() => (bootstrapConfig !== null
         ? { status: 'ready', error: null }
@@ -2795,7 +3181,23 @@ window.__ModuleLoader__.load({
       const [viewMode, setViewMode] = useState(readStoredViewMode)
       const [milestoneFilter, setMilestoneFilter] = useState('all')
       const [milestoneNotice, setMilestoneNotice] = useState(null)
-      const projectKey = isPlainObject(project) ? `${textOf(project.owner)}/${project.number ?? ''}` : ''
+      const projectOwner = isPlainObject(project) ? textOf(project.owner) : ''
+      const projectNumber = isPlainObject(project) && isPositiveInteger(project.number) ? project.number : null
+      const projectKey = projectOwner === '' || projectNumber === null ? '' : `${projectOwner}/${projectNumber}`
+
+      // v1.1.0 write state (§4.8): capability, write-side metadata, optimistic
+      // overrides keyed by Project item id, drag hover and the result toast.
+      const [writesAllowed, setWritesAllowed] = useState(() => bootstrapWrites)
+      const [projectMeta, setProjectMeta] = useState(() => (isPlainObject(bootstrapMeta) ? bootstrapMeta : null))
+      const [metaQuery, setMetaQuery] = useState({ n: 0, refresh: false })
+      const [metaFailed, setMetaFailed] = useState(false)
+      const [statusOverrides, setStatusOverrides] = useState(() => new Map())
+      const [dragItemId, setDragItemId] = useState(null)
+      const [dragOverLane, setDragOverLane] = useState(null)
+      const [statusToast, setStatusToast] = useState(null)
+      const mutationSeqRef = useRef(new Map())
+      const pendingMutationsRef = useRef(new Set())
+      const toastSeqRef = useRef(0)
 
       useEffect(() => { storeViewMode(viewMode) }, [viewMode])
 
@@ -2820,6 +3222,9 @@ window.__ModuleLoader__.load({
         const applyConfig = (data) => {
           if (cancelled || !isPlainObject(data)) return
           setGh(isPlainObject(data.gh) ? data.gh : null)
+          const allowed = writesAllowedOf(data)
+          setWritesAllowed(allowed)
+          if (!allowed) setProjectMeta(null)
           const boundProject = isPlainObject(data.workspace) && isPlainObject(data.workspace.project) ? data.workspace.project : null
           const boundIssue = isPlainObject(data.session) && isPlainObject(data.session.issue) ? data.session.issue : null
           setProject(boundProject)
@@ -2881,7 +3286,13 @@ window.__ModuleLoader__.load({
           }))
           const path = itemsQuery.refresh ? itemsRequestPath(owner, number, true) : basePath
           requestWithCache(path, key, { retryPath: basePath })
-            .then((data) => { if (!cancelled) setItemsState({ status: 'ready', data, error: null }) })
+            .then((data) => {
+              if (cancelled) return
+              setItemsState({ status: 'ready', data, error: null })
+              // A user-requested fresh read is authoritative: once no write is in
+              // flight, drop the optimistic overrides it supersedes (§4.8).
+              if (itemsQuery.refresh && pendingMutationsRef.current.size === 0) setStatusOverrides(new Map())
+            })
             .catch((error) => {
               if (!cancelled) setItemsState((previous) => ({ status: 'error', data: previous.data ?? null, error: describeError(error) }))
             })
@@ -2889,11 +3300,104 @@ window.__ModuleLoader__.load({
         return () => { cancelled = true }
       }, [configState.status, project, itemsQuery.n, workspaceId])
 
+      // Write-side metadata (§4.8): requested only in allowed mode, lazily when
+      // the board is on screen, cached per Project for the module lifetime and
+      // refreshed together with the board's refresh action. Read-only mode never
+      // touches `/project-meta`.
+      useEffect(() => {
+        if (!writesAllowed) {
+          setProjectMeta(null)
+          setMetaFailed(false)
+          return undefined
+        }
+        if (projectOwner === '' || projectNumber === null) return undefined
+        if (viewMode !== 'board') return undefined
+        let cancelled = false
+        const key = projectMetaCacheKey(projectOwner, projectNumber)
+        const basePath = projectMetaRequestPath(projectOwner, projectNumber, false)
+        const cached = metaQuery.refresh ? null : cachedResponseOf(key)
+        if (cached !== null) {
+          setProjectMeta(cached)
+          requestWithCache(basePath, key)
+            .then((data) => {
+              if (cancelled) return
+              setProjectMeta(data)
+              setMetaFailed(false)
+            })
+            .catch(() => { /* the cached metadata stays usable */ })
+        } else {
+          const path = metaQuery.refresh ? projectMetaRequestPath(projectOwner, projectNumber, true) : basePath
+          requestWithCache(path, key, { retryPath: basePath })
+            .then((data) => {
+              if (cancelled) return
+              setProjectMeta(data)
+              setMetaFailed(false)
+            })
+            .catch(() => { if (!cancelled) setMetaFailed(true) })
+        }
+        return () => { cancelled = true }
+      }, [writesAllowed, projectOwner, projectNumber, viewMode, metaQuery.n])
+
+      // A different Project has a different Status field and item set.
+      useEffect(() => {
+        setStatusOverrides(new Map())
+        setDragItemId(null)
+        setDragOverLane(null)
+      }, [projectKey])
+
+      // The result toast is transient by design (a few seconds); a newer toast
+      // replaces it and restarts the timer.
+      useEffect(() => {
+        if (!isPlainObject(statusToast)) return undefined
+        const lifetime = statusToast.tone === 'error' ? 8000 : 6000
+        const key = statusToast.key
+        const timer = window.setTimeout(() => {
+          setStatusToast((current) => (isPlainObject(current) && current.key === key ? null : current))
+        }, lifetime)
+        return () => window.clearTimeout(timer)
+      }, [statusToast])
+
       const allItems = useMemo(
         () => asArray(itemsState.data === null || itemsState.data === undefined ? null : itemsState.data.items),
         [itemsState.data],
       )
       const milestoneOptions = useMemo(() => buildMilestoneOptions(allItems), [allItems])
+
+      // Optimistic Status overrides (§4.8) applied on top of the last `/items`
+      // payload; the host's answer replaces them, a failure rolls them back.
+      const displayItems = useMemo(() => {
+        if (statusOverrides.size === 0) return allItems
+        return allItems.map((item) => {
+          const override = statusOverrides.get(itemIdentity(item))
+          if (override === undefined) return item
+          const currentStatus = textOf(item.status).trim() === '' ? null : textOf(item.status).trim()
+          if (currentStatus === override.status) return item
+          return { ...item, status: override.status }
+        })
+      }, [allItems, statusOverrides])
+
+      // Drop overrides the last `/items` payload already confirms (they are now
+      // redundant); entries that still differ are kept for an in-flight write.
+      useEffect(() => {
+        if (statusOverrides.size === 0) return
+        const payloadItems = asArray(itemsState.data === null || itemsState.data === undefined ? null : itemsState.data.items)
+        if (payloadItems.length === 0) return
+        const serverStatus = new Map()
+        for (const item of payloadItems) {
+          serverStatus.set(itemIdentity(item), textOf(item.status).trim() === '' ? null : textOf(item.status).trim())
+        }
+        setStatusOverrides((current) => {
+          let changed = false
+          const next = new Map(current)
+          for (const [itemId, override] of current) {
+            if (!serverStatus.has(itemId)) continue
+            if (serverStatus.get(itemId) !== override.status) continue
+            next.delete(itemId)
+            changed = true
+          }
+          return changed ? next : current
+        })
+      }, [itemsState.data, statusOverrides])
 
       // A selected milestone that disappears after a refresh falls back to 全部
       // and leaves a dismissible notice instead of silently hiding everything.
@@ -2970,6 +3474,8 @@ window.__ModuleLoader__.load({
 
       const refreshItems = useCallback(() => {
         setItemsQuery((current) => ({ n: current.n + 1, refresh: true }))
+        // §4.8: the write-side metadata refreshes together with the board.
+        setMetaQuery((current) => ({ n: current.n + 1, refresh: true }))
       }, [])
 
       const bindProject = useCallback(async (nextProject, options = {}) => {
@@ -3058,6 +3564,206 @@ window.__ModuleLoader__.load({
         }
       }, [sessionId, workspaceId, openView])
 
+      /* ---- v1.1.0 Status writes → `POST /item-status` (CONTRACT §4.8). ----- */
+
+      // Write-side options are trusted only for the currently bound Project; a
+      // stale `/project-meta` payload from a previous binding is ignored.
+      const statusOptions = useMemo(() => {
+        if (!writesAllowed || !isPlainObject(projectMeta)) return null
+        if (!isPlainObject(projectMeta.project)) return null
+        if (projectMeta.project.owner !== projectOwner || projectMeta.project.number !== projectNumber) return null
+        return statusOptionsOf(projectMeta)
+      }, [writesAllowed, projectMeta, projectOwner, projectNumber])
+
+      // Menu order: every Status option, then `No status` (optionId null = clear).
+      const moveOptions = useMemo(() => {
+        if (!writesAllowed) return []
+        const options = asArray(statusOptions).map((option) => ({ optionId: option.optionId, name: option.name }))
+        options.push({ optionId: null, name: null })
+        return options
+      }, [writesAllowed, statusOptions])
+
+      const showStatusToast = useCallback((toast) => {
+        toastSeqRef.current += 1
+        setStatusToast({ ...toast, key: toastSeqRef.current })
+      }, [])
+
+      const sendStatusMutation = useCallback(async (itemRef, target, previous) => {
+        if (!writesAllowed || projectOwner === '' || projectNumber === null) return
+        if (!isPlainObject(itemRef) || !isPlainObject(target)) return
+        const itemId = itemIdentity(itemRef)
+        if (itemId === '') return
+        const owner = projectOwner
+        const number = projectNumber
+        // One sequence per item id: only the latest answer may touch that card.
+        const seq = (mutationSeqRef.current.get(itemId) ?? 0) + 1
+        mutationSeqRef.current.set(itemId, seq)
+        pendingMutationsRef.current.add(itemId)
+        // Optimistic move: the card paints in the target lane before the POST.
+        setStatusOverrides((current) => {
+          const next = new Map(current)
+          next.set(itemId, { status: target.name })
+          return next
+        })
+        try {
+          const data = await apiPost('/item-status', { owner, number, itemId, optionId: target.optionId })
+          if (!mountedRef.current || mutationSeqRef.current.get(itemId) !== seq) return
+          // The host answer is authoritative (concurrent GitHub-side change wins).
+          const applied = isPlainObject(data) && isPlainObject(data.status) ? data.status : null
+          const appliedName = applied !== null && typeof applied.name === 'string' && applied.name.trim() !== ''
+            ? applied.name.trim()
+            : (applied !== null && applied.optionId === null ? null : target.name)
+          setStatusOverrides((current) => {
+            const next = new Map(current)
+            next.set(itemId, { status: appliedName })
+            return next
+          })
+          patchItemsCacheStatus(owner, number, itemId, appliedName)
+          // Undo is only offered when the previous status maps back to an option
+          // id (or to "No status", which clears the field).
+          const undo = previous.optionId === undefined
+            ? undefined
+            : {
+              itemId,
+              previousStatus: previous.status,
+              previousOptionId: previous.optionId,
+              nextStatus: appliedName,
+            }
+          const toast = {
+            tone: 'success',
+            message: t('board.statusUpdated', { status: appliedName === null ? t('board.noStatus') : appliedName }),
+          }
+          if (undo !== undefined) toast.undo = undo
+          showStatusToast(toast)
+        } catch (error) {
+          if (!mountedRef.current || mutationSeqRef.current.get(itemId) !== seq) return
+          // Any non-2xx rolls the card back to its previous lane and reports why.
+          setStatusOverrides((current) => {
+            const next = new Map(current)
+            next.set(itemId, { status: previous.status })
+            return next
+          })
+          const described = describeError(error)
+          const scopeHint = described.code === 'gh-auth' ? ` ${t('board.scopeHint')}` : ''
+          showStatusToast({
+            tone: 'error',
+            message: `${t('board.statusUpdateFailed')}: ${described.message}${scopeHint}`,
+          })
+          // A vanished item/project: one forced items reload reconciles the board.
+          if (described.code === 'item-not-found' || described.code === 'project-not-found') refreshItems()
+        } finally {
+          pendingMutationsRef.current.delete(itemId)
+        }
+      }, [writesAllowed, projectOwner, projectNumber, t, refreshItems, showStatusToast])
+
+      /** Optimistic move of one card: previous state is kept for undo/rollback. */
+      const applyStatusOption = useCallback((item, target) => {
+        if (!writesAllowed || !isPlainObject(item) || !isPlainObject(target)) return
+        const previousStatus = textOf(item.status).trim() === '' ? null : textOf(item.status).trim()
+        const previousOptionId = statusOptionIdForName(previousStatus, statusOptions)
+        sendStatusMutation(item, target, { status: previousStatus, optionId: previousOptionId })
+      }, [writesAllowed, statusOptions, sendStatusMutation])
+
+      const undoStatusMutation = useCallback(() => {
+        if (!isPlainObject(statusToast) || !isPlainObject(statusToast.undo)) return
+        const undo = statusToast.undo
+        setStatusToast(null)
+        sendStatusMutation(
+          { id: undo.itemId },
+          { optionId: undo.previousOptionId, name: undo.previousStatus },
+          { status: undo.nextStatus, optionId: undefined },
+        )
+      }, [statusToast, sendStatusMutation])
+
+      const dismissStatusToast = useCallback(() => setStatusToast(null), [])
+
+      const handleCardDragStart = useCallback((item, event) => {
+        if (!writesAllowed || !isPlainObject(item)) return
+        const itemId = itemIdentity(item)
+        setDragItemId(itemId)
+        try {
+          if (event !== undefined && event !== null && event.dataTransfer !== null && event.dataTransfer !== undefined) {
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('text/plain', itemId)
+          }
+        } catch (_unavailableDataTransfer) { /* the state fallback still works */ }
+      }, [writesAllowed])
+
+      const handleCardDragEnd = useCallback(() => {
+        setDragItemId(null)
+        setDragOverLane(null)
+      }, [])
+
+      const handleLaneDragEnter = useCallback((laneKey) => {
+        setDragOverLane(laneKey)
+      }, [])
+
+      const handleLaneDragOver = useCallback((laneKey) => {
+        setDragOverLane((current) => (current === laneKey ? current : laneKey))
+      }, [])
+
+      const handleLaneDragLeave = useCallback((laneKey, event) => {
+        const related = event === undefined || event === null ? null : event.relatedTarget
+        const lane = event === undefined || event === null ? null : event.currentTarget
+        if (related instanceof Node && lane instanceof Node && lane.contains(related)) return
+        setDragOverLane((current) => (current === laneKey ? null : current))
+      }, [])
+
+      const handleLaneDrop = useCallback((laneKey, event) => {
+        setDragOverLane(null)
+        let itemId = dragItemId
+        try {
+          const carried = event === undefined || event === null
+            || event.dataTransfer === null || event.dataTransfer === undefined
+            ? ''
+            : event.dataTransfer.getData('text/plain')
+          if (typeof carried === 'string' && carried !== '') itemId = carried
+        } catch (_unavailableDataTransfer) { /* the state fallback still works */ }
+        setDragItemId(null)
+        if (!writesAllowed) return
+        if (typeof itemId !== 'string' || itemId === '') return
+        const item = displayItems.find((candidate) => itemIdentity(candidate) === itemId)
+        if (item === undefined) return
+        if (boardColumnKeyOf(item) === laneKey) return // dropping on its own lane is a no-op
+        const target = statusOptionForLane(laneKey, statusOptions)
+        if (target === null) {
+          showStatusToast({
+            tone: 'error',
+            message: `${t('board.statusUpdateFailed')}: ${t('error.badRequestHint')}`,
+          })
+          return
+        }
+        applyStatusOption(item, target)
+      }, [dragItemId, displayItems, writesAllowed, statusOptions, applyStatusOption, showStatusToast, t])
+
+      const handleMoveSelect = useCallback((item, option) => {
+        if (!isPlainObject(option)) return
+        applyStatusOption(item, {
+          optionId: option.optionId === null || option.optionId === undefined ? null : option.optionId,
+          name: option.name === null || option.name === undefined ? null : option.name,
+        })
+      }, [applyStatusOption])
+
+      // Read-only mode passes `null`: no draggable cards, no move action/menu,
+      // no lane is a `[data-ghp-lane-drop]` target.
+      const boardWrite = writesAllowed
+        ? {
+          dropTargets: STATUS_WRITE_LANE_SET,
+          dragOverLane,
+          moveOptions,
+          // The move action appears once the Status options are known (or the
+          // metadata read definitively failed); this keeps the menu complete.
+          metaReady: statusOptions !== null || metaFailed,
+          onCardDragStart: handleCardDragStart,
+          onCardDragEnd: handleCardDragEnd,
+          onDragEnter: handleLaneDragEnter,
+          onDragOver: handleLaneDragOver,
+          onDragLeave: handleLaneDragLeave,
+          onDrop: handleLaneDrop,
+          onSelect: handleMoveSelect,
+        }
+        : null
+
       const rootStyle = viewportHeight === null ? undefined : { height: `${viewportHeight}px` }
 
       const renderPage = (children, center = false, extraClass = '') => h('div', {
@@ -3097,7 +3803,7 @@ window.__ModuleLoader__.load({
             : null)
       }
 
-      const milestoneScopedItems = filterByMilestone(allItems, milestoneFilter)
+      const milestoneScopedItems = filterByMilestone(displayItems, milestoneFilter)
       const statuses = collectStatuses(milestoneScopedItems)
       const counts = statusCountsOf(milestoneScopedItems)
       const isBoardMode = viewMode === 'board'
@@ -3107,7 +3813,7 @@ window.__ModuleLoader__.load({
       const listFilteredItems = filterItems(milestoneScopedItems, query, effectiveStatusFilter)
       const groups = groupItems(listFilteredItems, statuses)
       const boardFilteredItems = filterItems(milestoneScopedItems, query, ALL_STATUS)
-      const boardLayout = buildBoardColumns(allItems, boardFilteredItems)
+      const boardLayout = buildBoardColumns(displayItems, boardFilteredItems)
       const boardColumns = boardLayout.columns
       const hiddenLanes = boardLayout.hiddenLanes
       const matchedCount = isBoardMode ? boardFilteredItems.length : listFilteredItems.length
@@ -3157,6 +3863,7 @@ window.__ModuleLoader__.load({
           sessionIssue,
           bindingId: typeof bindingItemId === 'string' ? bindingItemId : null,
           onBind: bindIssue,
+          write: boardWrite,
         })
       } else {
         const sections = groups.map((group) => {
@@ -3233,6 +3940,7 @@ window.__ModuleLoader__.load({
             onChange: () => setPickerOpen(true),
             onUnbind: unbindProject,
             unbinding,
+            readOnly: !writesAllowed && isBoardMode,
           }),
           allItems.length === 0 || itemsState.status === 'loading' || itemsState.status === 'error'
             ? null
@@ -3263,7 +3971,13 @@ window.__ModuleLoader__.load({
             currentProject: project,
             bounds: pickerBounds,
           })
-          : null)
+          : null,
+        h(StatusToast, {
+          t,
+          toast: statusToast,
+          onUndo: undoStatusMutation,
+          onDismiss: dismissStatusToast,
+        }))
     }
 
     /* ------------------------------------------------------------------ */
@@ -4773,7 +5487,7 @@ a.ghp-board-card { text-decoration: none; }
   outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
   outline-offset: -2px;
 }
-.ghp-board-card-actions { display: flex; flex: none; justify-content: flex-end; padding: 0 10px 9px; }
+.ghp-board-card-actions { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 10px 9px; }
 .ghp-board-card-bind {
   display: inline-flex;
   align-items: center;
@@ -4803,6 +5517,167 @@ a.ghp-board-card { text-decoration: none; }
   outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
   outline-offset: 1px;
 }
+
+/* v1.1.0 opt-in Status writes (§4.8): drag affordance, lane drop highlight,
+   per-card move menu and the optimistic-update toast. The write UI is never
+   rendered in read-only mode; every colored element stays decorative and the
+   move options always carry their Status name as text. */
+.ghp-board-column-drop { border-style: dashed; }
+.ghp-board-column-dragover {
+  border-color: color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-brand)) 62%, transparent);
+  background: color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-brand)) 8%, var(--ghp-surface-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ghp-lane-accent, var(--ghp-accent-brand)) 46%, transparent);
+}
+.ghp-board-card-draggable { cursor: grab; }
+.ghp-board-card-draggable:active { cursor: grabbing; }
+.ghp-board-card-grip {
+  flex: none;
+  width: 9px;
+  height: 13px;
+  margin-right: auto;
+  background-image: radial-gradient(currentColor 1px, transparent 1.1px);
+  background-position: 1px 1px;
+  background-repeat: repeat;
+  background-size: 4.5px 4.5px;
+  color: var(--ghp-text-tertiary);
+  opacity: .55;
+  cursor: grab;
+}
+.ghp-move { display: inline-flex; }
+.ghp-board-card-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 22px;
+  padding: 1px 7px;
+  border: 1px solid var(--ghp-border-hover);
+  border-radius: var(--dsw-radius-xs, 6px);
+  background: transparent;
+  color: var(--ghp-text-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background-color var(--ghp-motion), border-color var(--ghp-motion), color var(--ghp-motion);
+}
+.ghp-board-card-move:hover { border-color: var(--ghp-border-hover); background: var(--ghp-surface-hover); color: var(--ghp-text-primary); }
+.ghp-board-card-move-open { border-color: color-mix(in srgb, var(--ghp-accent-brand) 58%, transparent); color: var(--ghp-text-primary); }
+.ghp-board-card-move:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: 1px;
+}
+.ghp-board-card-move-label { white-space: nowrap; }
+.ghp-move-menu {
+  position: fixed;
+  z-index: 10020;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  /* portal'd to the body: the ghp-* tokens are scoped to .ghp-root, so these
+     fall back to the shipped theme tokens that are global. */
+  border: 1px solid var(--dsw-alias-border-l3, #4a4a4a);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, #222);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .42);
+}
+.ghp-move-menu::-webkit-scrollbar { width: 8px; }
+.ghp-move-menu::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l1, rgba(255, 255, 255, .16)); border-radius: 4px; }
+.ghp-move-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.ghp-move-option:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); }
+.ghp-move-option:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+}
+.ghp-move-option-active { background: var(--dsw-alias-fill-l2, rgba(255, 255, 255, .08)); }
+.ghp-move-option-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ghp-lane-accent, var(--dsw-alias-label-tertiary, #8a8a8a));
+}
+.ghp-move-option-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-move-option-check { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-state-business-primary, #4f7cff); }
+.ghp-toolbar-hint { color: var(--ghp-text-tertiary); font-size: 11px; line-height: 16px; }
+.ghp-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 10030;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 8px 10px 8px 12px;
+  transform: translateX(-50%);
+  border: 1px solid var(--dsw-alias-border-l3, #4a4a4a);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, #222);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .42);
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ghp-toast-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-alias-state-success-primary, #3fb950); }
+.ghp-toast-error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f85149) 52%, transparent); }
+.ghp-toast-error .ghp-toast-dot { background: var(--dsw-alias-state-error-primary, #f85149); }
+.ghp-toast-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ghp-toast-undo {
+  flex: none;
+  min-height: 24px;
+  padding: 1px 9px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f7cff) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f7cff) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary, #4f7cff);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.ghp-toast-undo:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f7cff) 78%, transparent); }
+.ghp-toast-undo:focus-visible,
+.ghp-toast-close:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4f7cff));
+  outline-offset: 1px;
+}
+.ghp-toast-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #8a8a8a);
+  cursor: pointer;
+}
+.ghp-toast-close:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); color: var(--dsw-alias-label-primary, #e6e6e6); }
 .ghp-item-open {
   display: flex;
   flex: 1 1 auto;
@@ -4987,7 +5862,7 @@ a.ghp-board-card { text-decoration: none; }
    colored dot is decorative with the text label always present; focus rings use
    the shipped focus token. Non-essential motion is disabled on request. */
 @media (prefers-reduced-motion: reduce) {
-  .ghp-root *, .ghp-overlay * {
+  .ghp-root *, .ghp-overlay *, .ghp-move-menu *, .ghp-toast * {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;

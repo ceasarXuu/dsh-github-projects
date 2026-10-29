@@ -1,7 +1,7 @@
 # dsh-github-projects
 
-**v1.0.2 — current release.** The GitHub Project and Issue bound to your DSH session: the board in
-the right sidebar, the Issue one tab away.
+**v1.1.0 — current release.** The GitHub Project board, the Issue bound to your session, and now
+**opt-in Project status writes** — read-only by default.
 
 This DSH plugin appends the `issue` view to the conversation header — it shows the Issue bound to the
 **session**, with a one-line **issue subtitle** under the session title in the conversation header
@@ -9,11 +9,12 @@ This DSH plugin appends the `issue` view to the conversation header — it shows
 GitHub Project bound to the **workspace**, as a status swimlane board by default with a list view and
 a milestone filter — moved in v1.0.2 out of the conversation header into DSH's **right sidebar**: one
 small board icon in every workspace row of the left sidebar opens it (highlighted when that workspace
-is bound). Clicking a card or the header subtitle opens GitHub in your **system default browser**
-(new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row just opens
-that session. A separate **Bind** action binds the Issue to the session, and the model can do the
-same through three agent tools. Everything is read-only against GitHub — it is a viewing surface, not
-a writer.
+is bound). **Read-only by default**: set `allowWrites: true` (v1.1.0, opt-in) and you can move items
+between Status lanes (drag, or the card's 移动到 menu) with an Undo toast — the only GitHub write the
+plugin can perform. Clicking a card or the header subtitle opens GitHub in your **system default
+browser** (new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row
+just opens that session. A separate **Bind** action binds the Issue to the session, and the model can
+do the same through agent tools. Everything else stays a viewing surface, not a writer.
 
 ```
 conversation header:  [ 对话 ] [ 轨迹 ] [ issue ] [ … ]
@@ -22,11 +23,89 @@ left sidebar:         workspace row  ▣  →  right sidebar tab  [ 项目 / Pro
 
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
 
-![Session header with the `issue` tab, and the board in the right sidebar (v1.0.2 e2e)](artifacts/screenshots/01-tabs.png)
+![Session header with the `issue` tab, and the board in the right sidebar (v1.1.0 e2e)](artifacts/screenshots/01-tabs.png)
+
+## Release 1.1.0 — opt-in Project status writes
+
+Current release. The first GitHub write is **opt-in**: `allowWrites` (default **false**) turns the
+read-only board into a movable one and registers a fourth agent tool. Existing installs keep the
+read-only behavior until they explicitly opt in.
+
+| | |
+|---|---|
+| npm package | `@ceasarxuu/dsh-github-projects@1.1.0` (prepared; the npm publish + clean-profile install smoke are the final release step) |
+| Release | [v1.1.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.1.0) |
+| Changes | opt-in Status writes: drag + 移动到 menu, Undo/rollback; `GET /project-meta` + `POST /item-status` + `/config.writes`; `github_project_item_status` tool |
+| Prerequisite | the `project` scope on the `gh` token (`gh auth refresh -s project`) |
+| Compatibility | read-only default unchanged; no breaking change; no DSH change; no new runtime dependencies |
+
+- **Opt-in Status writes.** With `allowWrites: true` the board can move a Project item between Status
+  columns: drag a card onto another canonical Status lane, or use the card's keyboard-accessible
+  **移动到** menu (every Status option + `No status`; custom `other:*` lanes stay read-only). The card
+  moves optimistically, a toast confirms it with **Undo**, and any failure rolls the card back to its
+  previous lane with an error toast. The only GitHub mutation is the item's `Status` single-select
+  field — no comments, labels, Issue state or other Project fields are written.
+- **Host API.** `GET /project-meta` (Project node id + `Status` field id/options; a cached read only
+  requested when writes are allowed), `POST /item-status` (the only write endpoint; `optionId: null`
+  clears the Status), and `GET /config` now reports `writes: { allowed }`. While `allowWrites` is
+  false, `/item-status` answers 403 `writes-disabled`, the client never calls `/project-meta`, and the
+  board renders exactly one read-only hint: `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。`.
+- **New agent tool: `github_project_item_status`.** Registered **only** when `allowWrites` is true.
+  It moves one item of the current session's workspace-bound Project to a named Status option
+  (`status: null` clears it), accepts `itemId` or `repo`+`number`, matches Status names
+  case-insensitively, writes only the Status field, and returns e.g. `已把 #240 移到 In Progress`.
+- **Enable it** — profile patch (the row replaces the whole `config`, so restate every key), scope,
+  then reload the host:
+
+  ```yaml
+  # ~/.dsh/profiles/<profile>/cordis.patch.yml
+  - id: github-projects
+    name: '@ceasarxuu/dsh-github-projects'
+    config:
+      ghCommand: gh
+      requestTimeoutMs: 20000
+      cacheTtlMs: 60000
+      staleTtlMs: 600000
+      diskCache: true
+      cacheFile: null
+      maxProjectItems: 200
+      maxComments: 30
+      healthCacheTtlMs: 5000
+      healthFirstReadTimeoutMs: 3000
+      statePath: null
+      allowWrites: true
+  ```
+
+  ```sh
+  gh auth refresh -s project   # grant the project scope if gh auth status lacks it
+  ```
+
+  Reload the host (or reinstall the plugin) so the resolved config takes effect. A missing scope
+  surfaces as a `gh-auth` error whose message points at `gh auth refresh -s project`.
+- **Verification (release gates).** Host tests **130/130** pass (`node --test test/host/*.test.mjs`;
+  92 baseline + 38 new) and `node --check` on the host files is OK. Authoritative e2e (repo harness):
+  fixture **21/21** stages PASS — the write path runs in a second isolated fixture stack with
+  `allowWrites: true` (run dir `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-13-691Z`) — and real
+  **21/21** stages PASS in read-only mode (run dir
+  `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-44-274Z`; gh 2.96.0 / `ceasarXuu` / real Project #9).
+  Console is **0 errors / 0 exceptions / 0 warnings** in both modes with exactly one intentionally
+  allowlisted 403 (the read-only `POST /item-status` probe); the real run performs **zero** GitHub
+  writes. Default-mode evidence: `/config.writes.allowed = false`, no draggable cards / move actions /
+  drop targets, one read-only hint, no `/project-meta` request, and a direct POST → 403
+  `writes-disabled`. Write-path evidence (fixture, `allowWrites: true`): 9/9 cards draggable with
+  移动到, the menu lists TODO / In Progress / In Review / Done / No status; a TODO→In Progress move
+  posted `{itemId: "PVTI_lAHOAwDbXM4Bocj3zhDFe-U", optionId: "47fc9ee4"}`; Undo re-posted the
+  previous `8fc1d6c9` (TODO) and moved it back; the mock failure item `PVTI_mock_write_failure` got
+  502, rolled the card back to TODO and showed an error toast. New screenshot:
+  [`16-projects-status-write.png`](artifacts/screenshots/16-projects-status-write.png).
+- **Publish status.** This repository prepares **v1.1.0**; the npm publish and the clean-profile
+  install smoke are the final release step and are recorded in
+  [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) after publication. Until the publish
+  completes, npm `latest` still points at the previously published release.
 
 ## Release 1.0.2 — board in the right sidebar, picker replay fix
 
-Current release, published as `1.0.2` on npm (`latest`). The board leaves the conversation header and
+Superseded by 1.1.0; published as `1.0.2` on npm. The board leaves the conversation header and
 becomes a right-sidebar tab opened from the left sidebar; the ProjectPicker replay bug is fixed.
 
 | | |
@@ -95,7 +174,7 @@ Bug-fix release for four user-reported issues (three fixes); **published as `1.0
 
 ## Release 1.0.0 — first public release
 
-**GitHub Projects & Issues** v1.0.0 was the first public release (the current release is **1.0.2**
+**GitHub Projects & Issues** v1.0.0 was the first public release (the current release is **1.1.0**
 above), and is **live on npm** as
 [`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects).
 Source and issue tracker: <https://github.com/ceasarXuu/dsh-github-projects>; release notes:
@@ -107,7 +186,7 @@ Source and issue tracker: <https://github.com/ceasarXuu/dsh-github-projects>; re
 | npm package | `@ceasarxuu/dsh-github-projects` (public scoped package; 1.0.0 first published version) |
 | Plugin Manager name | *GitHub Projects & Issues* / **GitHub 项目与议题** (from `locale/en.json` + `locale/zh.json`) |
 | Repository | <https://github.com/ceasarXuu/dsh-github-projects> |
-| Releases | [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) · [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
+| Releases | [v1.1.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.1.0) · [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) · [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | License | MIT |
 | Host engines | `dsh >=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Runtime dependencies | none (host half uses only `node:*`; browser half uses the host-provided `react` / `react-dom`) |
@@ -137,15 +216,17 @@ renders the title, state, body, labels and comments. Neither the board nor the `
 the shipped views: remove the plugin and the interface returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
-plugin stores no token, sends no telemetry, and never calls GitHub directly.
+plugin stores no token, sends no telemetry, and never calls GitHub directly. **Reads are always on;
+the only write is the opt-in Project item `Status` update** (`POST /item-status`, enabled by
+`allowWrites: true`, v1.1.0) — the plugin never touches tokens, and no other GitHub write exists.
 
 ## Pre-public history (0.x feature notes)
 
 > Historical: these describe the 0.x behavior at the time. **1.0.1 supersedes** the sidebar click and
 > link-opening behavior below — Issue links now open in the system default browser, and the sidebar
 > subtitle is non-interactive (row clicks open the session). **1.0.2** additionally moved the board
-> out of the conversation header into the right sidebar; any `projects` tab references below are
-> pre-1.0.2 history.
+> out of the conversation header into the right sidebar. **1.1.0** adds opt-in Status writes — any
+> "read-only board / no writes" references below are pre-1.1.0 history.
 
 ### What's new in 0.4.1 — issue subtitle in the sidebar session tree
 
@@ -235,11 +316,11 @@ plugin stores no token, sends no telemetry, and never calls GitHub directly.
 
 ## Screens
 
-All screenshots below are the **v1.0.2 authoritative e2e set** (refreshed 2026-10-29: fixture 18/18 and
-real 19/19 stages PASS, console 0/0/0). `01`–`09` and `12`–`14` are 1280×800 harness captures, `11` is
-the maximized right-sidebar pane at **2200×1300**, `10` is a manual real-Desktop capture and `15` is
-the clean-profile install capture of the published `1.0.2`. Stage definitions and the screenshot list
-live in [`scripts/e2e/README.md`](scripts/e2e/README.md).
+All screenshots below are the **v1.1.0 authoritative e2e set** (refreshed 2026-10-29: fixture 21/21
+and real 21/21 stages PASS, console 0/0/0). `01`–`09` and `12`–`14` are 1280×800 harness captures, `11`
+is the maximized right-sidebar pane at **2200×1300**, `16` is the fixture write-path capture, `10` is a
+manual real-Desktop capture and `15` is (re)generated by the release smoke after a publish. Stage
+definitions and the screenshot list live in [`scripts/e2e/README.md`](scripts/e2e/README.md).
 
 | | |
 |---|---|
@@ -257,17 +338,20 @@ live in [`scripts/e2e/README.md`](scripts/e2e/README.md).
 | Clicking an Issue card body opens GitHub in your **system default browser, new tab** — **no binding** is created. Bind via the card button. | Bound session shows an `#N` chip + issue title under the session title (one line, ellipsis; click opens it in the system browser). |
 | ![sidebar subtitle](artifacts/screenshots/14-sidebar-subtitle.png) | ![manual Desktop capture](artifacts/screenshots/10-desktop-tabs.png) |
 | Bound session row in the left sidebar: second line with `#240` chip + issue title (row 32→41 px, no horizontal overflow); the subtitle is **non-interactive** — clicking the row opens that session; bindings sync via `/bindings`. | Manual capture of the **real Desktop app** after install: three bound rows with their second-line issue subtitles (`#240 …` / `#289 …` / `#240 …`, clipped inside the row) and a clean footer/avatar area (`1438×1370`, sha256 `3860f7b9…988c`; header tabs `对话 / 轨迹 / issue`). |
-| ![published install](artifacts/screenshots/15-published-install.png) | |
-| Published `1.0.2` installed from npm into a clean `web` profile: the fresh session header shows `对话 / 轨迹 / issue` plus the workspace board icon (post-publish release smoke **PASS**, run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`). | |
+| ![published install](artifacts/screenshots/15-published-install.png) | ![status write](artifacts/screenshots/16-projects-status-write.png) |
+| Released version installed from npm into a clean `web` profile (release smoke; regenerated after the v1.1.0 publish — the current file is the v1.0.2 install). | **Write path** (fixture stack with `allowWrites: true`): a card moved TODO→In Progress via the 移动到 menu; success toast with Undo; failures roll the card back. |
+| | |
+| | |
 
 `01`–`09` and `12`–`14` are captured by the isolated e2e harness in **real-host mode** against live
 `gh` (real Project #9 and Issue #240; 1280×800; `09` needs `--extra-comments`); `11` is the same
-harness at **2200×1300** with the right sidebar maximized. `10-desktop-tabs.png` is a manual capture of
-the real Desktop app (not harness output). `15-published-install.png` is the clean-profile install of
-the published `1.0.2` (post-publish `release-smoke` PASS, run dir
-`/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`). The board/picker shots (`02`–`06`,
-`12`) capture the v1.0.2 right-sidebar pane; `07`/`08`/`13`/`14` are captured with the right sidebar
-collapsed (plain conversation), as before.
+harness at **2200×1300** with the right sidebar maximized. `16-projects-status-write.png` is
+fixture-only write-path evidence from the second isolated stack with `allowWrites: true` (the
+read-only default is captured in `04-projects-board.png`, which shows the read-only hint).
+`10-desktop-tabs.png` is a manual capture of the real Desktop app (not harness output).
+`15-published-install.png` is regenerated by the clean-profile release smoke after the publish. The
+board/picker shots (`02`–`06`, `12`) capture the right-sidebar pane; `07`/`08`/`13`/`14` are captured
+with the right sidebar collapsed (plain conversation), as before.
 
 ## Requirements
 
@@ -292,11 +376,18 @@ collapsed (plain conversation), as before.
   Don't have `gh`? `brew install gh` on macOS, or see <https://cli.github.com/>. A standalone binary
   works too — put its absolute path in `ghCommand` if DSH can't see your shell `PATH`.
 
+- **Writing (opt-in, v1.1.0):** Status writes use the same `project` scope — no additional or broader
+  scope is requested. If moves fail with a `gh-auth`/scope message, run `gh auth refresh -s project`
+  and reload the host (see [how to enable writes](#release-110--opt-in-project-status-writes)).
+
 ## Install
 
-The plugin is **live on npm** as **`@ceasarxuu/dsh-github-projects@1.0.2`** (`latest` = 1.0.2).
-Install it into the DSH profile your app runs (on a default Desktop install the profile is named `desktop`; use
-`web` / `headless` if that is what you run). Installing needs write access to the profile directory.
+The plugin is **published on npm** as `@ceasarxuu/dsh-github-projects`. **v1.1.0 is the current
+release** in this repository; the npm publish for it is the final step of the release (until that
+completes, npm `latest` still points at the previously published release, 1.0.2). Install the release
+explicitly into the DSH profile your app runs (on a default Desktop install the profile is named
+`desktop`; use `web` / `headless` if that is what you run). Installing needs write access to the
+profile directory.
 
 **Plugin Manager (recommended):** Plugins → Add → `@ceasarxuu/dsh-github-projects` → install and
 keep it enabled. The card shows the localized name/description from the package's `locale/` metadata
@@ -305,8 +396,8 @@ and the plugin icon.
 **CLI:**
 
 ```sh
-# install the published release into the desktop profile (pin @1.0.2)
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.2
+# install the release into the desktop profile (pin @1.1.0)
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.1.0
 
 # verify it is installed in that profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -330,7 +421,8 @@ That records a `link:` dependency (the `link:` prefix may be omitted). Use this 
 installed users should use the npm package above.
 
 > The registry also lists an internal staging version (`0.0.0-stage`). Install the release explicitly
-> with `@1.0.2`; `latest` already points at 1.0.2.
+> with `@1.1.0`; npm `latest` follows the newest published release (1.0.2 until the 1.1.0 publish
+> completes).
 
 ## Use
 
@@ -352,12 +444,17 @@ installed users should use the npm package above.
 7. The conversation-header issue subtitle can be clicked any time to reopen the Issue in the system
    browser. The sidebar subtitle is non-interactive: clicking anywhere on a session row opens that
    session.
+8. **Moving items between Status lanes (opt-in, v1.1.0).** If you enabled `allowWrites`, drag a card
+   onto another Status lane or open the card's **移动到** menu. The card moves immediately, a toast
+   confirms it with **Undo**, and a failed move is rolled back with an error. Only the Project item's
+   `Status` field changes; with the default `allowWrites: false` the board is read-only and shows the
+   hint `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。`.
 
 Use **Refresh** to force a fresh read (cached data may be served stale for up to `staleTtlMs` while
 it revalidates), **Change** to switch the workspace's Project, and **Unbind** (with confirmation) to
 clear a binding. Unbinding a Project does not unbind session Issues.
 Button labels above are the English UI copy; the Chinese UI localizes the same actions as
-绑定 / 刷新 / 更换 / 解绑, and the view toggle as 泳道 / 列表.
+绑定 / 刷新 / 更换 / 解绑 / 移动到, and the view toggle as 泳道 / 列表.
 
 ## Configuration
 
@@ -378,6 +475,7 @@ so restate every key you need.
 | `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health snapshot shared by `/config` and `/health` |
 | `healthFirstReadTimeoutMs` | `3000` | **Legacy, no longer used** (since 0.4.0 `/config` never waits for a probe); accepted only for older configs |
 | `statePath` | `null` | Binding file; `null` resolves to `$DSH_HOME/plugin-data/github-projects/state.json` |
+| `allowWrites` | `false` | **Opt-in GitHub writes (v1.1.0).** `true` enables the board drag / 移动到 menu, `POST /item-status`, and the `github_project_item_status` agent tool (status single-select field only). Requires the `project` scope. When `false` (default) writes are refused with 403 `writes-disabled`, the tool is not registered, and the board is read-only with a hint |
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
@@ -395,7 +493,12 @@ so restate every key you need.
     healthCacheTtlMs: 5000
     healthFirstReadTimeoutMs: 3000
     statePath: null
+    allowWrites: false   # set true (and gh auth refresh -s project) to enable Status writes
 ```
+
+To enable writes, set `allowWrites: true`, run `gh auth refresh -s project`, and reload the host —
+the row **replaces the whole `config`**, so restate every key you need (see
+[Release 1.1.0](#release-110--opt-in-project-status-writes)).
 
 ## Privacy and network
 
@@ -407,7 +510,10 @@ so restate every key you need.
   Markdown subset (no HTML, no remote images).
 - **Local state is tiny:** `state.json` only holds Project/Issue titles, URLs, numbers and state
   summaries, plus binding timestamps. Delete it to reset all bindings.
-- **Read-only:** every GitHub call is a read. The plugin has no endpoint that writes to GitHub.
+- **Read-only by default; one opt-in write.** Every GitHub call is a read unless you set
+  `allowWrites: true`. With it on, the only mutation is `POST /item-status` — one Project item's
+  `Status` single-select field. There is no endpoint that edits Issues, comments, labels or any other
+  Project field.
 
 ## Troubleshooting
 
@@ -425,6 +531,10 @@ so restate every key you need.
 | A “gh CLI unavailable” warning flashes right after opening | Cold start: `/config` never waits for `gh` and returns the `error:"pending"` placeholder while a background probe runs | Harmless; it clears once the probe finishes (read `/config` again or reopen the tab) |
 | Stale list | 60-second cache | Click **Refresh** |
 | “Binding save failed” | `statePath` unwritable (permissions/disk) | Check the path and permissions; or set `statePath` to a writable file |
+| Board shows `只读看板：开启 allowWrites 后才能…` | Writes are off — `allowWrites` is false (the default) or the profile patch did not take effect | Set `allowWrites: true` in the profile patch (restate the full config) and reload; see [Release 1.1.0](#release-110--opt-in-project-status-writes) |
+| A move fails with `writes-disabled` (403) | A write reached the host while `allowWrites` resolved to false | Enable `allowWrites: true` and reload the host |
+| A move fails with `gh-auth` / scope message | The `gh` token lacks the `project` scope | Run `gh auth refresh -s project`, then reload the host |
+| Card jumps back after a move (error toast) | GitHub refused the mutation (scope/permission, unknown option, network) | Read the toast text; check `gh auth status`; retry — the optimistic move is rolled back automatically |
 
 ## Development
 
@@ -442,11 +552,11 @@ Layout:
 
 | File | Role |
 |---|---|
-| `index.js` | Cordis host plugin: HTTP API, request gating, cache/single-flight |
-| `github.js` | `gh` CLI adapter, normalizers, Issue-ref parser |
+| `index.js` | Cordis host plugin: HTTP API, request gating, cache/single-flight, write gate + the four agent tools |
+| `github.js` | `gh` CLI adapter, GraphQL read queries + write mutations (`getProjectMeta` / `updateItemStatus` / clear), normalizers, Issue-ref parser |
 | `state.js` | Durable binding store (atomic JSON writes) |
-| `client.js` | Browser half: `conversation.view` entry (`issue`) + right-sidebar board tab, workspace-row entry icon, React views, safe Markdown renderer |
-| `dev/mock-host.js` | Contract-shaped mock host for UI/e2e without `gh` |
+| `client.js` | Browser half: `conversation.view` entry (`issue`) + right-sidebar board tab, workspace-row entry icon, board status writes (opt-in drag / 移动到 / Undo), React views, safe Markdown renderer |
+| `dev/mock-host.js` | Contract-shaped mock host for UI/e2e without `gh` (v1.1.0: `allowWrites`, `/project-meta`, `/item-status`, `mock-state` write log) |
 | `test/` | Host unit tests + captured `gh` fixtures |
 | `artifacts/screenshots/` | e2e acceptance screenshots |
 
@@ -454,23 +564,25 @@ Layout:
 
 The browser half talks to the plugin over a loopback-only JSON API (prefix
 `/plugin/github-projects`; `application/json`, `cache-control: no-store`, errors as
-`{"error":{"code","message"}}`). Ten endpoints:
+`{"error":{"code","message"}}`). Twelve endpoints:
 
 | Method + path | Purpose |
 |---|---|
 | `GET /health` | `gh` availability |
-| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health (never waits on `gh`) |
+| `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health + write capability (`writes.allowed`; never waits on `gh`) |
 | `GET /bindings` | every durable session→Issue and workspace→Project binding (local only; polled ~4 s for the sidebar subtitle and workspace entry icon) |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner (SWR, `stale` flag) |
 | `GET /items?owner=&number=&refresh=1` | one Project's items (paginated GraphQL, `stale` flag) |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments (`stale` flag) |
+| `GET /project-meta?owner=&number=&refresh=1` | write-side metadata: Project node id + `Status` field id/options (cached read; requested only when writes are allowed) |
 | `POST /bind-workspace` | bind a Project to a workspace |
 | `POST /unbind-workspace` | clear a workspace binding |
 | `POST /bind-issue` | bind an Issue to a session |
 | `POST /unbind-issue` | clear a session binding |
+| `POST /item-status` | **the only write**: move one Project item to a Status option (`optionId: null` clears it); 403 `writes-disabled` unless `allowWrites` is true |
 
-Only the plugin's own browser half consumes it; POSTs are origin/content-type/size gated, and nothing
-writes to GitHub.
+Only the plugin's own browser half consumes it; POSTs are origin/content-type/size gated. The only
+GitHub write is `/item-status`, gated by `allowWrites`; everything else is read-only.
 
 The e2e harness runs in an isolated temp `DSH_HOME` and workspace on its own port — it never touches
 your running profile or the window you're using. See [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md) for the
@@ -480,14 +592,15 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | **1.0.2** (right-sidebar project board + ProjectPicker replay fix on top of 1.0.1) |
+| Plugin version | **1.1.0** (opt-in Project item Status writes on top of 1.0.2; read-only by default) |
 | Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Acceptance | v1.0.2 published and verified: frozen `client.js` sha256 `684f2953…384e2`; host tests **92/92**; independent picker-replay verifier **6/6 checks**; authoritative repo-e2e **PASS** — fixture **18/18** executed stages (run dir `2026-10-28T22-18-34-867Z`), real **19/19** stages (run dir `2026-10-28T22-20-03-025Z`), console **0/0/0**, new `project-picker-replay` stage PASS, authoritative screenshot set `01`–`14` (`11` at 2200×1300, `10` manual); npm `1.0.2` is live (`latest`, tarball 14 files / 167.1 kB packed, shasum `217f2e88…041d`); clean-profile `release-smoke` install **PASS** (run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`; tabs `对话 / 轨迹 / issue` + workspace board icon, console 0/0/0); tag `v1.0.2` → commit `69d799a` pushed to origin — see [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据). v1.0.1 shipped with clean-profile install smoke **PASS**, fixture 17/17 + real 18/18 e2e stages PASS, 91/91 host tests and 15 screenshots. |
+| Writing | **opt-in** (`allowWrites: true`, default `false`); single-select `Status` field only; requires the `project` scope; no other GitHub write |
+| Acceptance | v1.1.0 release gates: host tests **130/130** pass; `node --check` OK; authoritative e2e **PASS** — fixture **21/21** stages (write path in a second isolated fixture stack with `allowWrites: true`, run dir `2026-10-29T00-17-13-691Z`) and real **21/21** stages read-only (run dir `2026-10-29T00-17-44-274Z`), console **0/0/0** in both modes with exactly one allowlisted 403 (the read-only `POST /item-status` probe; real mode performs zero GitHub writes); default-mode evidence (`writes.allowed=false`, no drag/move/drop UI, one read-only hint, no `/project-meta`, direct POST → 403) and write-path evidence (9/9 draggable cards, TODO→In Progress `{itemId, optionId}` posted, Undo re-posted the previous option, injected 502 rolled back) all verified; screenshot set `01`–`09` + `11`–`14` refreshed, new `16-projects-status-write.png`, `10` manual. npm `1.1.0` publish + clean-profile install smoke are the final release step and are recorded in [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据) after publication. v1.0.2 shipped with npm `latest`, release-smoke PASS and tag `v1.0.2` → `69d799a`. |
 
 `engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
 range — or one that changes the `conversation.view` slot, session standard props, the
@@ -496,8 +609,23 @@ may require a plugin update.
 
 ## Known limitations
 
-- **Read-only.** No writing to GitHub: no status changes, comments, issue creation or field edits.
-- **The board is read-only:** no drag-and-drop between columns, no manual card ordering.
+- **Read-only by default.** With `allowWrites` off (the default) no GitHub write happens at all: no
+  status changes, comments, issue creation, label or field edits.
+- **The only write is one Status field (opt-in).** With `allowWrites: true`, moving a card changes
+  only that Project item's `Status` single-select. There is no card ordering, no drag between list
+  sections, no comment/Issue editing and no other Project field write.
+- **Writing needs the `project` scope.** The token must carry `project` (`gh auth refresh -s
+  project`); the plugin never requests a broader scope. A missing scope fails the move with
+  `gh-auth` and an inline scope hint.
+- **Unknown custom statuses stay read-only:** `other:*` lanes are never drop targets and never appear
+  in the 移动到 menu — only the canonical Status options (plus clearing to `No status`) can be applied.
+- **Concurrent changes win:** if the item's Status changed on GitHub meanwhile, the host's answer is
+  authoritative and replaces the optimistic state; a rejected move rolls the card back.
+- **Undo covers the last move only** while its toast is visible; older moves must be reversed
+  manually. The undo itself is a normal `POST /item-status` and can fail (rolled back with an error
+  toast).
+- **Write failures are per-item:** a failed move shows an error toast and keeps the rest of the board
+  usable; `item-not-found`/`project-not-found` additionally triggers one `/items?refresh=1` reload.
 - **Lane visibility follows the filter:** the `No status` lane is hidden when its filtered count is 0
   (the four other canonical lanes always show), and a custom-status lane only appears when it has
   items — so the number of lanes changes with your milestone/text filters.
@@ -538,7 +666,9 @@ may require a plugin update.
   sidebar. Bound rows grow from 32px to ~41px while a subtitle is present; unbound rows stay 32px.
 - **Agent tools only target the current session:** there is no parameter to bind/unbind another
   session. They also need a host with `ctx.tools` and an owning agent; the UI reflects tool changes
-  via a cheap local poll (≤4 s), not a push channel.
+  via a cheap local poll (≤4 s), not a push channel. The fourth tool
+  (`github_project_item_status`, v1.1.0) is registered only when `allowWrites` is true and requires a
+  workspace-bound Project.
 - **External links need popup permission:** Issue links open via
   `window.open(url, '_blank', 'noopener,noreferrer')` (same as DSH's "Open in system browser"), so a
   browser/desktop setting that blocks popups can suppress the new tab. The plugin does not detect the

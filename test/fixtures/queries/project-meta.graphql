@@ -1,0 +1,19 @@
+query($owner:String!,$number:Int!){
+  repositoryOwner(login:$owner){
+    __typename
+    ... on ProjectV2Owner {
+      projectV2(number:$number){
+        id
+        title
+        field(name:"Status"){
+          __typename
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options { id name }
+          }
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,51 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.1.0 — 2026-10-29
+
+**Opt-in Project item status writes.** v1.1.0 adds the first GitHub write: with the new `allowWrites`
+config (default **false**) the project board can move an item between Status lanes (drag, or the
+card's `移动到` menu) and the model gets a fourth agent tool (`github_project_item_status`). Existing
+users are unaffected — writes stay off by default, the board remains read-only with a hint, and no
+other GitHub write exists.
+
+- **Board status writes (opt-in).** Set `allowWrites: true` and the board becomes movable: cards
+  expose a drag handle and a keyboard-accessible `移动到` menu listing every Status option plus
+  `No status`; custom `other:*` lanes stay read-only. A move repaints the card optimistically, shows
+  a toast with **Undo**, and any failure rolls the card back with an error toast. The only GitHub
+  mutation is the Project item's `Status` single-select field; comments, labels, Issue state and all
+  other Project fields are untouched.
+- **Host API.** New `GET /project-meta` (Project node id + `Status` field id/options, a cached read
+  only used when writes are allowed) and `POST /item-status` (the only write endpoint:
+  `{owner, number, itemId, optionId|null}`, `optionId: null` clears the Status). `GET /config` now
+  reports `writes: { allowed }`. While `allowWrites` is false, `/item-status` is refused with 403
+  `writes-disabled` and the client never requests `/project-meta`.
+- **Fourth agent tool: `github_project_item_status`.** Registered **only** when `allowWrites` is
+  true; moves one item of the current session's workspace-bound Project to a named Status option
+  (`status: null` clears it), accepting `itemId` or `repo`+`number`. It matches option names
+  case-insensitively, writes only the Status field, and renders e.g. `已把 #240 移到 In Progress`.
+- **Prerequisite: the `project` scope.** Writes use the same `gh` token as reads; a scope or
+  permission error surfaces as `gh-auth` with the hint `gh auth refresh -s project`. Authentication
+  still lives entirely in the `gh` CLI — the plugin never reads or stores tokens.
+- **Read-only default is unchanged and safe.** With `allowWrites` false (the default) there are no
+  drag handles, no `移动到` actions, no `other:*` drop targets, no `/project-meta` calls, and the
+  board shows exactly one read-only hint (`只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。`);
+  a direct `/item-status` POST is 403 `writes-disabled`, and the write tool is not registered.
+- No DSH compatibility change (`engines.dsh` still `>=0.2.1-rc.3 <0.3.0`, tested on 0.2.1-rc.3), no
+  new runtime dependencies, and **no breaking change** for existing users.
+- Verification: host tests **130/130** pass (`node --test test/host/*.test.mjs`; the 92-test baseline
+  plus 38 new tests) and `node --check index.js github.js dev/mock-host.js` is OK; authoritative e2e
+  **PASS** — fixture **21/21** stages (the write path runs in a second isolated fixture stack with
+  `allowWrites: true`, run dir `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-13-691Z`) and real
+  **21/21** stages in read-only mode (run dir `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-44-274Z`,
+  gh 2.96.0 / `ceasarXuu` / real Project #9), console **0 errors / 0 exceptions / 0 warnings** in both
+  modes with exactly one intentionally allowlisted 403 (the read-only `POST /item-status` probe) — the
+  real run performs zero GitHub writes. Write-path evidence: a TODO→In Progress move posted
+  `{itemId: "PVTI_lAHOAwDbXM4Bocj3zhDFe-U", optionId: "47fc9ee4"}`, Undo re-posted the previous
+  `8fc1d6c9` and moved the card back, and the mock failure item `PVTI_mock_write_failure` got 502 with
+  a rollback to TODO; new screenshot `16-projects-status-write.png`. The npm publish and
+  clean-profile install smoke for 1.1.0 are recorded in `docs/DESIGN.zh.md` §8.10 after publication.
+
 ## 1.0.2 — 2026-10-29
 
 **The Project board moves into DSH's right sidebar.** v1.0.2 replaces the conversation-header

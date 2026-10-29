@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Release smoke: install the *published* plugin from the npm registry into a
 // throw-away DSH profile, boot `dsh web` from that profile, verify the plugin
-// HTTP route, the shipped conversation tabs + the v1.0.2 right-sidebar board
+// HTTP route, the shipped conversation tabs + the v1.0.2 right-sidebar board,
+// and the v1.1.0 read-only default (writes stay opt-in; /config.writes.allowed=false).
 // entry, and capture the release screenshot.
 //
 // This is the post-publish gate (see RELEASING.md): unlike scripts/e2e/run.mjs it
@@ -10,7 +11,7 @@
 //
 // Usage:
 //   node scripts/e2e/release-smoke.mjs
-//   node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.2
+//   node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.1.0
 //   node scripts/e2e/release-smoke.mjs --spec=/abs/pkg.tgz --skip-install --home=/tmp/existing-home
 //
 // Output: JSON lines `{step, ok, detail}` then PASS/FAIL; exit 0 only when the
@@ -31,7 +32,7 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCREENSHOT = join(REPO_ROOT, 'artifacts', 'screenshots', '15-published-install.png')
-const DEFAULT_SPEC = '@ceasarxuu/dsh-github-projects@1.0.2'
+const DEFAULT_SPEC = '@ceasarxuu/dsh-github-projects@1.1.0'
 
 function parseArgs(argv) {
   const options = {
@@ -56,7 +57,7 @@ function parseArgs(argv) {
   }
   if (options.expectedVersion === null) {
     const match = options.spec.match(/@(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/u)
-    options.expectedVersion = match === null ? '1.0.2' : match[1]
+    options.expectedVersion = match === null ? '1.1.0' : match[1]
   }
   return options
 }
@@ -67,7 +68,7 @@ const HELP = `release-smoke — post-publish install + boot smoke for dsh-github
 
 Options:
   --spec=<pkg@version|tarball>  plugin spec for \`dsh plugin add\` (default ${DEFAULT_SPEC})
-  --expected-version=<v>        version expected in the profile (default 1.0.2)
+  --expected-version=<v>        version expected in the profile (default 1.1.0)
   --profile=<name>              DSH profile to install into (default web)
   --home=<dir>                  reuse an existing temp DSH_HOME (skip creating one)
   --skip-install                do not run \`dsh plugin add\` (profile must exist)
@@ -228,10 +229,23 @@ async function main() {
       assert(workspaceEntry !== null, 'clean published-install profile has no [data-ghp-workspace-entry] board icon in a workspace row')
       assert(workspaceEntry.aria === '打开 GitHub Project', `workspace board icon aria-label is ${JSON.stringify(workspaceEntry.aria)}, expected "打开 GitHub Project"`)
       assert(workspaceEntry.bound === '0', `workspace board icon is unexpectedly bound in the clean profile: ${JSON.stringify(workspaceEntry)}`)
+      // v1.1.0: writes are opt-in. A clean install must be read-only: the host
+      // reports writes.allowed=false and the board renders no write UI.
+      const writes = await resources.cdp.evaluate(`(async () => {
+        const response = await fetch('/plugin/github-projects/config')
+        const body = await response.json()
+        return {
+          allowed: body?.writes?.allowed,
+          moveActions: document.querySelectorAll('[data-ghp-card-action="move"]').length,
+          moveMenus: document.querySelectorAll('[data-ghp-move-menu]').length,
+        }
+      })()`)
+      assert(writes.allowed === false, `v1.1.0 clean install must be read-only (allowWrites default false), /config.writes = ${JSON.stringify(writes)}`)
+      assert(writes.moveActions === 0 && writes.moveMenus === 0, `v1.1.0 read-only install rendered write UI: ${JSON.stringify(writes)}`)
       assert(await clickTab(resources.cdp, '对话'), 'could not return to the chat view for the screenshot')
       await settle(400)
       await resources.cdp.screenshot(options.screenshot)
-      return { tabs: labels, workspaceEntry, screenshot: options.screenshot }
+      return { tabs: labels, workspaceEntry, writes, screenshot: options.screenshot }
     }))) throw new Error('tabs/screenshot check failed')
 
     // 5) browser console / network checks

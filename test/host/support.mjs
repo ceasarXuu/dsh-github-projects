@@ -34,7 +34,20 @@ export const fixture = {
   graphqlProjects: loadFixture('graphql-projects.json'),
   graphqlItemsPage1: loadFixture('graphql-items-page1.json'),
   graphqlItemsPage2: loadFixture('graphql-items-page2.json'),
+  // v1.1.0 write path (provenance in test/fixtures/README.md).
+  graphqlProjectMeta: loadFixture('graphql-project-meta.json'),
+  graphqlUpdateItemStatus: loadFixture('graphql-update-item-status.json'),
+  graphqlClearItemStatus: loadFixture('graphql-clear-item-status.json'),
 }
+
+/** Real GraphQL ids captured 2026-10-29 (`gh` 2.96.0, Project `web-issues`). */
+const metaNode = fixture.graphqlProjectMeta.data.repositoryOwner.projectV2
+export const PROJECT_META_IDS = Object.freeze({
+  projectId: metaNode.id,
+  statusFieldId: metaNode.field.id,
+  /** option name → option id (`TODO`, `In Progress`, `In Review`, `Done`). */
+  options: Object.freeze(Object.fromEntries(metaNode.field.options.map(option => [option.name, option.id]))),
+})
 
 /* ------------------------------------------------------------------ */
 /* Fake `gh` runner.                                                   */
@@ -106,6 +119,19 @@ export async function fixtureRun(args) {
           variables[key] = args[index + 1].slice(separator + 1)
         }
       }
+    }
+    if (/updateProjectV2ItemFieldValue/u.test(query)) {
+      return { stdout: `${JSON.stringify(fixture.graphqlUpdateItemStatus)}\n`, stderr: '' }
+    }
+    if (/clearProjectV2ItemFieldValue/u.test(query)) {
+      return { stdout: `${JSON.stringify(fixture.graphqlClearItemStatus)}\n`, stderr: '' }
+    }
+    if (/field\(name:"Status"\)/u.test(query)) {
+      if (variables.owner !== PROJECT_OWNER || variables.number !== '9') {
+        // GraphQL answers 200 with a null project for a missing/unauthorized one.
+        return { stdout: `${JSON.stringify({ data: { repositoryOwner: { projectV2: null } } })}\n`, stderr: '' }
+      }
+      return { stdout: `${JSON.stringify(fixture.graphqlProjectMeta)}\n`, stderr: '' }
     }
     if (/projectV2\(number/u.test(query)) {
       if (variables.number !== '9' || variables.owner !== PROJECT_OWNER) {

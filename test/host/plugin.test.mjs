@@ -21,8 +21,10 @@ import {
   fixture,
   fixtureRun,
   ghAuthError,
+  ghError,
   ghMissingError,
   ghNotFound,
+  PROJECT_META_IDS,
   startApp,
 } from './support.mjs'
 
@@ -54,6 +56,7 @@ const SECOND_ISSUE_SUMMARY = {
 }
 
 const sleep = (ms) => new Promise(resolve => { setTimeout(resolve, ms) })
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
 
 function useApp(t, options) {
   const app = startApp(options)
@@ -137,10 +140,12 @@ test('GET /config reads bindings only and never waits for gh', async (t) => {
   const started = Date.now()
   const cold = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
   const elapsed = Date.now() - started
-  assert.deepEqual(Object.keys(cold).sort(), ['gh', 'session', 'workspace'])
+  assert.deepEqual(Object.keys(cold).sort(), ['gh', 'session', 'workspace', 'writes'])
   assert.deepEqual(cold.workspace, { workspaceId: 'ws-123', project: null })
   assert.deepEqual(cold.session, { sessionId: 'session-abc', issue: null, workspaceId: 'ws-123' })
   assert.deepEqual(cold.gh, { available: false, version: null, account: null, error: 'pending' })
+  // v1.1.0: writes are opt-in, so the default host reports writes.allowed=false.
+  assert.deepEqual(cold.writes, { allowed: false })
   assert.ok(elapsed < 50, `cold /config took ${String(elapsed)}ms`)
 
   // The background probe populates the snapshot soon after.
@@ -610,6 +615,259 @@ test('GET /items maps a missing Project to 404 and bad params to 400', async (t)
 })
 
 /* ------------------------------------------------------------------ */
+/* v1.1.0 opt-in writes: /config.writes, /project-meta, /item-status   */
+/* ------------------------------------------------------------------ */
+
+/** The real item id of issue #240 in Project 9 (fixture `graphql-items-page1`). */
+const ITEM_240_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs'
+
+/** `gh api graphql` invocations whose query text matches `pattern`. */
+function graphqlQueries(app, pattern) {
+  return app.calls.filter(args => (
+    args[0] === 'api'
+    && args[1] === 'graphql'
+    && args.some(arg => typeof arg === 'string' && pattern.test(arg))
+  ))
+}
+
+const metaCalls = (app) => graphqlQueries(app, /field\(name:"Status"\)/u)
+const itemPageCalls = (app) => graphqlQueries(app, /items\(first:/u)
+const mutationCalls = (app) => graphqlQueries(app, /updateProjectV2ItemFieldValue|clearProjectV2ItemFieldValue/u)
+
+test('GET /config reports writes.allowed from the opt-in allowWrites config', async (t) => {
+  const readOnly = useApp(t)
+  assert.deepEqual(expectJson(await readOnly.get('/config')).writes, { allowed: false })
+  // `allowWrites` is strict opt-in: only an explicit boolean true enables writes.
+  for (const value of [false, 'true', 1, undefined]) {
+    const app = useApp(t, { config: { allowWrites: value } })
+    assert.deepEqual(expectJson(await app.get('/config')).writes, { allowed: false })
+  }
+  const writable = useApp(t, { config: { allowWrites: true } })
+  assert.deepEqual(expectJson(await writable.get('/config')).writes, { allowed: true })
+})
+
+test('GET /project-meta returns the Project node id and Status field options', async (t) => {
+  const app = useApp(t)
+  const body = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'project', 'stale', 'statusField'])
+  assert.deepEqual(body.project, {
+    id: PROJECT_META_IDS.projectId,
+    owner: 'ceasarXuu',
+    number: 9,
+    title: 'web-issues',
+  })
+  assert.equal(body.statusField.id, PROJECT_META_IDS.statusFieldId)
+  assert.equal(body.statusField.name, 'Status')
+  assert.deepEqual(body.statusField.options, [
+    { id: PROJECT_META_IDS.options.TODO, name: 'TODO' },
+    { id: PROJECT_META_IDS.options['In Progress'], name: 'In Progress' },
+    { id: PROJECT_META_IDS.options['In Review'], name: 'In Review' },
+    { id: PROJECT_META_IDS.options.Done, name: 'Done' },
+  ])
+  assert.equal(body.stale, false)
+  assert.match(body.fetchedAt, ISO_TIMESTAMP)
+
+  // One GraphQL read, then the SWR cache; `refresh=1` forces a fresh read.
+  assert.equal(metaCalls(app).length, 1)
+  const cached = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  assert.equal(cached.fetchedAt, body.fetchedAt)
+  assert.equal(metaCalls(app).length, 1)
+  expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9&refresh=1'))
+  assert.equal(metaCalls(app).length, 2)
+})
+
+test('GET /project-meta maps a missing Project to 404 and bad params to 400', async (t) => {
+  const app = useApp(t)
+  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=99999'), 404, 'project-not-found')
+  expectErrorJson(await app.get('/project-meta?owner=bad/owner&number=9'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=abc'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu'), 400, 'bad-request')
+})
+
+test('POST /item-status is refused with 403 writes-disabled when allowWrites is false', async (t) => {
+  const app = useApp(t)
+  const payload = {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options['In Review'],
+  }
+  const error = expectErrorJson(await app.post('/item-status', payload), 403, 'writes-disabled')
+  assert.match(error.message, /allowWrites/u)
+  // Refused before any gh read or mutation.
+  assert.deepEqual(app.calls, [])
+  // The gate runs before body parsing: even a malformed body is writes-disabled.
+  expectErrorJson(await app.post('/item-status', null, { raw: '{not json' }), 403, 'writes-disabled')
+  assert.deepEqual(app.calls, [])
+})
+
+test('POST /item-status moves an item and returns the applied Status', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true } })
+  const body = expectJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options['In Review'],
+  }))
+  assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'item', 'status'])
+  assert.deepEqual(body.item, { id: ITEM_240_ID })
+  assert.deepEqual(body.status, { optionId: PROJECT_META_IDS.options['In Review'], name: 'In Review' })
+  assert.match(body.fetchedAt, ISO_TIMESTAMP)
+
+  const calls = mutationCalls(app)
+  assert.equal(calls.length, 1)
+  const command = calls[0].join(' ')
+  assert.match(command, /updateProjectV2ItemFieldValue/u)
+  assert.ok(command.includes(`-f projectId=${PROJECT_META_IDS.projectId}`))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+  assert.ok(command.includes(`-f fieldId=${PROJECT_META_IDS.statusFieldId}`))
+  assert.ok(command.includes(`-f optionId=${PROJECT_META_IDS.options['In Review']}`))
+  assert.ok(!command.includes('clearProjectV2ItemFieldValue'))
+  // The host resolves projectId/fieldId itself with one metadata read.
+  assert.equal(metaCalls(app).length, 1)
+})
+
+test('POST /item-status handles the real all-digit Done option id', async (t) => {
+  // Real Projects option ids: TODO `8fc1d6c9`, In Progress `47fc9ee4`,
+  // In Review `edd18149`, Done `98236657`. `gh -F` would infer the last as a
+  // JSON number, so mutation variables are passed raw (`-f`) and the mutation
+  // declares the GitHub schema's `singleSelectOptionId: String`.
+  assert.equal(PROJECT_META_IDS.options.Done, '98236657')
+  assert.match(PROJECT_META_IDS.options['In Review'], /^[a-z0-9]+$/u)
+  const app = useApp(t, { config: { allowWrites: true } })
+  const body = expectJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options.Done,
+  }))
+  assert.deepEqual(body.status, { optionId: '98236657', name: 'Done' })
+  const command = mutationCalls(app)[0].join(' ')
+  assert.ok(command.includes('-f optionId=98236657'))
+  assert.match(command, /\$optionId:String!/u)
+})
+
+test('POST /item-status with optionId:null clears the Status field', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true } })
+  const body = expectJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: null,
+  }))
+  assert.deepEqual(body.item, { id: ITEM_240_ID })
+  assert.deepEqual(body.status, { optionId: null, name: null })
+
+  const calls = mutationCalls(app)
+  assert.equal(calls.length, 1)
+  const command = calls[0].join(' ')
+  assert.match(command, /clearProjectV2ItemFieldValue/u)
+  assert.ok(!command.includes('optionId='))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+})
+
+test('POST /item-status rejects an unknown option id with 400 and writes nothing', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true } })
+  const error = expectErrorJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: 'f0000000',
+  }), 400, 'bad-request')
+  assert.match(error.message, /未知的 Status 选项/u)
+  assert.deepEqual(mutationCalls(app), [])
+})
+
+test('POST /item-status validates the ItemStatusRequest body', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true } })
+  const valid = { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }
+  expectErrorJson(await app.post('/item-status', { ...valid, owner: 'bad/owner' }), 400, 'bad-request')
+  expectErrorJson(await app.post('/item-status', { ...valid, number: 0 }), 400, 'bad-request')
+  expectErrorJson(await app.post('/item-status', { ...valid, itemId: 'not-a-node-id' }), 400, 'bad-request')
+  expectErrorJson(await app.post('/item-status', { ...valid, itemId: undefined }), 400, 'bad-request')
+  // optionId is required: an omitted field is not an implicit clear.
+  expectErrorJson(
+    await app.post('/item-status', { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID }),
+    400,
+    'bad-request',
+  )
+  expectErrorJson(await app.post('/item-status', { ...valid, optionId: '' }), 400, 'bad-request')
+  expectErrorJson(await app.post('/item-status', { ...valid, optionId: '   ' }), 400, 'bad-request')
+  expectErrorJson(await app.post('/item-status', { ...valid, optionId: 42 }), 400, 'bad-request')
+  assert.deepEqual(mutationCalls(app), [])
+})
+
+test('POST /item-status maps a GraphQL NOT_FOUND write error to 404 item-not-found', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const query = args.find(arg => typeof arg === 'string' && arg.startsWith('query=')) ?? ''
+      if (/updateProjectV2ItemFieldValue/u.test(query)) {
+        throw ghError("gh: Could not resolve to a node with the global id of 'PVTI_stale'")
+      }
+    }
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner, config: { allowWrites: true } })
+  const error = expectErrorJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: 'PVTI_stale',
+    optionId: PROJECT_META_IDS.options.Done,
+  }), 404, 'item-not-found')
+  assert.match(error.message, /找不到该 Project 条目/u)
+})
+
+test('POST /item-status maps a missing project scope to 503 gh-auth with the refresh hint', async (t) => {
+  const runner = createRunner(async (args) => {
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const query = args.find(arg => typeof arg === 'string' && arg.startsWith('query=')) ?? ''
+      if (/clearProjectV2ItemFieldValue/u.test(query)) {
+        throw ghError('gh: Your token has not been granted the required scopes to execute this query.')
+      }
+    }
+    return fixtureRun(args)
+  })
+  const app = useApp(t, { runner, config: { allowWrites: true } })
+  const error = expectErrorJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: null,
+  }), 503, 'gh-auth')
+  assert.match(error.message, /gh auth refresh -s project/u)
+})
+
+test('POST /item-status maps a missing Project to 404 project-not-found', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true } })
+  expectErrorJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 99999,
+    itemId: ITEM_240_ID,
+    optionId: null,
+  }), 404, 'project-not-found')
+})
+
+test('POST /item-status invalidates the items SWR entry so the next /items re-reads', async (t) => {
+  const app = useApp(t, { config: { allowWrites: true, cacheTtlMs: 60_000 } })
+  const itemsUrl = '/items?owner=ceasarXuu&number=9'
+  expectJson(await app.get(itemsUrl))
+  assert.equal(itemPageCalls(app).length, 2, '195 items are two GraphQL pages')
+  // Warm cache: a second /items read must not touch gh.
+  expectJson(await app.get(itemsUrl))
+  assert.equal(itemPageCalls(app).length, 2)
+
+  expectJson(await app.post('/item-status', {
+    owner: 'ceasarXuu',
+    number: 9,
+    itemId: ITEM_240_ID,
+    optionId: PROJECT_META_IDS.options.Done,
+  }))
+  const refreshed = expectJson(await app.get(itemsUrl))
+  assert.equal(itemPageCalls(app).length, 4, 'the write must invalidate the cached item list')
+  assert.equal(refreshed.stale, false)
+})
+
+/* ------------------------------------------------------------------ */
 /* GET /issue                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -875,6 +1133,190 @@ test('agent tools surface gh failures with the contract code and never touch oth
   assert.equal(expectJson(await app.get('/config?sessionId=sess-tool-2')).session.issue, null)
   const switchTool = toolOf(app, 'github_issue_switch')
   await assert.rejects(switchTool.execute({ ref: 'acme/web#240' }, OTHER_TOOL_EXEC), /not bound/u)
+})
+
+/* ------------------------------------------------------------------ */
+/* v1.1.0 github_project_item_status (write tool, allowWrites only)    */
+/* ------------------------------------------------------------------ */
+
+const ITEM_STATUS_TOOL = 'github_project_item_status'
+
+/** Apply the plugin with writes enabled (and, when given, a custom runner). */
+function writableApp(t, options = {}) {
+  return useApp(t, { ...options, config: { allowWrites: true, ...options.config } })
+}
+
+/** Bind `ws-1` → PROJECT and the session → an Issue in that workspace. */
+async function bindToolSession(app, { sessionId = 'sess-tool-1', workspaceId = 'ws-1' } = {}) {
+  expectJson(await app.post('/bind-workspace', { workspaceId, project: PROJECT }))
+  expectJson(await app.post('/bind-issue', { sessionId, workspaceId, issue: ISSUE_SUMMARY }))
+}
+
+test('the write tool is registered only when allowWrites is true', (t) => {
+  const readOnly = useApp(t)
+  assert.deepEqual(readOnly.tools.map(definition => definition.name), [
+    'github_issue_bind',
+    'github_issue_switch',
+    'github_issue_unbind',
+  ])
+  assert.equal(readOnly.tools.some(definition => definition.name === ITEM_STATUS_TOOL), false)
+
+  const writable = writableApp(t)
+  assert.deepEqual(writable.tools.map(definition => definition.name), [
+    'github_issue_bind',
+    'github_issue_switch',
+    'github_issue_unbind',
+    ITEM_STATUS_TOOL,
+  ])
+  const definition = toolOf(writable, ITEM_STATUS_TOOL)
+  assert.equal(typeof definition.description, 'string')
+  assert.match(definition.description, /Status/u)
+  assert.equal(definition.parameters.type, 'object')
+  assert.deepEqual(definition.parameters.required, ['status'])
+  assert.deepEqual(Object.keys(definition.parameters.properties).sort(), ['itemId', 'number', 'repo', 'status'])
+  assert.equal(typeof definition.output.schema, 'object')
+  assert.equal(typeof definition.output.render, 'function')
+  assert.equal(typeof definition.execute, 'function')
+})
+
+test('tool github_project_item_status moves an item resolved from a content reference', async (t) => {
+  const app = writableApp(t)
+  await bindToolSession(app)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+  const expectedTitle = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2.items.nodes[0].content.title
+
+  const value = await tool.execute({ repo: 'acme/web', number: 240, status: 'in review' }, TOOL_EXEC)
+  assert.deepEqual(value, {
+    moved: true,
+    item: {
+      id: ITEM_240_ID,
+      repo: 'acme/web',
+      number: 240,
+      title: expectedTitle,
+    },
+    previous: { optionId: PROJECT_META_IDS.options['In Progress'], name: 'In Progress' },
+    status: { optionId: PROJECT_META_IDS.options['In Review'], name: 'In Review' },
+  })
+  assert.deepEqual(tool.output.render({}, value), [{ type: 'text', text: '已把 #240 移到 In Review' }])
+
+  const calls = mutationCalls(app)
+  assert.equal(calls.length, 1)
+  const command = calls[0].join(' ')
+  assert.match(command, /updateProjectV2ItemFieldValue/u)
+  assert.ok(command.includes(`-f projectId=${PROJECT_META_IDS.projectId}`))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+  assert.ok(command.includes(`-f fieldId=${PROJECT_META_IDS.statusFieldId}`))
+  assert.ok(command.includes(`-f optionId=${PROJECT_META_IDS.options['In Review']}`))
+  // The content reference is resolved by paging the items read (one page hit).
+  assert.equal(itemPageCalls(app).length, 1)
+})
+
+test('tool github_project_item_status accepts an itemId locator and clears with status:null', async (t) => {
+  const app = writableApp(t)
+  await bindToolSession(app)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+
+  const value = await tool.execute({ itemId: ITEM_240_ID, status: null }, TOOL_EXEC)
+  assert.deepEqual(value.status, { optionId: null, name: null })
+  assert.deepEqual(value.previous, { optionId: PROJECT_META_IDS.options['In Progress'], name: 'In Progress' })
+  assert.equal(value.item.id, ITEM_240_ID)
+  assert.equal(value.item.number, 240)
+  assert.match(tool.output.render({}, value)[0].text, /已把 #240 的状态清除/u)
+
+  const calls = mutationCalls(app)
+  assert.equal(calls.length, 1)
+  const command = calls[0].join(' ')
+  assert.match(command, /clearProjectV2ItemFieldValue/u)
+  assert.ok(!command.includes('optionId='))
+  assert.ok(command.includes(`-f itemId=${ITEM_240_ID}`))
+})
+
+test('tool github_project_item_status rejects an unknown status and lists the valid names', async (t) => {
+  const app = writableApp(t)
+  await bindToolSession(app)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 240, status: 'Blocked' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'bad-request')
+    assert.match(error.message, /^bad-request: /u)
+    assert.match(error.message, /unknown status/u)
+    for (const name of ['TODO', 'In Progress', 'In Review', 'Done']) {
+      assert.ok(error.message.includes(name), `valid status ${name} missing from: ${error.message}`)
+    }
+    return true
+  })
+  assert.deepEqual(mutationCalls(app), [])
+})
+
+test('tool github_project_item_status requires exactly one item locator', async (t) => {
+  const app = writableApp(t)
+  await bindToolSession(app)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+  const cases = [
+    { status: 'TODO' },
+    { itemId: ITEM_240_ID, repo: 'acme/web', number: 240, status: 'TODO' },
+    { repo: 'acme/web', status: 'TODO' },
+    { number: 240, status: 'TODO' },
+    { repo: 'acme/web', number: 240 },
+    { repo: 'bad repo', number: 240, status: 'TODO' },
+    { repo: 'acme/web', number: 0, status: 'TODO' },
+    { itemId: ITEM_240_ID, status: '  ' },
+    { itemId: ITEM_240_ID },
+    null,
+    'nope',
+  ]
+  for (const args of cases) {
+    await assert.rejects(tool.execute(args, TOOL_EXEC), (error) => {
+      assert.equal(error.code, 'bad-request', `args: ${JSON.stringify(args)}`)
+      assert.match(error.message, /^bad-request: /u)
+      return true
+    })
+  }
+  assert.deepEqual(mutationCalls(app), [])
+})
+
+test('tool github_project_item_status requires the session workspace-bound Project', async (t) => {
+  const app = writableApp(t)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+
+  // The calling session has no binding at all.
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 240, status: 'TODO' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'project-not-found')
+    assert.match(error.message, /bind a Project first/u)
+    return true
+  })
+
+  // The session knows a workspace, but that workspace has no Project.
+  expectJson(await app.post('/bind-issue', {
+    sessionId: 'sess-tool-1',
+    workspaceId: 'ws-unbound',
+    issue: ISSUE_SUMMARY,
+  }))
+  await assert.rejects(tool.execute({ itemId: ITEM_240_ID, status: 'TODO' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'project-not-found')
+    assert.match(error.message, /bind a Project first/u)
+    return true
+  })
+  assert.deepEqual(mutationCalls(app), [])
+})
+
+test('tool github_project_item_status requires a current session', async (t) => {
+  const app = writableApp(t)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+  for (const exec of [undefined, {}, { agent: {} }, { agent: { session: {} } }]) {
+    await assert.rejects(tool.execute({ itemId: ITEM_240_ID, status: 'TODO' }, exec), /no current session/u)
+  }
+})
+
+test('tool github_project_item_status maps a missing content reference to item-not-found', async (t) => {
+  const app = writableApp(t)
+  await bindToolSession(app)
+  const tool = toolOf(app, ITEM_STATUS_TOOL)
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 999999, status: 'Done' }, TOOL_EXEC), (error) => {
+    assert.equal(error.code, 'item-not-found')
+    assert.match(error.message, /^item-not-found: /u)
+    return true
+  })
+  assert.deepEqual(mutationCalls(app), [])
 })
 
 /* ------------------------------------------------------------------ */

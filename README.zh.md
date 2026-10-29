@@ -1,13 +1,15 @@
 # dsh-github-projects
 
-**v1.0.2 — 当前版本。** 把当前会话绑定的 GitHub Project 和 Issue 放进 DSH：看板在右侧栏，Issue 只差一个页签。
+**v1.1.0 — 当前版本。** 把 GitHub Project 看板、会话绑定的 Issue，以及**可选的 Project Status 写操作**带进 DSH——默认只读。
 
 这个 DSH 插件向会话头部追加 `issue` 视图：展示绑定到**会话**的 Issue，并在会话标题下显示一行
 **Issue 副标题**（v0.4.1 起左侧栏会话列表的会话行标题下也会显示）。**项目看板**——绑定到**工作区**的
 GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤——在 v1.0.2 从会话头部移到 DSH 的
-**右侧栏**：左侧栏每个工作区行上有一个小看板图标，点击即可打开（工作区已绑定时高亮）。点卡片或头部
-副标题会在**系统默认浏览器**新标签页打开 GitHub；左侧栏副标题不可交互，点会话行任意位置只会打开该
-会话。绑定由显式「绑定」按钮或 3 个 agent 工具完成。对 GitHub 全程只读——它是查看面板，不是写入工具。
+**右侧栏**：左侧栏每个工作区行上有一个小看板图标，点击即可打开（工作区已绑定时高亮）。**默认只读**：
+设置 `allowWrites: true`（v1.1.0，可选）后可以在 Status 泳道之间移动卡片（拖拽或卡片的「移动到」菜单），
+成功后弹出带「撤销」的 toast——这是插件唯一能做的 GitHub 写操作。点卡片或头部副标题会在**系统默认
+浏览器**新标签页打开 GitHub；左侧栏副标题不可交互，点会话行任意位置只会打开该会话。绑定由显式「绑定」
+按钮或 agent 工具完成。除可选的 Status 写外，它仍是查看面板，不是写入工具。
 
 ```
 会话头部： [ 对话 ] [ 轨迹 ] [ issue ] [ … ]
@@ -16,11 +18,81 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
 
 > 第三方插件，非 DeepSeek / DeepSeek Harness 官方组件。
 
-![保留 `issue` 页签的会话头部，以及右侧栏中的项目看板（v1.0.2 e2e）](artifacts/screenshots/01-tabs.png)
+![保留 `issue` 页签的会话头部，以及右侧栏中的项目看板（v1.1.0 e2e）](artifacts/screenshots/01-tabs.png)
+
+## 1.1.0 发布说明（可选 Project Status 写操作）
+
+当前版本。插件的第一项 GitHub 写操作是**可选的**：`allowWrites`（默认 **false**）把只读看板变成可移动
+看板，并注册第 4 个 agent 工具。已有安装保持原有只读行为，直到用户显式开启。
+
+| | |
+|---|---|
+| npm 包 | `@ceasarxuu/dsh-github-projects@1.1.0`（已准备发布；npm 发布 + 干净 profile 安装 smoke 是发布流程的最后一步） |
+| 发布 | [v1.1.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.1.0) |
+| 变更 | 可选 Status 写：拖拽 + 「移动到」菜单、撤销/回滚；`GET /project-meta` + `POST /item-status` + `/config.writes`；`github_project_item_status` 工具 |
+| 前置条件 | `gh` token 具备 `project` scope（`gh auth refresh -s project`） |
+| 兼容性 | 默认只读不变；无破坏性变更；DSH 兼容范围不变；无新增运行时依赖 |
+
+- **可选的 Status 写。** 设置 `allowWrites: true` 后，看板可以在 Status 列之间移动条目：把卡片拖到
+  另一个规范 Status 泳道，或用卡片上键盘可操作的 **移动到** 菜单（列出每个 Status 选项 + `No status`；
+  自定义 `other:*` 泳道保持只读）。卡片先乐观移动，成功 toast 带 **撤销**；任何失败都会把卡片回滚到
+  原泳道并显示错误 toast。唯一写回 GitHub 的是该条目的 `Status` 单选字段——不写评论、标签、Issue 状态
+  或其它 Project 字段。
+- **宿主 API。** `GET /project-meta`（Project node id + `Status` 字段 id/options；仅在允许写时才会请求的
+  缓存读取）、`POST /item-status`（唯一写端点；`optionId: null` 清除 Status）、`GET /config` 现在返回
+  `writes: { allowed }`。`allowWrites` 为 false 时，`/item-status` 返回 403 `writes-disabled`，客户端
+  不请求 `/project-meta`，看板只显示一条只读提示：
+  `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。`。
+- **新增 agent 工具 `github_project_item_status`。** **仅当** `allowWrites` 为 true 时注册。它把当前会话
+  所属工作区绑定 Project 的一个条目移动到指定 Status 选项（`status: null` 清除），参数可用 `itemId` 或
+  `repo`+`number`，Status 名称大小写不敏感匹配，只写 Status 字段，输出如 `已把 #240 移到 In Progress`。
+- **如何开启**——profile patch（覆盖会整体替换 `config`，需要重述所有键）+ scope，然后重载宿主：
+
+  ```yaml
+  # ~/.dsh/profiles/<profile>/cordis.patch.yml
+  - id: github-projects
+    name: '@ceasarxuu/dsh-github-projects'
+    config:
+      ghCommand: gh
+      requestTimeoutMs: 20000
+      cacheTtlMs: 60000
+      staleTtlMs: 600000
+      diskCache: true
+      cacheFile: null
+      maxProjectItems: 200
+      maxComments: 30
+      healthCacheTtlMs: 5000
+      healthFirstReadTimeoutMs: 3000
+      statePath: null
+      allowWrites: true
+  ```
+
+  ```sh
+  gh auth refresh -s project   # gh auth status 没有 project scope 时执行
+  ```
+
+  重载宿主（或重装插件）让解析后的配置生效。缺少 scope 时移动会以 `gh-auth` 错误失败，提示信息指向
+  `gh auth refresh -s project`。
+- **验收（发布门禁）。** 宿主测试 **130/130** 通过（`node --test test/host/*.test.mjs`；92 项基线 +
+  38 项新增），宿主文件 `node --check` 通过。权威 e2e（repo harness）：fixture **21/21** 阶段 PASS——
+  写路径在第二个隔离 fixture 栈中运行（`allowWrites: true`，run dir
+  `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-13-691Z`）——real **21/21** 阶段 PASS（只读模式，run dir
+  `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-44-274Z`；gh 2.96.0 / `ceasarXuu` / 真实 Project #9）。
+  两模式 console **0 errors / 0 exceptions / 0 warnings**，只有一条被加入白名单的故意 403（只读阶段的
+  `POST /item-status` 探针）；real 模式 **零** GitHub 写操作。默认模式证据：`/config.writes.allowed =
+  false`、没有可拖拽卡片/移动操作/放置目标、一条只读提示、0 次 `/project-meta` 请求、直接 POST → 403
+  `writes-disabled`。写路径证据（fixture，`allowWrites: true`）：9/9 卡片可拖拽且有「移动到」，菜单列出
+  TODO / In Progress / In Review / Done / No status；TODO→In Progress 移动提交
+  `{itemId: "PVTI_lAHOAwDbXM4Bocj3zhDFe-U", optionId: "47fc9ee4"}`；撤销重新提交之前的 `8fc1d6c9`
+  （TODO）并移回；mock 失败条目 `PVTI_mock_write_failure` 得到 502，卡片回滚到 TODO 并显示错误 toast。
+  新增截图：[`16-projects-status-write.png`](artifacts/screenshots/16-projects-status-write.png)。
+- **发布状态。** 本仓库准备 **v1.1.0**；npm 发布与干净 profile 安装 smoke 是发布流程的最后一步，发布后
+  补记到[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。在发布完成前，npm `latest` 仍指向此前已发布的
+  版本。
 
 ## 1.0.2 发布说明（右侧栏看板 + 选择器重复弹出修复）
 
-当前版本，已发布到 npm（`latest` = `1.0.2`）。看板离开会话头部、改为从左侧栏打开的右侧栏页签；
+已被 1.1.0 取代；已发布到 npm（`1.0.2`）。看板离开会话头部、改为从左侧栏打开的右侧栏页签；
 ProjectPicker 重复弹出的缺陷已修复。
 
 | | |
@@ -79,7 +151,7 @@ ProjectPicker 重复弹出的缺陷已修复。
 
 ## 1.0.0 发布说明（首个公开发布）
 
-**GitHub 项目与议题** v1.0.0 是首个公开发布版本（当前版本为上方的 **1.0.2**），**已上线 npm**：
+**GitHub 项目与议题** v1.0.0 是首个公开发布版本（当前版本为上方的 **1.1.0**），**已上线 npm**：
 [`@ceasarxuu/dsh-github-projects`](https://www.npmjs.com/package/@ceasarxuu/dsh-github-projects)。
 源码与问题反馈：<https://github.com/ceasarXuu/dsh-github-projects>；发布说明：
 <https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0>。许可证 MIT
@@ -90,7 +162,7 @@ ProjectPicker 重复弹出的缺陷已修复。
 | npm 包 | `@ceasarxuu/dsh-github-projects`（公开 scoped 包） |
 | Plugin Manager 显示名 | *GitHub Projects & Issues* / **GitHub 项目与议题**（来自 `locale/en.json` + `locale/zh.json`） |
 | 仓库 | <https://github.com/ceasarXuu/dsh-github-projects> |
-| 发布 | [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) · [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
+| 发布 | [v1.1.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.1.0) · [v1.0.2](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.2) · [v1.0.1](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.1) · [v1.0.0](https://github.com/ceasarXuu/dsh-github-projects/releases/tag/v1.0.0) |
 | 许可证 | MIT |
 | 宿主引擎 | `dsh >=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 运行时依赖 | 无（宿主半只用 `node:*`，浏览器半用宿主提供的 `react` / `react-dom`） |
@@ -116,13 +188,16 @@ ProjectPicker 重复弹出的缺陷已修复。
 追加的：停用插件后界面完全恢复原样。
 
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
-不上报遥测、也不直接访问 GitHub。
+不上报遥测、也不直接访问 GitHub。**读取始终可用；唯一的写操作是可选的 Project 条目 `Status` 更新**
+（`POST /item-status`，由 `allowWrites: true` 开启，v1.1.0）——插件从不接触 token，也不存在其它
+GitHub 写操作。
 
 ## 公开发布前的历史（0.x 特性说明）
 
 > 以下描述的是当时（0.x）的行为；**1.0.1 已改变**侧栏点击与链接打开方式——Issue 链接现在在系统
 > 默认浏览器打开，侧栏副标题不可交互（点会话行只会打开会话）。**1.0.2** 进一步把看板从会话头部
-> 移到右侧栏；下文中的「`projects` 页签」引用均为 1.0.2 之前的历史。
+> 移到右侧栏。**1.1.0** 增加可选 Status 写操作——下文中的「看板只读 / 不写 GitHub」引用均为
+> 1.1.0 之前的历史。
 
 ### 0.4.1 新特性：副标题同时出现在左侧会话列表
 
@@ -193,17 +268,18 @@ ProjectPicker 重复弹出的缺陷已修复。
 
 ## 界面
 
-以下均为 **v1.0.2 权威 e2e 截图集**（2026-10-29 重采：fixture 18/18、real 19/19 阶段 PASS，
+以下均为 **v1.1.0 权威 e2e 截图集**（2026-10-29 重采：fixture 21/21、real 21/21 阶段 PASS，
 console 0/0/0）。`01`–`09`、`12`–`14` 为 1280×800 harness 截图，`11` 为最大化右侧栏的
-**2200×1300**，`10` 为真实 Desktop 手动截图，`15` 为已发布 `1.0.2` 的干净 profile 安装截图。阶段
-定义与截图清单见 [`scripts/e2e/README.md`](scripts/e2e/README.md)。
+**2200×1300**，`16` 为 fixture 写路径截图，`10` 为真实 Desktop 手动截图，`15` 由发布后的
+release-smoke 重新生成。阶段定义与截图清单见
+[`scripts/e2e/README.md`](scripts/e2e/README.md)。
 
 | | |
 |---|---|
 | ![会话头部](artifacts/screenshots/01-tabs.png) | ![右侧栏未绑定空态](artifacts/screenshots/02-projects-empty.png) |
 | 会话头部保留 `对话 / 轨迹 / issue`（`projects` 页签已移除）；工作区行带看板图标。 | 点看板图标打开右侧栏 `项目` 面板：未绑定空态 + **选择 Project**。 |
 | ![Project 选择器](artifacts/screenshots/03-projects-picker.png) | ![泳道看板](artifacts/screenshots/04-projects-board.png) |
-| 选择器位于右侧栏面板内（按 owner 分组、可过滤）。 | 真实项目 #9 看板位于面板内：状态配色；空 No status 泳道自动隐藏（4 条泳道：TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195）。 |
+| 选择器位于右侧栏面板内（按 owner 分组、可过滤）。 | 真实项目 #9 看板位于面板内：状态配色；空 No status 泳道自动隐藏（4 条泳道：TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195）；默认只读提示可见。 |
 | ![列表视图](artifacts/screenshots/05-projects-list.png) | ![milestone 过滤](artifacts/screenshots/06-projects-milestone.png) |
 | 列表视图：状态色分组段 + 状态 chips（面板内）。 | milestone `v1.2.0` 筛选生效（195→19），No status 保持隐藏。 |
 | ![Issue 未绑定空态](artifacts/screenshots/07-issue-empty.png) | ![Issue 详情](artifacts/screenshots/08-issue-detail.png) |
@@ -214,15 +290,15 @@ console 0/0/0）。`01`–`09`、`12`–`14` 为 1280×800 harness 截图，`11`
 | 点 Issue 卡片正文在**系统默认浏览器**新标签页打开 GitHub，**不创建绑定**。绑定请用卡片上的「绑定」按钮。 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略；点击在系统浏览器打开）。 |
 | ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | ![真实 Desktop 手动截图](artifacts/screenshots/10-desktop-tabs.png) |
 | 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px，无横向溢出）；副标题**不可交互**，点会话行只会打开该会话；绑定变化经 `/bindings` 同步。 | **真实 Desktop 应用**安装后的手动截图：三个已绑定会话行各显示第二行 Issue 副标题（`#240 …` / `#289 …` / `#240 …`，均裁在行内），footer/头像区域干净（`1438×1370`，sha256 `3860f7b9…988c`；头部页签 `对话 / 轨迹 / issue`）。 |
-| ![发布版安装](artifacts/screenshots/15-published-install.png) | |
-| 从 npm 安装已发布 `1.0.2` 到干净 `web` profile：新会话头部显示 `对话 / 轨迹 / issue` + 工作区看板图标（发布后 release-smoke **PASS**，run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`）。 | |
+| ![发布版安装](artifacts/screenshots/15-published-install.png) | ![Status 写路径](artifacts/screenshots/16-projects-status-write.png) |
+| 已发布版本安装到干净 `web` profile（release smoke；v1.1.0 发布后重新生成——当前文件是 v1.0.2 安装图）。 | **写路径**（fixture 栈，`allowWrites: true`）：通过「移动到」菜单把卡片 TODO→In Progress；成功 toast 带撤销；失败会回滚卡片。 |
 
 `01`–`09`、`12`–`14` 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
 1280×800；`09` 需 `--extra-comments`）；`11` 为同一 harness 在 **2200×1300** 下最大化右侧栏采集。
-`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非 harness 产出）。`15-published-install.png`
-为已发布 `1.0.2` 的干净 profile 安装截图（发布后 `release-smoke` PASS，run dir
-`/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`）。看板/选择器截图
-（`02`–`06`、`12`）为 v1.0.2 右侧栏面板形态；`07`/`08`/`13`/`14` 与之前一样在右侧栏收起时采集。
+`16-projects-status-write.png` 为 fixture 专用写路径证据（第二个隔离栈，`allowWrites: true`；只读默认态
+见 `04-projects-board.png` 中的只读提示）。`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非
+harness 产出）。`15-published-install.png` 在发布后由干净 profile release-smoke 重新生成。看板/选择器
+截图（`02`–`06`、`12`）为右侧栏面板形态；`07`/`08`/`13`/`14` 与之前一样在右侧栏收起时采集。
 
 ## 前置条件
 
@@ -244,12 +320,16 @@ console 0/0/0）。`01`–`09`、`12`–`14` 为 1280×800 harness 截图，`11`
 
   没装 `gh`？macOS 上 `brew install gh`，其他平台见 <https://cli.github.com/>。用独立二进制也可以：
   DSH 看不到你 shell 的 `PATH` 时，把绝对路径填进 `ghCommand`。
+- **写操作（可选，v1.1.0）：** Status 写使用同一个 `project` scope——不申请额外或更大范围的权限。
+  如果移动时报 `gh-auth`/scope 错误，运行 `gh auth refresh -s project` 并重载宿主（见
+  [如何开启写操作](#110-发布说明可选-project-status-写操作)）。
 
 ## 安装
 
-插件**已上线 npm**：**`@ceasarxuu/dsh-github-projects@1.0.2`**（`latest` = 1.0.2）。把它装到你实际运行的 DSH profile
-（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。安装需要对
-profile 目录的写权限。
+插件**已发布到 npm**：`@ceasarxuu/dsh-github-projects`。**v1.1.0 是本仓库的当前版本**；它的 npm
+发布是本次发布流程的最后一步（在完成之前，npm `latest` 仍指向此前已发布的版本 1.0.2）。把发布版本显式
+装到你实际运行的 DSH profile（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用
+对应名字）。安装需要对 profile 目录的写权限。
 
 **Plugin Manager（推荐）：** 插件 → 添加 → 输入 `@ceasarxuu/dsh-github-projects` → 安装并保持启用。
 插件卡片会显示包里 `locale/` 元数据提供的中英文名称/描述与图标。
@@ -257,8 +337,8 @@ profile 目录的写权限。
 **命令行：**
 
 ```sh
-# 安装已发布版本到 desktop profile（显式 pin @1.0.2）
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.0.2
+# 安装发布版本到 desktop profile（显式 pin @1.1.0）
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.1.0
 
 # 确认已安装到该 profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -279,8 +359,8 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 
 这会记录为 `link:` 依赖（`link:` 前缀可省略）。仅用于开发；普通用户请使用上面的 npm 包。
 
-> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.0.2`（`latest` 已经是
-> 1.0.2）。
+> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.1.0`；npm `latest` 跟随
+> 最新已发布版本（1.1.0 发布完成前仍是 1.0.2）。
 
 ## 使用
 
@@ -300,9 +380,14 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
    acme/web#240」「解除当前会话的 Issue 绑定」（agent 工具）。
 7. 之后随时点会话标题下的副标题，可在系统浏览器重新打开该 Issue；侧栏副标题不可交互，点会话行
    只会打开该会话。
+8. **在 Status 泳道之间移动条目（可选，v1.1.0）。** 若已开启 `allowWrites`，把卡片拖到另一个 Status
+   泳道，或打开卡片的「移动到」菜单。卡片会立即移动，toast 确认并提供「撤销」；失败的移动会回滚并
+   显示错误。只会修改 Project 条目的 `Status` 字段；默认 `allowWrites: false` 时看板只读，并显示
+   `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。` 提示。
 
 点「刷新」强制新鲜读取（缓存过期后最多 10 分钟内可能先显示旧数据再后台刷新）；「更换」切换工作区
 绑定的 Project；「解绑」（需确认）清除绑定。解绑 Project 不会影响已绑定的 Issue。
+按钮文案以英文界面为准；中文界面本地化为 绑定 / 刷新 / 更换 / 解绑 / 移动到，视图切换为 泳道 / 列表。
 
 ## 配置
 
@@ -322,6 +407,7 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 | `healthCacheTtlMs` | `5000` | `gh` 健康快照 TTL（`/config`、`/health` 共享） |
 | `healthFirstReadTimeoutMs` | `3000` | **legacy，已不再使用**（0.4.0 起 `/config` 永不等待探测）；仅为兼容旧配置保留 |
 | `statePath` | `null` | 绑定存储文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/state.json` |
+| `allowWrites` | `false` | **可选的 GitHub 写操作（v1.1.0）。** `true` 开启看板拖拽 / 「移动到」菜单、`POST /item-status` 与 `github_project_item_status` agent 工具（只写 Status 单选字段）。需要 `project` scope。为 `false`（默认）时写操作被 403 `writes-disabled` 拒绝，工具不注册，看板只读并显示提示 |
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
@@ -339,7 +425,12 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
     healthCacheTtlMs: 5000
     healthFirstReadTimeoutMs: 3000
     statePath: null
+    allowWrites: false   # 设为 true（并 gh auth refresh -s project）可开启 Status 写
 ```
+
+要开启写操作：设 `allowWrites: true`、执行 `gh auth refresh -s project`，然后重载宿主——该行会
+**整体替换 `config`**，所以需要的键要全部重述（见
+[1.1.0 发布说明](#110-发布说明可选-project-status-写操作)）。
 
 ## 隐私与网络
 
@@ -350,7 +441,9 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 - **无遥测**、无统计、不加载外部图片/头像。Issue 正文按安全 Markdown 子集渲染（不执行 HTML、不加载远程图片）。
 - **本地状态很小：** `state.json` 只存 Project/Issue 的标题、链接、编号、状态摘要和绑定时间；
   删除该文件即重置全部绑定。
-- **只读：** 所有 GitHub 调用都是读取，插件没有任何写 GitHub 的端点。
+- **默认只读；只有一个可选写操作。** 除非设置 `allowWrites: true`，所有 GitHub 调用都是读取。开启后
+  唯一的写操作是 `POST /item-status`——修改一个 Project 条目的 `Status` 单选字段；插件没有任何其它
+  写端点（不编辑 Issue、评论、标签或其它 Project 字段）。
 
 ## 常见问题
 
@@ -368,6 +461,10 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 | 刚打开时闪一下「gh CLI 不可用」警告 | 冷启动时 `/config` 不等待 `gh`，先返回 `error:"pending"` 占位，后台探测 | 正常现象；探测完成后重新读取即恢复 |
 | 列表是旧数据 | 60 秒缓存 | 点「刷新」 |
 | 「绑定保存失败」 | `statePath` 不可写（权限/磁盘） | 检查路径与权限，或把 `statePath` 指到可写文件 |
+| 看板显示 `只读看板：开启 allowWrites 后才能…` | 写操作关闭——`allowWrites` 为 false（默认）或 profile patch 未生效 | 在 profile patch 中设 `allowWrites: true`（重述完整 config）并重载；见 [1.1.0 发布说明](#110-发布说明可选-project-status-写操作) |
+| 移动失败并返回 `writes-disabled`（403） | 写请求到达宿主时 `allowWrites` 解析为 false | 开启 `allowWrites: true` 并重载宿主 |
+| 移动失败并返回 `gh-auth` / scope 提示 | `gh` token 缺少 `project` scope | 运行 `gh auth refresh -s project`，然后重载宿主 |
+| 卡片移动后又跳回（错误 toast） | GitHub 拒绝写操作（权限/scope、未知选项、网络） | 查看 toast 文本；检查 `gh auth status`；重试——乐观移动会自动回滚 |
 
 ## 开发
 
@@ -385,33 +482,36 @@ node scripts/e2e/run.mjs --mode=real              # 同上，但使用真实 gh 
 
 | 文件 | 作用 |
 |---|---|
-| `index.js` | Cordis 宿主插件：HTTP API、请求门禁、缓存/单飞 |
-| `github.js` | `gh` CLI 适配器、规范化器、Issue 引用解析 |
+| `index.js` | Cordis 宿主插件：HTTP API、请求门禁、缓存/单飞、写门禁 + 4 个 agent 工具 |
+| `github.js` | `gh` CLI 适配器、GraphQL 读查询 + 写 mutation（`getProjectMeta` / `updateItemStatus` / 清除）、规范化器、Issue 引用解析 |
 | `state.js` | 绑定存储（原子 JSON 写入） |
-| `client.js` | 浏览器半：`conversation.view` 注册（`issue`）+ 右侧栏看板页签、工作区行入口图标、React 视图、安全 Markdown 渲染 |
-| `dev/mock-host.js` | 契约形状的 mock 宿主，无 `gh` 也能做 UI/e2e |
+| `client.js` | 浏览器半：`conversation.view` 注册（`issue`）+ 右侧栏看板页签、工作区行入口图标、看板 Status 写（可选拖拽 / 「移动到」/ 撤销）、React 视图、安全 Markdown 渲染 |
+| `dev/mock-host.js` | 契约形状的 mock 宿主，无 `gh` 也能做 UI/e2e（v1.1.0：`allowWrites`、`/project-meta`、`/item-status`、`mock-state` 写日志） |
 | `test/` | 宿主单元测试 + 采集的 `gh` fixtures |
 | `artifacts/screenshots/` | e2e 验收截图 |
 
 ### 本地 API
 
 浏览器半通过本机回环 JSON API 与插件通信（前缀 `/plugin/github-projects`；`application/json`、
-`cache-control: no-store`，错误体为 `{"error":{"code","message"}}`）。共 10 个端点：
+`cache-control: no-store`，错误体为 `{"error":{"code","message"}}`）。共 12 个端点：
 
 | 方法 + 路径 | 用途 |
 |---|---|
 | `GET /health` | `gh` 可用性 |
-| `GET /config?sessionId=&workspaceId=` | 当前绑定 + 缓存的 `gh` 健康快照（永不等待 `gh`） |
+| `GET /config?sessionId=&workspaceId=` | 当前绑定 + 缓存的 `gh` 健康快照 + 写能力（`writes.allowed`；永不等待 `gh`） |
 | `GET /bindings` | 全部会话→Issue 与工作区→Project 绑定（纯本地；侧栏副标题与工作区入口图标约 4s 轮询一次） |
 | `GET /projects?refresh=1` | 可访问的 Projects（按 owner 分组；SWR，带 `stale`） |
 | `GET /items?owner=&number=&refresh=1` | 一个 Project 的条目（分页 GraphQL；带 `stale`） |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | 一个 Issue + 评论（带 `stale`） |
+| `GET /project-meta?owner=&number=&refresh=1` | 写侧元数据：Project node id + `Status` 字段 id/options（缓存读取；仅在允许写时请求） |
 | `POST /bind-workspace` | 绑定 Project 到工作区 |
 | `POST /unbind-workspace` | 清除工作区绑定 |
 | `POST /bind-issue` | 绑定 Issue 到会话 |
 | `POST /unbind-issue` | 清除会话绑定 |
+| `POST /item-status` | **唯一写操作**：把一个 Project 条目移动到某个 Status 选项（`optionId: null` 清除）；`allowWrites` 非 true 时 403 `writes-disabled` |
 
-只有插件自己的浏览器半使用它；POST 有 Origin/Content-Type/大小门禁，且不会写 GitHub。
+只有插件自己的浏览器半使用它；POST 有 Origin/Content-Type/大小门禁。唯一的 GitHub 写是
+`/item-status`（由 `allowWrites` 门禁），其余全部只读。
 
 e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会碰你正在使用的 profile 和窗口。
 更多设计细节见 [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md)，冻结接口见 [`docs/CONTRACT.md`](docs/CONTRACT.md)。
@@ -420,14 +520,15 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | **1.0.2**（右侧栏项目看板 + ProjectPicker 重放修复，建立在 1.0.1 之上） |
+| 插件版本 | **1.1.0**（在 1.0.2 之上的可选 Project 条目 Status 写；默认只读） |
 | 宿主引擎 | `engines.dsh`：`>=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 验收 | v1.0.2 已发布并验证：冻结 `client.js` sha256 `684f2953…384e2`；宿主测试 **92/92**；独立 picker-replay 验证器 **6/6 项检查**；权威 repo-e2e **PASS**——fixture **18/18** executed stages（run dir `2026-10-28T22-18-34-867Z`）、real **19/19** stages（run dir `2026-10-28T22-20-03-025Z`）、两模式 console **0/0/0**、新增 `project-picker-replay` 阶段 PASS、权威截图集 `01`–`14`（`11` 为 2200×1300，`10` 为手动）；npm `1.0.2` 已上线（`latest`，tarball 14 文件 / 打包 167.1 kB，shasum `217f2e88…041d`）；干净 profile `release-smoke` 安装 **PASS**（run dir `/tmp/dsh-github-projects-release-smoke/2026-10-28T22-36-14-259Z`；tabs `对话 / 轨迹 / issue` + 工作区看板图标、console 0/0/0）；tag `v1.0.2` → commit `69d799a` 已推送 origin——见[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。v1.0.1 已上线并通过干净 profile 安装 smoke **PASS**、fixture 17/17 + real 18/18 e2e PASS、宿主测试 91/91、15 张截图。 |
+| 写操作 | **可选**（`allowWrites: true`，默认 `false`）；只写 Status 单选字段；需要 `project` scope；无其它 GitHub 写 |
+| 验收 | v1.1.0 发布门禁：宿主测试 **130/130** 通过；`node --check` 通过；权威 e2e **PASS**——fixture **21/21** 阶段（写路径在第二个隔离 fixture 栈中运行，`allowWrites: true`，run dir `2026-10-29T00-17-13-691Z`）、real **21/21** 阶段（只读，run dir `2026-10-29T00-17-44-274Z`），两模式 console **0/0/0**，只有一条白名单内的故意 403（只读阶段的 `POST /item-status` 探针；real 模式零 GitHub 写）；默认模式证据（`writes.allowed=false`、无拖拽/移动/放置 UI、一条只读提示、0 次 `/project-meta`、直接 POST → 403）与写路径证据（9/9 可拖拽卡片、TODO→In Progress 提交 `{itemId, optionId}`、撤销重新提交上一选项、注入 502 后回滚）均验证；截图集 `01`–`09` + `11`–`14` 已重采，新增 `16-projects-status-write.png`，`10` 为手动。npm `1.1.0` 发布 + 干净 profile 安装 smoke 是发布流程最后一步，发布后补记到[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。v1.0.2 已上线（npm `latest`）并 release-smoke PASS、tag `v1.0.2` → `69d799a`。 |
 
 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了
 `conversation.view` slot、会话标准 props、`sidebarRight` / `sidebarRightTabs` 客户端服务、
@@ -435,8 +536,20 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 ## 已知限制
 
-- **只读。** 不写 GitHub：不改状态、不评论、不建 Issue、不改字段。
-- **泳道只读：** 不支持拖拽换列，也不支持手动排序。
+- **默认只读。** `allowWrites` 关闭（默认）时不会发生任何 GitHub 写：不改状态、不评论、不建 Issue、
+  不改标签或字段。
+- **唯一写操作是一个 Status 字段（可选）。** 开启 `allowWrites: true` 后，移动卡片只会修改该 Project
+  条目的 `Status` 单选字段；没有卡片排序、列表段拖拽、评论/Issue 编辑或其它 Project 字段写。
+- **写操作需要 `project` scope。** token 必须带 `project`（`gh auth refresh -s project`）；插件不会
+  申请更大范围的权限。缺少 scope 时移动以 `gh-auth` 失败，并在界面内联 scope 提示。
+- **未知自定义状态保持只读：** `other:*` 泳道不是放置目标，也不出现在「移动到」菜单——只能应用规范
+  Status 选项（以及清除为 `No status`）。
+- **并发修改以 GitHub 为准：** 若期间 GitHub 上的 Status 已变化，宿主的返回结果是权威值，覆盖乐观
+  状态；被拒绝的移动会回滚卡片。
+- **撤销只覆盖最近一次移动**（toast 展示期间）；更早的移动需手动反向操作。撤销本身也是一次普通
+  `POST /item-status`，失败时同样回滚并显示错误 toast。
+- **写失败只影响单个条目：** 失败移动显示错误 toast，看板其它部分仍可用；
+  `item-not-found`/`project-not-found` 还会额外触发一次 `/items?refresh=1` 重读。
 - **泳道数量随过滤变化：** `No status` 过滤后为空时自动隐藏（其余四个规范列常驻），自定义状态列
   只在有条目时出现，因此泳道数量会随 milestone/文本筛选变化。
 - **颜色只作辅助：** 状态/类型色都有文字标签兜底（彩色圆点为装饰），标题与正文保持中性色，
@@ -468,7 +581,9 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 - **侧栏副标题有约 4s 轮询延迟：** 本插件自己的绑定/解绑由 `binding-changed` 事件立即生效；agent
   工具改绑最迟下一轮轮询（≤4s）反映到侧栏。有副标题的会话行约 41px、未绑定的仍 32px。
 - **Agent 工具只作用于当前会话：** 没有跨会话参数，不能给其它会话绑定/解绑；工具需要宿主提供
-  `ctx.tools` 与 owning agent，界面通过本地轮询（≤4s）反映，不是推送。
+  `ctx.tools` 与 owning agent，界面通过本地轮询（≤4s）反映，不是推送。第 4 个工具
+  （`github_project_item_status`，v1.1.0）仅在 `allowWrites` 为 true 时注册，且需要工作区已绑定的
+  Project。
 - **外部链接依赖弹窗权限：** Issue 链接通过 `window.open(url, '_blank', 'noopener,noreferrer')`
   打开（与 DSH「在系统浏览器中打开」一致）；若浏览器/桌面端拦截弹窗，新标签页可能不出现。插件
   无法检测拦截；没有反应时请允许 DSH 弹出窗口后重试。

@@ -2,8 +2,16 @@
  * Contract-shaped MOCK host half for UI and e2e development.
  *
  * It serves exactly the HTTP contract in `docs/CONTRACT.md` from the captured
- * `gh` fixtures, with in-memory bindings, so the browser half can be developed
- * and screenshotted without the real `gh` CLI.
+ * `gh` fixtures, with in-memory bindings and (v1.1.0) in-memory Project item
+ * status writes, so the browser half can be developed and screenshotted
+ * without the real `gh` CLI.
+ *
+ * v1.1.0 additions: `GET /config.writes`, `GET /project-meta`,
+ * `POST /item-status` (honoring `allowWrites` from the overlay config), and one
+ * deterministic failure item (`MOCK_FAILURE_ITEM`, see below) so the e2e
+ * rollback stage can force a 5xx on demand. `GET /mock-state` is a
+ * mock-only debug/assertion aid (not part of the shipped contract) exposing the
+ * accepted write log and the current in-memory statuses.
  *
  * Load it through a `--patch` overlay row whose `name` is the absolute path of
  * this file; the client bundle is still served from this package because the
@@ -22,6 +30,7 @@ const projectList = readJson('project-list.json')
 const itemList = readJson('item-list.json')
 const issueFixture = readJson('issue.json')
 const commentFixtures = readJson('issue-comments.json')
+const projectMetaFixture = readJson('graphql-project-meta.json')
 
 /** @type {Map<string, { workspaceId: string, project: object }>} */
 const workspaceBindings = new Map()
@@ -100,6 +109,19 @@ function issueOf(raw, comments) {
 }
 
 /**
+ * v1.1.0 deterministic write-failure item (e2e rollback stage):
+ * `POST /item-status` for this id always answers 502 `gh-failed`, so the
+ * client's optimistic-update rollback + failure toast can be driven in
+ * fixture mode. The id and title are stable mock-host contract surface.
+ */
+const MOCK_FAILURE_ITEM = Object.freeze({
+  id: 'PVTI_mock_write_failure',
+  number: 9005,
+  title: '[mock] 写入失败条目（e2e 回滚验证）',
+  repo: 'acme/web',
+})
+
+/**
  * Extra fixture-only items so the v1.1 board/filter stages have data in every
  * swimlane and a real "Backlog" population. They never reach real mode.
  */
@@ -129,16 +151,49 @@ const syntheticItems = [
     title: '[mock] Draft 条目：无编号、无仓库', url: null,
     state: null, status: 'TODO', labels: [], milestone: null,
   },
+  {
+    id: MOCK_FAILURE_ITEM.id, type: 'issue', number: MOCK_FAILURE_ITEM.number, repo: MOCK_FAILURE_ITEM.repo,
+    title: MOCK_FAILURE_ITEM.title,
+    url: `https://github.com/${MOCK_FAILURE_ITEM.repo}/issues/${String(MOCK_FAILURE_ITEM.number)}`,
+    state: 'OPEN', status: 'TODO', labels: ['mock', 'failure'], milestone: null,
+  },
 ]
 
 const projects = (projectList.projects ?? []).map(projectOf)
 const issue = issueOf(issueFixture, commentFixtures)
 
+/** Every mock item in board order: captured fixture items, then synthetic ones. */
+const baseItems = [...(itemList.items ?? []).map(itemOf), ...syntheticItems]
+
+/** v1.1.0 in-memory Status overrides: itemId → status name (`null` = No status). */
+const statusByItemId = new Map(baseItems.map(item => [item.id, item.status ?? null]))
+
+/** Accepted write log exposed by the mock-only `/mock-state` route. */
+const writeLog = []
+
+/** Real ids captured in `test/fixtures/graphql-project-meta.json`. */
+const projectMetaNode = projectMetaFixture.data.repositoryOwner.projectV2
+const statusField = {
+  id: projectMetaNode.field.id,
+  name: projectMetaNode.field.name,
+  options: projectMetaNode.field.options.map(option => ({ id: option.id, name: option.name })),
+}
+
+/** Every mock item with its current in-memory Status. */
+function allItems() {
+  return baseItems.map(item => ({ ...item, status: statusByItemId.get(item.id) ?? null }))
+}
+
+/** The mock Project matching `owner`/`number`, or `undefined`. */
+function findProject(owner, number) {
+  return projects.find(project => project.number === number && project.owner === owner)
+}
+
 function health() {
   return { available: true, version: 'gh version 2.96.0 (mock)', account: 'ceasarXuu', error: null }
 }
 
-function configFor(sessionId, workspaceId) {
+function configFor(sessionId, workspaceId, allowWrites) {
   return {
     gh: health(),
     workspace: {
@@ -150,6 +205,8 @@ function configFor(sessionId, workspaceId) {
       issue: sessionBindings.get(sessionId)?.issue ?? null,
       workspaceId: sessionBindings.get(sessionId)?.workspaceId ?? workspaceId ?? null,
     },
+    // v1.1.0 opt-in writes: mirrored from the mock host's overlay config.
+    writes: { allowed: allowWrites === true },
   }
 }
 
@@ -196,7 +253,7 @@ function normalizeRef(ref) {
   return null
 }
 
-async function handle(req, res, config) {
+async function handle(req, res, allowWrites) {
   const requestUrl = new URL(req.url ?? '/', 'http://127.0.0.1')
   // The shipped webServer matches a prefix route but passes the UNSTRIPPED
   // pathname (see docs/CONTRACT.md §3.1 and index.js `routePath`).
@@ -211,7 +268,7 @@ async function handle(req, res, config) {
     return send(res, 200, { ok: true, gh: health() })
   }
   if (req.method === 'GET' && route === '/config') {
-    return send(res, 200, configFor(sessionId, workspaceId))
+    return send(res, 200, configFor(sessionId, workspaceId, allowWrites))
   }
   if (req.method === 'GET' && route === '/bindings') {
     const sessions = {}
@@ -219,6 +276,16 @@ async function handle(req, res, config) {
     const workspaces = {}
     for (const [id, binding] of workspaceBindings.entries()) workspaces[id] = binding.project
     return send(res, 200, { sessions, workspaces, updatedAt: new Date().toISOString() })
+  }
+  // Mock-only debug/assertion aid (NOT part of the shipped contract): the e2e
+  // harness can read the accepted write payloads and the in-memory statuses.
+  if (req.method === 'GET' && route === '/mock-state') {
+    return send(res, 200, {
+      allowWrites: allowWrites === true,
+      writes: [...writeLog],
+      statuses: Object.fromEntries(statusByItemId),
+      failureItem: { id: MOCK_FAILURE_ITEM.id, title: MOCK_FAILURE_ITEM.title, number: MOCK_FAILURE_ITEM.number },
+    })
   }
   if (req.method === 'GET' && route === '/projects') {
     await delay(180)
@@ -234,12 +301,36 @@ async function handle(req, res, config) {
     await delay(220)
     const owner = query.get('owner') ?? projects[0]?.owner ?? ''
     const number = Number(query.get('number') ?? projects[0]?.number ?? 0)
-    const project = projects.find(item => item.number === number && item.owner === owner) ?? projects[0]
+    const project = findProject(owner, number) ?? projects[0]
+    const items = allItems()
     return send(res, 200, {
       project,
-      items: [...(itemList.items ?? []).map(itemOf), ...syntheticItems],
+      // v1.1.0: reflects in-memory status writes.
+      items,
       fetchedAt: new Date().toISOString(),
-      truncated: (itemList.totalCount ?? 0) > (itemList.items ?? []).length,
+      truncated: (itemList.totalCount ?? 0) > items.length,
+      stale: false,
+    })
+  }
+  // v1.1.0 write-side metadata: Project node id + Status field options.
+  if (req.method === 'GET' && route === '/project-meta') {
+    const owner = query.get('owner') ?? ''
+    const number = Number(query.get('number') ?? 0)
+    const project = findProject(owner, number)
+    if (project === undefined) return fail(res, 404, 'project-not-found', '找不到该 Project（mock）')
+    return send(res, 200, {
+      project: {
+        id: projectMetaNode.id,
+        owner: project.owner,
+        number: project.number,
+        title: project.title,
+      },
+      statusField: {
+        id: statusField.id,
+        name: statusField.name,
+        options: statusField.options.map(option => ({ ...option })),
+      },
+      fetchedAt: new Date().toISOString(),
       stale: false,
     })
   }
@@ -282,6 +373,52 @@ async function handle(req, res, config) {
     sessionBindings.delete(body.sessionId)
     return send(res, 200, { ok: true })
   }
+  // v1.1.0 the only mock write: in-memory Status updates, gated by allowWrites.
+  if (req.method === 'POST' && route === '/item-status') {
+    if (allowWrites !== true) {
+      return fail(res, 403, 'writes-disabled', '写操作未启用：mock host 的 overlay config 未设置 allowWrites: true')
+    }
+    let body
+    try {
+      body = JSON.parse(await readBody(req))
+    } catch {
+      return fail(res, 400, 'bad-request', '请求体不是合法 JSON')
+    }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return fail(res, 400, 'bad-request', '请求体必须是 JSON 对象')
+    }
+    const owner = String(body.owner ?? '')
+    const number = Number(body.number ?? 0)
+    const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : ''
+    const project = findProject(owner, number)
+    if (project === undefined) return fail(res, 404, 'project-not-found', '找不到该 Project（mock）')
+    if (itemId === '') return fail(res, 400, 'bad-request', '缺少 itemId')
+    const item = baseItems.find(entry => entry.id === itemId)
+    if (item === undefined) return fail(res, 404, 'item-not-found', '找不到该 Project 条目（mock）')
+    if (itemId === MOCK_FAILURE_ITEM.id) {
+      // Deterministic 5xx for the e2e rollback stage: the client must roll the
+      // optimistic card back and show the failure toast.
+      writeLog.push({ at: new Date().toISOString(), owner, number, itemId, optionId: body.optionId ?? null, ok: false, code: 'gh-failed' })
+      return fail(res, 502, 'gh-failed', 'mock injected mutation failure（回滚条目，确定性失败）')
+    }
+    if (!Object.hasOwn(body, 'optionId')) return fail(res, 400, 'bad-request', '缺少 optionId（清除请显式传 null）')
+    let status
+    if (body.optionId === null) {
+      statusByItemId.set(itemId, null)
+      status = { optionId: null, name: null }
+    } else {
+      const option = statusField.options.find(entry => entry.id === String(body.optionId))
+      if (option === undefined) return fail(res, 400, 'bad-request', `未知的 Status 选项 id：${String(body.optionId)}`)
+      statusByItemId.set(itemId, option.name)
+      status = { optionId: option.id, name: option.name }
+    }
+    writeLog.push({ at: new Date().toISOString(), owner, number, itemId, optionId: status.optionId, name: status.name, ok: true })
+    return send(res, 200, {
+      item: { id: itemId },
+      status,
+      fetchedAt: new Date().toISOString(),
+    })
+  }
   return fail(res, 404, 'not-found', `unknown mock route ${req.method ?? ''} ${route}`)
 }
 
@@ -293,11 +430,14 @@ export const inject = ['webServer']
 export function apply(ctx, config = {}) {
   const webServer = ctx.get('webServer')
   if (webServer === undefined) return
+  // v1.1.0: opt-in writes come from the overlay row config, exactly like the
+  // real host's `allowWrites` (default false).
+  const allowWrites = config?.allowWrites === true
   ctx.effect(() => webServer.register({
     kind: 'prefix',
     path: '/plugin/github-projects',
     handler: (req, res) => {
-      handle(req, res, config).catch((error) => {
+      handle(req, res, allowWrites).catch((error) => {
         try { fail(res, 500, 'internal', String(error?.message ?? error)) } catch { /* already closed */ }
       })
     },

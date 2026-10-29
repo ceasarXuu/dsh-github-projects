@@ -30,3 +30,16 @@ The GraphQL query documents used by `github.js` are kept in `queries/`:
 `queries/items.graphql` (project items + status field + content, paginated by
 `$cursor`) and `queries/projects.graphql` (viewer projects + viewer
 organizations' projects).
+
+## v1.1.0 write-path fixtures (2026-10-29, `gh` 2.96.0)
+
+| File | Provenance |
+|---|---|
+| `graphql-project-meta.json` | **Captured live, read-only** with `gh api graphql -f query="$(cat test/fixtures/queries/project-meta.graphql)" -F owner=ceasarXuu -F number=9` (Project `web-issues`, `PVT_kwHOAwDbXM4Bocj3`). Pins the real Project node id, the `Status` field id (`PVTSSF_…`) and the real option ids/names (`TODO` `8fc1d6c9`, `In Progress` `47fc9ee4`, `In Review` `edd18149`, `Done` `98236657`). |
+| `graphql-update-item-status.json` | **Synthesized** mutation response: `updateProjectV2ItemFieldValue` succeeds and echoes the item node (`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_…"}}}}`). It is the documented GitHub GraphQL success shape; the mutation was **not** executed against the live Project (the write path must stay opt-in and the fixtures are for tests/mock-host only). |
+| `graphql-clear-item-status.json` | **Synthesized** `clearProjectV2ItemFieldValue` success response, same shape/provenance as the update fixture. |
+
+The mutation query documents mirroring `github.js` are kept in
+`queries/update-item-status.graphql` and `queries/clear-item-status.graphql`.
+`graphql-items-page1/2.json` also feed the v1.1.0 `findProjectItem` resolution
+tests (the item ids are the real `PVTI_…` values).
