@@ -810,7 +810,9 @@ Every workspace row (`[data-row-key^="workspace:"]`) shows the branch its direct
 directly to the **right of the workspace title** and before the board entry icon (§4.7).
 
 - **Data**: the client keeps a module-level `WorkspaceId → WorkspaceBranch` map from `GET /branches`
-  (§3.6), refreshed by a 15 s poll plus an immediate nudge after a prompt leaves this page. It is a
+  (§3.6), refreshed by a 15 s poll plus a nudge ≈900 ms after a prompt leaves this page — on Enter in
+  the composer, and on a press of the composer's primary send control (both bound as passive
+  listeners; the shipped handlers still own sending). It is a
   separate map from `/bindings`: a branch read is local `git` and must never be coupled to GitHub.
 - **Rendering**: a plain `span` (`[data-ghp-workspace-branch]`) containing one truncating text child
   (`[data-ghp-workspace-branch-text]`). It is **non-interactive** — no button, no click handler — so a
