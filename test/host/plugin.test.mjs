@@ -7,6 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1442,4 +1443,76 @@ test('responses never echo environment variables or tokens', async (t) => {
     if (typeof secret === 'string' && secret.length > 8) assert.ok(!serialized.includes(secret))
   }
   assert.ok(!serialized.includes('token'))
+})
+
+/* ------------------------------------------------------------------ */
+/* GET /branches (v1.2.0, contract §3.6)                               */
+/* ------------------------------------------------------------------ */
+
+/** Register the fake ctx services the branch index resolves lazily. */
+function startAppWithWorkspaces(t, entries, options = {}) {
+  const app = useApp(t, options)
+  return app
+}
+
+test('/branches answers an empty map without a workspace registry', async (t) => {
+  const app = useApp(t)
+  const payload = expectJson(await app.get('/branches'))
+  assert.deepEqual(payload.workspaces, {})
+  assert.equal(payload.revision, 0)
+  assert.equal(payload.git.available, null)
+})
+
+test('/branches answers one entry per registered workspace against real git', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ghp-branch-route-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  mkdirSync(repo, { recursive: true })
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'init', '-q', '-b', 'main', '.'], { cwd: repo })
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'checkout', '-q', '-b', 'feat/sidebar-branch'], { cwd: repo })
+
+  const app = useApp(t, { registry: [{ id: 'wa', path: repo, sessionIds: [] }] })
+  const payload = expectJson(await app.get('/branches'))
+  assert.equal(payload.git.available, true)
+  assert.equal(payload.workspaces.wa.branch, 'feat/sidebar-branch')
+  assert.equal(payload.workspaces.wa.repo, true)
+  assert.equal(payload.workspaces.wa.path, repo)
+  assert.equal(payload.workspaces.wa.detached, false)
+})
+
+test('a user prompt refreshes only that workspace, and revises only on change', async (t) => {
+  const app = useApp(t, {
+    registry: [
+      { id: 'wa', path: '/ws/a', sessionIds: ['s1'] },
+      { id: 'wb', path: '/ws/b', sessionIds: ['s2'] },
+    ],
+    branches: { '/ws/a': 'main', '/ws/b': 'dev' },
+  })
+
+  const first = expectJson(await app.get('/branches'))
+  assert.equal(first.workspaces.wa.branch, 'main')
+  // Only the first read's own staleness pass has run so far.
+  const readsAfterFirstPaint = app.branchReads.length
+
+  // A synthetic injected message is not a human prompt: no refresh happens.
+  app.emitSessionEvent({ id: 's1', header: { cwd: '/ws/a' } }, {
+    type: 'user/message',
+    data: { source: { kind: 'system-prompt' } },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.branchReads.length, readsAfterFirstPaint)
+
+  // A real prompt refreshes the workspace that session belongs to.
+  app.setBranch('/ws/a', 'feat/next')
+  app.emitSessionEvent({ id: 's1', header: { cwd: '/ws/a' } }, {
+    type: 'user/message',
+    data: { source: { kind: 'user' } },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(app.branchReads.at(-1), ['/ws/a'])
+
+  const second = expectJson(await app.get('/branches'))
+  assert.equal(second.workspaces.wa.branch, 'feat/next')
+  assert.equal(second.workspaces.wb.branch, 'dev')
+  assert.equal(second.revision, first.revision + 1)
 })

@@ -214,6 +214,10 @@ function createFakeTools() {
  * @param {object} [options.config] - extra/overriding plugin config.
  * @param {Function} [options.runner] - injected gh runner (default fixture).
  * @param {string} [options.statePath] - override the temp state file path.
+ * @param {Array<{id: string, path: string, sessionIds?: string[]}>} [options.registry] -
+ *   fake `workspaceRegistry.list()` entries for the v1.2.0 `/branches` route.
+ * @param {Record<string, string>} [options.branches] - workspace path → branch
+ *   name for the injected branch reader (defaults to no repository).
  */
 export function startApp(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ghp-test-'))
@@ -223,16 +227,44 @@ export function startApp(options = {}) {
   const fake = createFakeWebServer()
   const fakeTools = createFakeTools()
   const disposers = []
+  const registryEntries = Array.isArray(options.registry) ? options.registry : []
+  const registry = { list: () => registryEntries }
+  const branchNames = { ...(options.branches ?? {}) }
+  /** Every directory list the branch reader was asked for. */
+  const branchReads = []
+  const branchReader = {
+    async read(directories) {
+      branchReads.push([...directories])
+      const answer = {}
+      for (const directory of directories) {
+        const branch = branchNames[directory]
+        answer[directory] = branch === undefined
+          ? { path: directory, repo: false, branch: null, detached: false, commit: null, readAt: null }
+          : { path: directory, repo: true, branch, detached: false, commit: null, readAt: new Date().toISOString() }
+      }
+      return answer
+    },
+  }
+  /** `session/event` listeners the plugin registered, in registration order. */
+  const sessionEventListeners = []
   const ctx = {
     get(name) {
       if (name === 'webServer') return fake.service
       if (name === 'tools') return fakeTools.service
+      if (name === 'workspaceRegistry') return options.registry === undefined ? undefined : registry
       return undefined
     },
     effect(callback) {
       const dispose = callback()
       disposers.push(dispose)
       return () => { if (typeof dispose === 'function') dispose() }
+    },
+    on(event, listener) {
+      if (event === 'session/event') sessionEventListeners.push(listener)
+      return () => {
+        const index = sessionEventListeners.indexOf(listener)
+        if (index !== -1) sessionEventListeners.splice(index, 1)
+      }
     },
   }
   apply(ctx, {
@@ -243,6 +275,9 @@ export function startApp(options = {}) {
     healthCacheTtlMs: 0,
     ...options.config,
     run: runner,
+    // v1.2.0 branch seam: when the test declares branch names, never spawn
+    // `git`; without them the real git-backed reader is exercised.
+    branchReader: options.branches === undefined ? undefined : branchReader,
   })
   const route = fake.routes[0]
   const request = (requestOptions) => invokeHandler(route.handler, requestOptions)
@@ -257,6 +292,16 @@ export function startApp(options = {}) {
     routes: fake.routes,
     service: fake.service,
     request,
+
+    branchReads,
+    /** Drive an accepted `session/event` through the plugin's listeners. */
+    emitSessionEvent(session, event) {
+      for (const listener of [...sessionEventListeners]) listener(session, event)
+    },
+    /** Move one workspace's branch without touching the fake registry. */
+    setBranch(path, branch) {
+      branchNames[path] = branch
+    },
     get(pathname, headers = {}) {
       return request({ method: 'GET', url: `${APP_PREFIX}${pathname}`, headers })
     },

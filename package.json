@@ -41,6 +41,7 @@
   },
   "files": [
     "index.js",
+    "branches.js",
     "github.js",
     "state.js",
     "client.js",
