@@ -66,6 +66,9 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
       healthCacheTtlMs: 5000
       healthFirstReadTimeoutMs: 3000
       statePath: null
+      gitCommand: git
+      gitTimeoutMs: 4000
+      branchTtlMs: 30000
       allowWrites: true
   ```
 
