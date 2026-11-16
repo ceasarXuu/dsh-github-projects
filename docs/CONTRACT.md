@@ -813,8 +813,15 @@ directly to the **right of the workspace title** and before the board entry icon
   (§3.6), refreshed by a 15 s poll plus an immediate nudge after a prompt leaves this page. It is a
   separate map from `/bindings`: a branch read is local `git` and must never be coupled to GitHub.
 - **Rendering**: a plain `span` (`[data-ghp-workspace-branch]`) containing one truncating text child
-  (`[data-ghp-workspace-branch-text]`). It is **non-interactive** — no button, no click handler, no
-  `pointer-events` capture — so a click lands on the shipped workspace row and only toggles it.
+  (`[data-ghp-workspace-branch-text]`). It is **non-interactive** — no button, no click handler — so a
+  click lands on the shipped workspace row and only toggles it. It keeps pointer events (and
+  `cursor: default`) so the native `title` tooltip is reachable when the text is truncated; it must
+  never capture or re-target the press itself.
+- **Repaint**: the sweep must reach a chip that already exists. The title-cell lookup skips a cell
+  that already holds a chip, so an existing chip's cell is taken from `existing.parentElement` —
+  otherwise the chip paints once and freezes on its startup branch, and neither the prompt refresh
+  nor the poll would ever show a checkout. The `workspace-branch` e2e stage asserts this by
+  performing a real `git checkout` and waiting for the chip text to change.
 - **Placement**: the shipped title cell is a **column** flex box (title, and room for a future
   subtitle), so a chip appended to it would stack underneath. While the chip is present the cell
   becomes one row (`flex-direction: row`), the title keeps `flex: 1 1 auto` and ellipsises first, and
