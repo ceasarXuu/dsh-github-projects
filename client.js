@@ -629,7 +629,8 @@ window.__ModuleLoader__.load({
           // stop control shares it while a turn runs, so a busy button is skipped.
           const card = target.closest('[data-composer-card]')
           if (card === null) return
-          const buttons = [...card.querySelectorAll('button')].filter(el => !el.disabled && el.getAttribute('aria-busy') !== 'true')
+          const buttons = [...card.querySelectorAll('button')]
+            .filter(el => !el.disabled && el.getAttribute('aria-busy') !== 'true')
           if (buttons.length === 0 || buttons.at(-1) !== button) return
           nudgeBranchMap()
         }
