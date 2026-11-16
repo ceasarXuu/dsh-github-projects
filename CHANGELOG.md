@@ -14,7 +14,9 @@ branch, a file, or a GitHub object.
   board entry icon. It is a plain `span` with no click handler, so clicking it just toggles the
   workspace row like clicking the name does. A **detached HEAD** shows `@<short sha>` in a muted warn
   colour, a **workspace that is not a git repository** shows no chip at all rather than a placeholder,
-  and the chip's tooltip carries the branch plus the workspace directory. The title ellipsises first
+  and the chip's tooltip carries the branch plus the workspace directory (the chip keeps pointer
+  events so that native tooltip stays reachable when the text is truncated, while a press still
+  lands on the workspace row and only toggles it). The title ellipsises first
   when the sidebar gets narrow, so the row never gains a horizontal scrollbar.
 - **When it is read.** Once at DSH startup (so the first paint already has every chip), again on every
   **user message** sent in that workspace (so a `git checkout` by you or the agent shows up on your
@@ -35,7 +37,10 @@ branch, a file, or a GitHub object.
   single-flight, the workspace-id index, the route shape and the mock host's `/branches`), and the
   fixture e2e harness passes every stage including the new `workspace-branch` stage (screenshot
   `17-workspace-branch.png`) in **both** fixture and real-host mode — both modes create a real git
-  repository for the run's first-use Workspace and assert the chip matches it.
+  repository for the run's first-use Workspace, assert the chip matches it, then perform a real
+  `git checkout` and assert the chip **repaints** (that assertion caught a real bug: the title-cell
+  lookup skipped the cell that already held a chip, so the chip froze on its startup branch and the
+  prompt/poll refreshes never reached the DOM).
 - Two e2e harness fixes were needed for the newer DSH build (0.2.2-rc.3) and are **harness-only, no
   product change**: the session-header tabs that overflow are folded into a `更多会话视图` menu the
   helper could not read (it returned `null`, failing `issue-bind-subtitle`), and the right-sidebar tab

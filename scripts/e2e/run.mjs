@@ -285,9 +285,11 @@ async function main() {
           env: {
             DEEPSEEK_API_KEY: 'sk-e2e-mock',
             DEEPSEEK_BASE_URL: resources.llm.baseUrl,
-            // Fixture mode: the mock host fabricates this branch for every
-            // workspace, so it must match the real repository the run created.
-            ...(workspaceRepo.ok ? { MOCK_BRANCHES: `*=${workspaceRepo.branch}` } : {}),
+            // Fixture mode: the mock host reports the REAL branch of the
+            // repository this run created, so both modes agree with the
+            // filesystem — including a checkout made mid-run by the repaint
+            // assertion — instead of with a frozen fixture value.
+            ...(workspaceRepo.ok ? { MOCK_BRANCHES: `*=git:${workspaceRepo.path}` } : {}),
           },
         })
         const url = await resources.dsh.waitForUrl(emitTimeout(90_000))
@@ -1237,6 +1239,36 @@ async function main() {
           const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(el => el.getBoundingClientRect().width > 0)
           return row === undefined ? null : row.getAttribute('aria-expanded')
         })()`)
+
+        // v1.2.0 regression guard: the chip must REPAINT when the host's answer
+        // changes. A real `git checkout` on the run's workspace followed by a
+        // forced /branches read proves the sweep reaches an existing chip — the
+        // first version looked up a title cell that it skipped precisely when a
+        // chip was already there, so the chip stayed frozen on its first branch.
+        let repaint = { changed: false, before: sample.text, after: null }
+        if (typeof workspaceRepo.checkout === 'function') {
+          const checkout = workspaceRepo.checkout()
+          assert(checkout.ok, `could not check out the repaint branch: ${String(checkout.reason)}`)
+          await resources.cdp.evaluate(`(() => { window.__ghpBranchRepaint = performance.now(); return true })()`)
+          // Polling picks the new branch up; wait for the chip text itself.
+          repaint = {
+            changed: await resources.cdp.waitFor(`(() => {
+              const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+              const text = [...document.querySelectorAll('[data-ghp-workspace-branch-text]')].find(vis)
+              return text !== undefined && (text.textContent || '').trim() === ${JSON.stringify(checkout.branch)}
+            })()`, { timeoutMs: emitTimeout(30_000), intervalMs: 150, label: 'chip repaint after checkout' })
+              .then(() => true).catch(() => false),
+            before: sample.text,
+            after: await resources.cdp.evaluate(`(() => {
+              const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+              const text = [...document.querySelectorAll('[data-ghp-workspace-branch-text]')].find(vis)
+              return text === undefined ? null : (text.textContent || '').trim()
+            })()`),
+          }
+          assert(repaint.changed,
+            `workspace branch chip did not repaint after a real git checkout to ${JSON.stringify(checkout.branch)} (still ${JSON.stringify(repaint.after)}): an existing chip is never updated`)
+          await settle(200)
+        }
         await settle(200)
         const screenshot = await shot('17-workspace-branch.png')
         return {
@@ -1244,6 +1276,7 @@ async function main() {
           chipCount: chip.withChip,
           workspaceRows: chip.rows.length,
           workspaceRepo,
+          repaint,
           sample: {
             rowKey: sample.rowKey,
             text: sample.text,

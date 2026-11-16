@@ -114,7 +114,23 @@ export function initWorkspaceRepo(workspace, branch = 'e2e/workspace-branch') {
     git('commit', '-q', '--allow-empty', '-m', 'e2e: isolated run workspace')
     // A slash branch: exercises the chip's truncation and its non-default name.
     git('checkout', '-q', '-b', branch)
-    return { ok: true, branch, path: workspace }
+    // Used by the branch stage to prove the chip repaints on a real change.
+    // A sibling name, never a child: git cannot hold both `a` and `a/b` refs.
+    const repaintBranch = `${branch}-repaint`
+    return {
+      ok: true,
+      branch,
+      path: workspace,
+      /** Check the workspace out to a different branch; returns its name. */
+      checkout() {
+        try {
+          git('checkout', '-q', '-b', repaintBranch)
+          return { ok: true, branch: repaintBranch }
+        } catch (error) {
+          return { ok: false, branch: repaintBranch, reason: String(error?.message ?? error) }
+        }
+      },
+    }
   } catch (error) {
     // A machine without git still runs every other stage; the chip stage then
     // reports that the repository could not be prepared.

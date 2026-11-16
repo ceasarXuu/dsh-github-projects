@@ -18,6 +18,7 @@
  * nearest `package.json` carries the `dsh.client` declaration.
  */
 
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -187,6 +188,13 @@ const MOCK_BRANCHES = [
 const branchOverrides = new Map()
 /** `*=<branch>` sets the value for every workspace without its own entry. */
 let branchDefault = null
+/**
+ * `*=git:<dir>` makes every workspace answer whatever branch `<dir>` is really
+ * on, read live. The e2e harness uses this so the fixture stack reports the same
+ * fact as the real git repository it created (including a checkout performed
+ * mid-run by the repaint assertion) without pretending to be a workspace list.
+ */
+let branchGitDirectory = null
 for (const pair of String(process.env.MOCK_BRANCHES ?? '').split(',')) {
   const index = pair.indexOf('=')
   if (index <= 0) continue
@@ -198,18 +206,35 @@ for (const pair of String(process.env.MOCK_BRANCHES ?? '').split(',')) {
     : value.startsWith('!')
       ? { repo: false }
       : { branch: value, detached: false }
-  if (id === '*') branchDefault = parsed
+  if (id === '*' && value.startsWith('git:')) branchGitDirectory = value.slice('git:'.length).trim()
+  else if (id === '*') branchDefault = parsed
   else branchOverrides.set(id, parsed)
+}
+
+/** Live branch of `branchGitDirectory`, or `null` when it cannot be read. */
+function liveGitBranch() {
+  if (branchGitDirectory === null || branchGitDirectory === '') return null
+  try {
+    const branch = execFileSync('git', ['symbolic-ref', '--short', '-q', 'HEAD'], {
+      cwd: branchGitDirectory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return branch === '' ? null : branch
+  } catch {
+    return null
+  }
 }
 
 /** True when a workspace id is a real workspace row (not the ungrouped bucket). */
 function branchPayload() {
+  const live = liveGitBranch()
   const workspaces = {}
   let index = 0
   for (const workspaceId of workspaceBindings.keys()) {
     if (typeof workspaceId !== 'string' || workspaceId === '' || workspaceId === 'ungrouped') continue
     const override = branchOverrides.get(workspaceId) ?? branchDefault
-    const fixture = override ?? MOCK_BRANCHES[index % MOCK_BRANCHES.length]
+    const fixture = live !== null
+      ? { branch: live, detached: false }
+      : override ?? MOCK_BRANCHES[index % MOCK_BRANCHES.length]
     index += 1
     if (fixture.repo === false) continue
     workspaces[workspaceId] = {

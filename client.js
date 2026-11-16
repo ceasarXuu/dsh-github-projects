@@ -2628,12 +2628,15 @@ window.__ModuleLoader__.load({
               if (existing !== null) existing.remove()
               continue
             }
-            const cell = titleCellOf(row)
+            // An existing chip lives in the very cell titleCellOf() skips (it
+            // skips any cell already holding a chip), so the cell is its parent
+            // — otherwise every sweep after the first would find no cell and
+            // the chip would freeze on its startup branch.
+            const cell = existing !== null ? existing.parentElement : titleCellOf(row)
             if (cell === null) continue
             if (existing === null) {
               cell.appendChild(workspaceBranchNodeFor(state, label, t))
             } else {
-              if (existing.parentElement !== cell) cell.appendChild(existing)
               updateWorkspaceBranchNode(existing, state, label, t)
             }
           }
@@ -6092,7 +6095,12 @@ a.ghp-board-card { text-decoration: none; }
   vertical-align: middle;
   -webkit-user-select: none;
   user-select: none;
-  pointer-events: none;
+  /* Keep the native title tooltip reachable (the full branch and the workspace
+     path when the text is truncated) while never becoming a click target of
+     its own: no handler is attached, so a press still bubbles to the shipped
+     workspace row and only toggles it. pointer-events: none would suppress the
+     tooltip entirely. */
+  cursor: default;
 }
 .ghp-workspace-branch-text {
   min-width: 0;
