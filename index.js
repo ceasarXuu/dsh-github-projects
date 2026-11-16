@@ -1089,7 +1089,8 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false, 
     return branches.read()
   }
 
-  async function readProjects(query) {    const record = await cache.get('projects', isRefresh(query.get('refresh')), () => gh.listProjects())
+  async function readProjects(query) {
+    const record = await cache.get('projects', isRefresh(query.get('refresh')), () => gh.listProjects())
     const value = record.value
     return {
       owners: Array.isArray(value.owners) ? value.owners : [],
