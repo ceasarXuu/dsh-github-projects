@@ -3,6 +3,45 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.2.0 — 2026-11-16
+
+**Workspace branch in the left sidebar.** Every workspace row now shows which git branch that
+workspace's directory is currently on, right next to the workspace name. It is a local read — `git`,
+never `gh`, never the network, no auth — and it is decoration: a read-only chip that never changes a
+branch, a file, or a GitHub object.
+
+- **The chip.** `web  main  ▣` — one muted chip to the right of the workspace title, before the
+  board entry icon. It is a plain `span` with no click handler, so clicking it just toggles the
+  workspace row like clicking the name does. A **detached HEAD** shows `@<short sha>` in a muted warn
+  colour, a **workspace that is not a git repository** shows no chip at all rather than a placeholder,
+  and the chip's tooltip carries the branch plus the workspace directory. The title ellipsises first
+  when the sidebar gets narrow, so the row never gains a horizontal scrollbar.
+- **When it is read.** Once at DSH startup (so the first paint already has every chip), again on every
+  **user message** sent in that workspace (so a `git checkout` by you or the agent shows up on your
+  next prompt), and on a 15 s poll to pick up an external checkout. A synthetic context injection — a
+  skill body, a file-change notice, a scheduled-task reminder, a goal continuation — is **not** a user
+  message and refreshes nothing.
+- **Host API.** New `GET /branches`: the branch of every registered workspace, cached per directory so
+  polling never spawns one `git` per request, with concurrent reads sharing a single process. Each
+  invocation runs bounded (`GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, an output cap, and a
+  deadline), so a hung or prompting git cannot wedge the route. Without the `workspaceRegistry`
+  service the route still answers 200 with an empty map and the chip simply never appears.
+- **Config.** Three new keys: `gitCommand` (default `git`), `gitTimeoutMs` (4000) and `branchTtlMs`
+  (30000). Restate them in a profile patch only when you override the row, like the other keys.
+- No breaking change, no new runtime dependencies, no DSH compatibility change (`engines.dsh` still
+  `>=0.2.1-rc.3 <0.3.0`). Existing installs keep every previous behavior; the chip appears on its own.
+- Verification: host tests **159/159** pass (`node --test test/host/*.test.mjs`; the 130-test v1.1.0
+  baseline plus 29 new tests covering a real throw-away repository per branch state, the cache and
+  single-flight, the workspace-id index, the route shape and the mock host's `/branches`), and the
+  fixture e2e harness passes every stage including the new `workspace-branch` stage (screenshot
+  `17-workspace-branch.png`).
+- Two e2e harness fixes were needed for the newer DSH build (0.2.2-rc.3) and are **harness-only, no
+  product change**: the session-header tabs that overflow are folded into a `更多会话视图` menu the
+  helper could not read (it returned `null`, failing `issue-bind-subtitle`), and the right-sidebar tab
+  close menu (`data-dockkit-tab-menu`) does not exist in that build, so the warm-open stage now
+  unmounts the pane by collapsing the sidebar instead. The harness also resolves the `dsh` CLI by
+  probing the renamed app bundle (`$DSH_E2E_CLI` first).
+
 ## 1.1.0 — 2026-10-29
 
 **Opt-in Project item status writes.** v1.1.0 adds the first GitHub write: with the new `allowWrites`

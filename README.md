@@ -1,7 +1,8 @@
 # dsh-github-projects
 
-**v1.1.0 — current release.** The GitHub Project board, the Issue bound to your session, and now
-**opt-in Project status writes** — read-only by default.
+**v1.2.0 — current release.** The GitHub Project board, the Issue bound to your session, the **git
+branch of each workspace** in the left sidebar, and **opt-in Project status writes** — read-only by
+default.
 
 This DSH plugin appends the `issue` view to the conversation header — it shows the Issue bound to the
 **session**, with a one-line **issue subtitle** under the session title in the conversation header
@@ -9,8 +10,10 @@ This DSH plugin appends the `issue` view to the conversation header — it shows
 GitHub Project bound to the **workspace**, as a status swimlane board by default with a list view and
 a milestone filter — moved in v1.0.2 out of the conversation header into DSH's **right sidebar**: one
 small board icon in every workspace row of the left sidebar opens it (highlighted when that workspace
-is bound). **Read-only by default**: set `allowWrites: true` (v1.1.0, opt-in) and you can move items
-between Status lanes (drag, or the card's 移动到 menu) with an Undo toast — the only GitHub write the
+is bound). Since v1.2.0 every workspace row also shows that directory's **current git branch**,
+directly to the right of the workspace name (read once at startup, again on every user message in
+that workspace, plus a 15 s poll). **Read-only by default**: set `allowWrites: true` (v1.1.0,
+opt-in) and you can move items between Status lanes (drag, or the card's 移动到 menu) with an Undo toast — the only GitHub write the
 plugin can perform. Clicking a card or the header subtitle opens GitHub in your **system default
 browser** (new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row
 just opens that session. A separate **Bind** action binds the Issue to the session, and the model can
@@ -18,7 +21,7 @@ do the same through agent tools. Everything else stays a viewing surface, not a 
 
 ```
 conversation header:  [ 对话 ] [ 轨迹 ] [ issue ] [ … ]
-left sidebar:         workspace row  ▣  →  right sidebar tab  [ 项目 / Project ]
+left sidebar:         web  main  ▣  →  right sidebar tab  [ 项目 / Project ]
 ```
 
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.

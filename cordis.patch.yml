@@ -38,6 +38,16 @@
         # Durable binding file; null resolves to
         # $DSH_HOME/plugin-data/github-projects/state.json
         statePath: null
+        # v1.2.0 workspace branch chip (left sidebar): the local `git`
+        # executable. Absolute path recommended when PATH differs between a
+        # terminal and the Desktop host.
+        gitCommand: git
+        # One `git symbolic-ref`/`rev-parse` invocation deadline.
+        gitTimeoutMs: 4000
+        # How long one workspace's branch stays fresh before GET /branches
+        # re-reads it. A human prompt and the 15 s client poll both refresh on
+        # their own; this only bounds an external `git checkout`.
+        branchTtlMs: 30000
         # Opt-in GitHub writes (v1.1.0): board drag / move menu and the
         # `github_project_item_status` agent tool update a Project item's
         # Status field. Requires the `project` scope on the `gh` token.

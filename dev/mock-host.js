@@ -171,6 +171,61 @@ const statusByItemId = new Map(baseItems.map(item => [item.id, item.status ?? nu
 /** Accepted write log exposed by the mock-only `/mock-state` route. */
 const writeLog = []
 
+/**
+ * v1.2.0 `GET /branches` fixture: one entry per *bound* workspace (the mock has
+ * no workspace registry), cycling through a plain branch, a slash branch, and a
+ * detached HEAD so the chip's three presentations are all reachable. Override
+ * with `MOCK_BRANCHES="<workspaceId>=<branch>,<workspaceId>=detached"`.
+ * A `!` prefix marks a workspace whose directory is not a git repository.
+ */
+const MOCK_BRANCHES = [
+  { branch: 'main', detached: false },
+  { branch: 'feat/left-sidebar-branch', detached: false },
+  { branch: null, detached: true, commit: '9f2c1ab' },
+]
+
+const branchOverrides = new Map()
+for (const pair of String(process.env.MOCK_BRANCHES ?? '').split(',')) {
+  const index = pair.indexOf('=')
+  if (index <= 0) continue
+  const id = pair.slice(0, index).trim()
+  const value = pair.slice(index + 1).trim()
+  if (id === '' || value === '') continue
+  branchOverrides.set(id, value === 'detached'
+    ? { branch: null, detached: true, commit: '9f2c1ab' }
+    : value.startsWith('!')
+      ? { repo: false }
+      : { branch: value, detached: false })
+}
+
+/** True when a workspace id is a real workspace row (not the ungrouped bucket). */
+function branchPayload() {
+  const workspaces = {}
+  let index = 0
+  for (const workspaceId of workspaceBindings.keys()) {
+    if (typeof workspaceId !== 'string' || workspaceId === '' || workspaceId === 'ungrouped') continue
+    const override = branchOverrides.get(workspaceId)
+    const fixture = override ?? MOCK_BRANCHES[index % MOCK_BRANCHES.length]
+    index += 1
+    if (fixture.repo === false) continue
+    workspaces[workspaceId] = {
+      workspaceId,
+      path: `/mock/workspace/${workspaceId}`,
+      repo: true,
+      branch: fixture.detached === true ? null : fixture.branch,
+      detached: fixture.detached === true,
+      commit: fixture.detached === true ? fixture.commit ?? '9f2c1ab' : null,
+      readAt: new Date().toISOString(),
+    }
+  }
+  return {
+    revision: 1,
+    updatedAt: new Date().toISOString(),
+    git: { available: true, error: null },
+    workspaces,
+  }
+}
+
 /** Real ids captured in `test/fixtures/graphql-project-meta.json`. */
 const projectMetaNode = projectMetaFixture.data.repositoryOwner.projectV2
 const statusField = {
@@ -312,6 +367,9 @@ async function handle(req, res, allowWrites) {
       stale: false,
     })
   }
+  if (req.method === 'GET' && route === '/branches') {
+    return send(res, 200, branchPayload())
+  }
   // v1.1.0 write-side metadata: Project node id + Status field options.
   if (req.method === 'GET' && route === '/project-meta') {
     const owner = query.get('owner') ?? ''
@@ -420,6 +478,19 @@ async function handle(req, res, allowWrites) {
     })
   }
   return fail(res, 404, 'not-found', `unknown mock route ${req.method ?? ''} ${route}`)
+}
+
+/**
+ * Module-lifetime in-memory state, exposed for tests only. The e2e harness runs
+ * one mock per process, so nothing else needs a reset; unit tests mount several
+ * instances and use this to keep cases independent.
+ */
+export function __resetMockState() {
+  workspaceBindings.clear()
+  sessionBindings.clear()
+  writeLog.length = 0
+  statusByItemId.clear()
+  for (const item of baseItems) statusByItemId.set(item.id, item.status ?? null)
 }
 
 export const name = 'github-projects-mock'

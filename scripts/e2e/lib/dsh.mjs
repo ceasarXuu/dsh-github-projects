@@ -10,11 +10,32 @@
 // layer, so nothing is installed into any profile.
 
 import { spawn } from 'node:child_process'
-import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, createWriteStream, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-export const DSH_CLI = '/Applications/DeepSeek Harness 2.app/Contents/Resources/runtime/cli/bin/dsh'
+/**
+ * The `dsh` CLI to boot. Resolved in order: `DSH_E2E_CLI`, the Desktop app's
+ * bundled runtime (the app directory has been renamed across releases, so the
+ * candidate list is probed rather than hardcoded to one path), then `dsh` on
+ * PATH. `DSH_E2E_CLI` wins so a source checkout can be tested explicitly.
+ */
+function resolveDshCli() {
+  const candidates = [
+    process.env.DSH_E2E_CLI,
+    '/Applications/DeepSeek Harness 2.app/Contents/Resources/runtime/cli/bin/dsh',
+    '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh',
+  ].filter(candidate => typeof candidate === 'string' && candidate !== '')
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch { /* try the next candidate */ }
+  }
+  return 'dsh'
+}
+
+export const DSH_CLI = resolveDshCli()
 
 /** Timestamp suitable as a directory name, e.g. 2026-10-28T04-12-33-123Z. */
 export function runTimestamp(date = new Date()) {

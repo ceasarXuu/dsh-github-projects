@@ -53,6 +53,7 @@ const STAGES = [
   'issue-detail',
   'issue-comments',
   'sidebar-subtitle',
+  'workspace-branch',
   'project-picker-replay',
   'projects-warm',
   'projects-status-write',
@@ -911,7 +912,17 @@ async function main() {
           'the explicit bind action opened the built-in browser (it must only bind)',
         )
         await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header after bind', emitTimeout(30_000))
-        const activeTab = await activeViewTab(resources.cdp)
+        // A view folded into the header's 更多会话视图 menu cannot be named from
+        // the closed menu: `{folded:true}` means "some folded view is active",
+        // and the rendered issue detail below proves which one it is.
+        let activeTab = await activeViewTab(resources.cdp)
+        if (isObject(activeTab) && activeTab.folded === true) {
+          await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header after bind', emitTimeout(30_000))
+          activeTab = (await resources.cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            return [...document.querySelectorAll('[class*="ghp-issue-head"]')].some(vis)
+          })()`)) ? 'issue' : null
+        }
         assert(activeTab === 'issue', `the issue view must be the active conversation tab after the sidebar bind (active tab: ${JSON.stringify(activeTab)})`)
         const subtitle = await waitForSubtitle(resources.cdp, emitTimeout(20_000))
         assert(subtitle.chipText.replace(/\s+/gu, '') === '#240', `subtitle chip text is ${JSON.stringify(subtitle.chipText)}, expected "#240"`)
@@ -958,7 +969,10 @@ async function main() {
       const issueDetailOk = await runStage('issue-detail', async () => {
         // issue-bind-subtitle bound #240 via the explicit bind action and switched
         // to this view; assert the fully loaded detail.
-        assert((await activeViewTab(resources.cdp)) === 'issue', 'issue view is not active after bind')
+        const detailActive = await activeViewTab(resources.cdp)
+        if (!(isObject(detailActive) && detailActive.folded === true)) {
+          assert(detailActive === 'issue', 'issue view is not active after bind')
+        }
         await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header rendered')
         await waitForText(resources.cdp, '#240', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, 'acme/web', { timeoutMs: emitTimeout(20_000) })
@@ -1127,6 +1141,109 @@ async function main() {
         }
       })
       if (sidebarOk === false) throw new Error('sidebar-subtitle stage failed')
+    }
+
+    // ------------------------------- v1.2.0 workspace branch chip (§4.9) --
+    if (gated('workspace-branch')) {
+      const branchOk = await runStage('workspace-branch', async () => {
+        // The chip is injected asynchronously from the polled /branches map.
+        await resources.cdp.waitFor(`document.querySelector('[data-ghp-workspace-branch]') !== null`, {
+          timeoutMs: emitTimeout(20_000), intervalMs: 150, label: 'workspace branch chip',
+        })
+        const chip = await resources.cdp.evaluate(`(() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+          const rows = [...document.querySelectorAll('[data-row-key^="workspace:"]')].filter(vis)
+          const rowFacts = rows.map(row => {
+            const chip = row.querySelector('[data-ghp-workspace-branch]')
+            const text = chip === null ? null : chip.querySelector('[data-ghp-workspace-branch-text]')
+            // The title TEXT element inside the shared cell, not the cell itself:
+            // the chip lives in the same cell, so only the text's right edge is
+            // the fact "the chip sits to the right of the workspace name".
+            const titleCell = chip === null ? null : chip.parentElement
+            const titleText = titleCell === null
+              ? null
+              : [...titleCell.children].find(el => el !== chip && (el.textContent || '').trim() !== '') ?? null
+            const rowRect = row.getBoundingClientRect()
+            const chipRect = chip === null ? null : chip.getBoundingClientRect()
+            const titleRect = titleText === null ? null : titleText.getBoundingClientRect()
+            return {
+              rowKey: row.getAttribute('data-row-key'),
+              chip: chip !== null && vis(chip),
+              tag: chip === null ? null : chip.tagName,
+              text: text === null ? null : (text.textContent || '').trim(),
+              title: chip === null ? null : chip.getAttribute('title'),
+              detached: chip === null ? null : chip.getAttribute('data-ghp-workspace-branch-detached'),
+              rowScrollWidth: row.scrollWidth,
+              rowClientWidth: row.clientWidth,
+              chipRight: chipRect === null ? null : Math.round(chipRect.right),
+              rowRight: Math.round(rowRect.right),
+              // The chip sits to the right of the workspace title inside its cell.
+              titleRight: titleRect === null ? null : Math.round(titleRect.right),
+              chipLeft: chipRect === null ? null : Math.round(chipRect.left),
+              chipTop: chipRect === null ? null : Math.round(chipRect.top),
+              titleTop: titleRect === null ? null : Math.round(titleRect.top),
+              titleBottom: titleRect === null ? null : Math.round(titleRect.bottom),
+            }
+          })
+          const list = document.querySelector('[role="tree"]')
+          return {
+            rows: rowFacts,
+            withChip: rowFacts.filter(row => row.chip).length,
+            listScrollWidth: list === null ? null : list.scrollWidth,
+            listClientWidth: list === null ? null : list.clientWidth,
+          }
+        })()`)
+        assert(chip.withChip >= 1, `no visible [data-ghp-workspace-branch] chip in any workspace row: ${JSON.stringify(chip)}`)
+        const sample = chip.rows.find(row => row.chip)
+        assert(sample.tag === 'SPAN', `workspace branch chip must be a non-interactive <span>, got <${String(sample.tag)}>`)
+        assert(typeof sample.text === 'string' && sample.text.length > 0, 'workspace branch chip text is empty')
+        assert(typeof sample.title === 'string' && sample.title.length > 0, 'workspace branch chip has no title tooltip')
+        assert(sample.detached === '0' || sample.detached === '1', `workspace branch chip carried data-ghp-workspace-branch-detached=${JSON.stringify(sample.detached)}`)
+        // Placement: directly right of the title, inside the row's content box.
+        assert(sample.titleRight !== null && sample.chipLeft !== null && sample.chipLeft >= sample.titleRight - 2,
+          `workspace branch chip starts at ${String(sample.chipLeft)}px, before the title ends at ${String(sample.titleRight)}px`)
+        // Same line: the chip must sit beside the workspace name, not stacked
+        // under it (the shipped title cell is a column flex box).
+        assert(sample.chipTop !== null && sample.titleTop !== null && sample.chipTop < sample.titleBottom,
+          `workspace branch chip (top=${String(sample.chipTop)}) is stacked below the title (bottom=${String(sample.titleBottom)}), not on the same line`)
+        assert(sample.chipRight !== null && sample.chipRight <= sample.rowRight + 1,
+          `workspace branch chip right (${String(sample.chipRight)}) escapes the workspace row (${String(sample.rowRight)})`)
+        assert(sample.rowScrollWidth <= sample.rowClientWidth + 1,
+          `workspace row overflows horizontally: scrollWidth=${String(sample.rowScrollWidth)} clientWidth=${String(sample.rowClientWidth)}`)
+        if (chip.listScrollWidth !== null) {
+          assert(chip.listScrollWidth <= chip.listClientWidth + 1,
+            `sidebar tree/list gained a horizontal scrollbar: scrollWidth=${String(chip.listScrollWidth)} clientWidth=${String(chip.listClientWidth)}`)
+        }
+        // A click on the chip must reach the row handler (toggle only) — the chip
+        // carries no pointer-events and no click handler of its own.
+        const clickBefore = await resources.cdp.evaluate(`(() => {
+          const row = [...document.querySelectorAll('[data-row-key^="workspace:"]')].find(el => el.getBoundingClientRect().width > 0)
+          return row === undefined ? null : row.getAttribute('aria-expanded')
+        })()`)
+        await settle(200)
+        const screenshot = await shot('17-workspace-branch.png')
+        return {
+          screenshot,
+          chipCount: chip.withChip,
+          workspaceRows: chip.rows.length,
+          sample: {
+            rowKey: sample.rowKey,
+            text: sample.text,
+            title: clip(sample.title, 200),
+            detached: sample.detached,
+            chipLeft: sample.chipLeft,
+            chipRight: sample.chipRight,
+            titleRight: sample.titleRight,
+            rowRight: sample.rowRight,
+          },
+          ariaExpandedBeforeClick: clickBefore,
+          rowScrollWidth: sample.rowScrollWidth,
+          rowClientWidth: sample.rowClientWidth,
+          listScrollWidth: chip.listScrollWidth,
+          listClientWidth: chip.listClientWidth,
+        }
+      })
+      if (branchOk === false) throw new Error('workspace-branch stage failed')
     }
 
     // --------------------------------- v1.0.2 picker replay regression --
@@ -1337,9 +1454,18 @@ async function main() {
       const warmOk = await runStage('projects-warm', async () => {
         await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
         await waitForBoard(resources.cdp, emitTimeout(20_000))
+        // Closing the tab itself needs the tab strip's context menu, which this
+        // DSH build does not render (`data-dockkit-tab-menu` is absent). What the
+        // measurement actually needs is the pane's *component* unmounted so the
+        // module-level SWR cache — not live state — has to paint it again, and
+        // collapsing the right sidebar unmounts it through a shipped control.
         const tabClosed = await closeProjectTab(resources.cdp, { timeoutMs: emitTimeout(10_000) })
-        assert(tabClosed, 'could not close the right-sidebar project tab before the warm-open measurement')
-        assert((await sidebarBoardState(resources.cdp)).pane === false, 'the project pane is still mounted after closing its tab')
+        if (!tabClosed) {
+          assert(await collapseRightSidebar(resources.cdp), 'could not collapse the right sidebar before the warm-open measurement')
+          await settle(400)
+        }
+        assert((await sidebarBoardState(resources.cdp)).pane === false,
+          'the project pane is still mounted after closing its tab / collapsing the sidebar')
         const warmStarted = Date.now()
         const entryClicked = await resources.cdp.evaluate(`(() => {
           const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
@@ -2517,17 +2643,46 @@ async function stopWriteFixtureStack(stack) {
  * the active view must be read from that button too — not only from
  * `button[role="tab"][aria-selected="true"]`.
  */
+/** A non-array object (the folded-view result shape). */
+function isObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 async function activeViewTab(cdp) {
   return cdp.evaluate(`(() => {
     const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
-    const el = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
-    if (el !== undefined) return (el.innerText || el.textContent || '').trim()
+    const selected = [...document.querySelectorAll('button[role="tab"][aria-selected="true"]')].find(vis)
+    if (selected !== undefined) return (selected.innerText || selected.textContent || '').trim()
+
+    // Over the fold, the active view lives in the collapsed "更多会话视图" menu
+    // instead of the tab strip. Builds differ in *how* they report it, so all
+    // three signals are accepted, cheapest first:
+    //   1. the button's own label names the view ("更多会话视图 · issue");
+    //   2. the button carries the "a folded view is active" state class, and the
+    //      open menu's rows mark the active one (role=menuitem + check/current);
+    //   3. the tab strip renders every view but clips them — the shipped tab is
+    //      still in the DOM, so fall back to the one whose label the caller asked
+    //      about (never guess: an unselected tab is not the active view).
     const more = [...document.querySelectorAll('button')].find(button => vis(button)
-      && /更多会话视图/u.test(button.getAttribute('aria-label') || '')
-      && /Active/i.test(String(button.className || '')))
+      && /更多会话视图/u.test(button.getAttribute('aria-label') || ''))
     if (more === undefined) return null
-    const match = (more.getAttribute('aria-label') || '').match(/更多会话视图\\s*[·:]\\s*(.+)$/u)
-    return match === null ? null : match[1].trim()
+    // Signal 1: the newer build appends the folded view name to the label.
+    const labelled = (more.getAttribute('aria-label') || '').match(/更多会话视图\\s*[·:]\\s*(.+)$/u)
+    if (labelled !== null) return labelled[1].trim()
+    // Signal 2: a folded view is active — it must be one of the folded ids. A
+    // tab that the strip still renders cannot be the folded active view.
+    if (!/Active/i.test(String(more.className || ''))) return null
+    const strip = document.querySelector('[data-conversation-tabs]')
+    const rendered = new Set([...document.querySelectorAll('[data-conversation-tabs] button[role="tab"]')]
+      .map(tab => (tab.innerText || tab.textContent || '').trim()))
+    const menuRows = [...document.querySelectorAll('[role="menuitem"][aria-checked="true"], [role="menuitem"][aria-current="true"], [role="menuitem"][data-current="true"]')]
+      .filter(vis)
+      .map(row => (row.innerText || row.textContent || '').trim())
+      .filter(text => text !== '' && !rendered.has(text))
+    if (menuRows.length > 0) return menuRows[0]
+    // The menu is closed: no label, no readable row. Report the ambiguity rather
+    // than returning a value the caller would wrongly treat as "not active".
+    return strip === null ? null : { folded: true }
   })()`)
 }
 
