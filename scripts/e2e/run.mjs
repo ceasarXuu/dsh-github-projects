@@ -55,6 +55,7 @@ const STAGES = [
   'issue-comments',
   'sidebar-subtitle',
   'workspace-branch',
+  'auto-bind',
   'project-picker-replay',
   'projects-warm',
   'projects-status-write',
@@ -172,6 +173,7 @@ async function main() {
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
     '10-desktop-tabs.png', '11-projects-wide.png', '12-external-open.png',
     '13-issue-subtitle.png', '14-sidebar-subtitle.png', '17-workspace-branch.png',
+    '18-auto-bind.png',
     // 16 is written only by the fixture `projects-status-write` stage (the
     // second, allowWrites:true fixture stack); a real run preserves it.
     '16-projects-status-write.png',
@@ -273,7 +275,15 @@ async function main() {
         assert(existsSync(mode.pluginEntry), `plugin entry not found: ${mode.pluginEntry} (is the ${options.mode} half implemented?)`)
         assert(existsSync(join(REPO_ROOT, 'client.js')), `client half not found: ${join(REPO_ROOT, 'client.js')}`)
 
-        const overlayPath = writeOverlay({ root: root.root, pluginEntry: mode.pluginEntry, documentsDirectory: root.documents })
+        const overlayPath = writeOverlay({
+          root: root.root,
+          pluginEntry: mode.pluginEntry,
+          documentsDirectory: root.documents,
+          // The manual flow below asserts "nothing bound yet" on a fresh
+          // workspace, so this stack never auto-binds; the `auto-bind` stage
+          // drives the route against the second (write) stack, which has it on.
+          pluginConfig: { autoBind: false },
+        })
         // The mock model keeps the harness offline and gives the fresh session a
         // real (non-blank) conversation, which is what makes the header show the
         // conversation view tabs.
@@ -1295,6 +1305,135 @@ async function main() {
         }
       })
       if (branchOk === false) throw new Error('workspace-branch stage failed')
+    }
+
+    // ---------------------------------- v1.3.0 workspace auto-bind (§3.7) --
+    // The stacks above run with `autoBind: false` on purpose (the manual picker
+    // flow needs an unbound workspace; the write stage binds by hand), so the
+    // automatic path gets its own isolated stack: a workspace that really
+    // checks out a GitHub repository, and a plugin config that may bind by
+    // itself.
+    if (gated('auto-bind')) {
+      const autoBindOk = await runStage('auto-bind', async () => {
+        if (options.mode !== 'fixture') {
+          return {
+            skipped: true,
+            fixtureOnly: true,
+            reason: 'the mock host answers /auto-bind deterministically; real mode would write a real binding for a temp checkout',
+          }
+        }
+        let stack = null
+        try {
+          stack = await bootAutoBindStack({
+            runId, llmBaseUrl: resources.llm.baseUrl, timeoutMs: emitTimeout(90_000), mode: 'bound',
+          })
+          const cdp = stack.cdp
+          await sendComposerMessage(cdp, 'auto-bind stage session', { timeoutMs: emitTimeout(45_000) })
+          await waitForText(cdp, 'mock assistant reply', { timeoutMs: emitTimeout(30_000), label: 'auto-bind stack mock reply' })
+          const refs = await projectSessionRefs(cdp)
+          assert(refs.sessionId !== '' && refs.workspaceId !== '',
+            `could not read the auto-bind stack session/workspace ids: ${JSON.stringify(refs)}`)
+
+          // 1. The route itself: the workspace is filled from its git remote.
+          const answer = await pageFetch(cdp, `/plugin/github-projects/auto-bind?workspaceId=${encodeURIComponent(refs.workspaceId)}`)
+          assert(answer.status === 200, `GET /auto-bind failed: ${JSON.stringify(answer).slice(0, 400)}`)
+          const body = answer.json ?? {}
+          assert(body.enabled === true, `auto-bind reported enabled=${JSON.stringify(body.enabled)}`)
+          assert(body.reason === 'bound' || body.reason === 'bound-ambiguous',
+            `auto-bind did not bind (reason=${JSON.stringify(body.reason)})`)
+          assert(body.applied === true, `auto-bind did not apply the binding: ${JSON.stringify(body).slice(0, 300)}`)
+          assert(body.repository === 'ceasarXuu/Astropath',
+            `auto-bind read repository ${JSON.stringify(body.repository)}, expected the fixture repo`)
+          assert(body.project?.number === 9, `auto-bind bound Project ${JSON.stringify(body.project?.number)}, expected 9`)
+
+          // 2. A second call is a no-op: never re-bind, never re-read GitHub.
+          const again = await pageFetch(cdp, `/plugin/github-projects/auto-bind?workspaceId=${encodeURIComponent(refs.workspaceId)}`)
+          assert(again.json?.reason === 'already-bound',
+            `a second /auto-bind should answer already-bound, got ${JSON.stringify(again.json?.reason)}`)
+
+          // 3. The provenance travelled with the durable binding.
+          const bindings = await pageFetch(cdp, '/plugin/github-projects/bindings')
+          const entry = bindings.json?.workspaces?.[refs.workspaceId]
+          assert(entry !== undefined, `the auto-bound workspace is absent from /bindings: ${JSON.stringify(bindings.json).slice(0, 300)}`)
+          assert(entry.number === 9, `the durable binding has Project ${JSON.stringify(entry.number)}, expected 9`)
+          assert(entry.autoBind?.repository === 'ceasarXuu/Astropath',
+            `the durable binding carries no provenance: ${JSON.stringify(entry).slice(0, 300)}`)
+
+          // 4. The sidebar icon lights up without the user picking anything.
+          const iconBound = await cdp.waitFor(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const entry = [...document.querySelectorAll('[data-ghp-workspace-entry]')].find(vis)
+            return entry !== undefined && entry.getAttribute('data-ghp-workspace-entry-bound') === '1'
+          })()`, { timeoutMs: emitTimeout(30_000), intervalMs: 150, label: 'workspace board icon auto-bound' })
+            .then(() => true).catch(() => false)
+          assert(iconBound, 'the workspace board icon never flipped to bound after auto-bind')
+
+          // 5. The board explains the automatic pick.
+          await openProjectBoard(cdp, { expectWorkspaceId: refs.workspaceId })
+          await waitForBoard(cdp, emitTimeout(30_000))
+          const note = await cdp.evaluate(`(() => {
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+            const el = [...document.querySelectorAll('[data-ghp-autobind]')].find(vis)
+            if (el === undefined) return null
+            const textEl = el.querySelector('[data-ghp-autobind-text]')
+            const rect = el.getBoundingClientRect()
+            const toolbar = el.closest('.ghp-toolbar')
+            return {
+              kind: el.getAttribute('data-ghp-autobind'),
+              text: (el.innerText || el.textContent || '').trim(),
+              aria: el.getAttribute('aria-label'),
+              role: el.getAttribute('role'),
+              insideToolbar: toolbar !== null,
+              right: Math.round(rect.right),
+              toolbarRight: toolbar === null ? null : Math.round(toolbar.getBoundingClientRect().right),
+              // Measure the TEXT element: the wrapper also spans the icon row.
+              lines: textEl === null ? null : Math.round(textEl.getBoundingClientRect().height / 15),
+              scrollWidth: textEl === null ? el.scrollWidth : textEl.scrollWidth,
+              clientWidth: textEl === null ? el.clientWidth : textEl.clientWidth,
+            }
+          })()`)
+          assert(note !== null, 'the auto-filled board shows no [data-ghp-autobind] note explaining the pick')
+          assert(note.kind === '1' || note.kind === 'ambiguous', `unexpected data-ghp-autobind=${JSON.stringify(note.kind)}`)
+          assert(note.text.includes('ceasarXuu/Astropath'), `the note does not name the repository: ${JSON.stringify(note.text)}`)
+          assert(typeof note.aria === 'string' && note.aria.length > 0, 'the auto-bind note has no accessible name')
+          assert(note.role === 'note', `the auto-bind note should be role="note", got ${JSON.stringify(note.role)}`)
+          assert(note.insideToolbar, 'the auto-bind note is rendered outside the board toolbar')
+          assert(note.right <= note.toolbarRight + 1, 'the auto-bind note overflows the toolbar')
+          // The sentence explains a decision the user did not make, so it must
+          // be readable rather than a clipped fragment.
+          assert(note.lines >= 2 || note.scrollWidth <= note.clientWidth + 1,
+            `the auto-bind note is clipped instead of wrapping: ${JSON.stringify({ lines: note.lines, scrollWidth: note.scrollWidth, clientWidth: note.clientWidth })}`)
+          // Make sure the pane (and its toolbar) is actually on screen: the note
+          // is only meaningful as a rendered element, not a mounted one.
+          const paneState = await sidebarBoardState(cdp)
+          assert(paneState.pane === true, `the right-sidebar project pane is not visible for the screenshot: ${JSON.stringify(paneState)}`)
+          await settle(300)
+          // Evidence shot from THIS stack's page (like the write stage does):
+          // `shot()` is bound to the main run's CDP client.
+          const screenshot = join(SCREENSHOT_DIR, '18-auto-bind.png')
+          await cdp.screenshot(screenshot)
+          screenshots['18-auto-bind.png'] = screenshot
+          return {
+            screenshot,
+            paneVisible: paneState.pane,
+            workspaceId: refs.workspaceId,
+            repository: body.repository,
+            applied: body.applied,
+            secondCall: again.json?.reason,
+            provenance: entry.autoBind,
+            project: { number: entry.number, title: entry.title },
+            note: {
+              kind: note.kind, text: clip(note.text, 240), aria: note.aria, role: note.role, lines: note.lines,
+            },
+            iconBound,
+          }
+        } finally {
+          // A failed stack keeps its own run directory for inspection: the
+          // failure detail already names it.
+          if (stack !== null) await stopWriteFixtureStack(stack)
+        }
+      })
+      if (autoBindOk === false) throw new Error('auto-bind stage failed')
     }
 
     // --------------------------------- v1.0.2 picker replay regression --
@@ -2635,13 +2774,18 @@ async function bootWriteFixtureStack({ runId, llmBaseUrl, timeoutMs }) {
     root: stackRoot.root,
     pluginEntry: MODES.fixture.pluginEntry,
     documentsDirectory: stackRoot.documents,
-    pluginConfig: { allowWrites: true },
+    // Auto-bind off: this stack binds a Project by hand to exercise the write UI.
+    pluginConfig: { allowWrites: true, autoBind: false },
   })
   const dsh = startDshWeb({
     ...stackRoot,
     overlayPath,
     logPath: join(stackRoot.logs, 'dsh.log'),
-    env: { DEEPSEEK_API_KEY: 'sk-e2e-mock', DEEPSEEK_BASE_URL: llmBaseUrl },
+    env: {
+      DEEPSEEK_API_KEY: 'sk-e2e-mock',
+      DEEPSEEK_BASE_URL: llmBaseUrl,
+      MOCK_AUTOBIND: 'bound',
+    },
   })
   let chrome = null
   let cdp = null
@@ -2672,6 +2816,71 @@ async function bootWriteFixtureStack({ runId, llmBaseUrl, timeoutMs }) {
     try { cdp?.close() } catch { /* ignore */ }
     try { await chrome?.stop() } catch { /* ignore */ }
     try { await dsh.stop() } catch { /* ignore */ }
+    throw error
+  }
+}
+
+/**
+ * Boot a third isolated stack whose workspace is a real repository and whose
+ * plugin config has `autoBind: true`, then return its live resources.
+ *
+ * The two stacks above deliberately run with auto-bind off (the manual picker
+ * flow needs an unbound workspace, and the write stage binds by hand), so the
+ * automatic path gets a stack of its own rather than bending their premises.
+ *
+ * @param {{runId: string, llmBaseUrl: string, timeoutMs: number, mode?: string, mockAutobind?: string}} options
+ */
+async function bootAutoBindStack({ runId, llmBaseUrl, timeoutMs, mode = 'bound' }) {
+  const stackRoot = createRunRoot({ name: `${runId}-auto-bind` })
+  // The workspace must be a real checkout of a GitHub repository, otherwise
+  // there is nothing for auto-bind to read.
+  const repo = initWorkspaceRepo(firstUseWorkspacePath(stackRoot.documents), 'e2e/autobind')
+  const overlayPath = writeOverlay({
+    root: stackRoot.root,
+    pluginEntry: MODES.fixture.pluginEntry,
+    documentsDirectory: stackRoot.documents,
+    pluginConfig: { autoBind: true, gitCommand: 'git', autoBindTtlMs: 0 },
+  })
+  const dsh = startDshWeb({
+    ...stackRoot,
+    overlayPath,
+    logPath: join(stackRoot.logs, 'dsh.log'),
+    env: {
+      DEEPSEEK_API_KEY: 'sk-e2e-mock',
+      DEEPSEEK_BASE_URL: llmBaseUrl,
+      ...(repo.ok ? { MOCK_BRANCHES: `*=git:${repo.path}` } : {}),
+      MOCK_AUTOBIND: mode,
+    },
+  })
+  let chrome = null
+  let cdp = null
+  try {
+    const url = await dsh.waitForUrl(timeoutMs)
+    await waitForHttpReady(url, { timeoutMs: Math.min(30_000, timeoutMs) })
+    chrome = launchChrome({ root: stackRoot.root, logPath: join(stackRoot.logs, 'chrome.log') })
+    const port = await waitForDevToolsPort(chrome.userDataDir, Math.min(30_000, timeoutMs))
+    cdp = await connectPageTarget(port)
+    await cdp.enable({ width: 1280, height: 800 })
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PLUGIN_FETCH_INSTRUMENTATION })
+    let booted = false
+    let lastError = null
+    for (let attempt = 1; attempt <= 2 && !booted; attempt++) {
+      try {
+        await cdp.navigate(url, { timeoutMs: Math.min(60_000, timeoutMs) })
+        await waitForAppShell(cdp, { timeoutMs: Math.min(60_000, timeoutMs) })
+        booted = true
+      } catch (error) {
+        lastError = error
+        await sleep(1000)
+      }
+    }
+    if (!booted) throw new Error(`auto-bind stack web app did not boot after 2 navigations: ${lastError?.message ?? 'unknown'}`)
+    await prepareConversationUi(cdp, { timeoutMs: Math.min(45_000, timeoutMs) })
+    return { root: stackRoot, dsh, chrome, cdp, url, origin: new URL(url).origin, repo, mode }
+  } catch (error) {
+    try { cdp?.close() } catch { /* ignore */ }
+    try { await chrome?.stop() } catch { /* ignore */ }
+    try { await dsh?.stop() } catch { /* ignore */ }
     throw error
   }
 }

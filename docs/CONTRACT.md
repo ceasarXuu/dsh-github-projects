@@ -53,6 +53,8 @@ Repo root: `/Volumes/inwolf-4T/projects/dsh-github-projects`
 | `state.js` | host-github | Durable binding store (atomic JSON write) |
 | `branches.js` | host-github | **v1.2.0** per-directory local `git` branch reader (cached, single-flight) |
 | `branch-index.js` | host-github | **v1.2.0** workspace-id branch index behind `GET /branches`: refresh triggers, `revision`, payload |
+| `git-remote.js` | host-github | **v1.3.0** local `git` remote reader → `owner/name`; every URL shape, non-GitHub remotes answered plainly |
+| `auto-bind.js` | host-github | **v1.3.0** workspace auto-bind orchestration behind `GET /auto-bind`: resolve, rank, only fill a gap, memoize |
 | `client.js` | client-ui | Browser plugin: slots, views, UI, fetch client, CSS, locale dicts |
 | `package.json`, `cordis.patch.yml`, `icon.svg`, `docs/CONTRACT.md` | Lead | package manifest / bundle patch / identity |
 | `dev/mock-host.js` | Lead → host-github (v1.1.0 write support) | contract-shaped mock host for UI/e2e development (fixtures, no `gh`; v1.1.0 adds `allowWrites` + `POST /item-status` + `GET /project-meta` fixtures) |
@@ -113,6 +115,8 @@ whole `config` object, so restate every key you need there.
 | `gitCommand` | `git` | **v1.2.0 workspace branch chip**: local `git` executable (absolute path recommended). It reads branch names only; it never fetches, checks out, or touches the network. |
 | `gitTimeoutMs` | `4000` | One `git symbolic-ref` / `git rev-parse` invocation deadline (0.2 s – 1 min). |
 | `branchTtlMs` | `30000` | How long one workspace's branch stays fresh before `GET /branches` re-reads it. Startup and every human prompt refresh on their own; this only bounds an external `git checkout`. |
+| `autoBind` | `true` | **v1.3.0 workspace auto-bind**: fill an unbound workspace's Project from the GitHub repository its `origin` remote names. It only ever fills a gap — a Project the user bound is never replaced. `false` keeps the manual picker only. |
+| `autoBindTtlMs` | `600000` | How long one resolved auto-bind answer (including a negative one) is trusted before it is re-checked. |
 
 ### 3.1 HTTP API (prefix `/plugin/github-projects`)
 
@@ -125,6 +129,7 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health + write capability (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding,"writes":{"allowed":boolean}}` |
 | `GET /bindings` | every durable Issue + workspace Project binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"workspaces":{WorkspaceId:Project},"updatedAt":ISO}` |
 | `GET /branches` | **v1.2.0** current git branch of every registered workspace (left-sidebar chip; local `git` only, never `gh`) | `{"revision":number,"updatedAt":ISO\|null,"git":{"available":bool\|null,"error":string\|null},"workspaces":{WorkspaceId:WorkspaceBranch}}` |
+| `GET /auto-bind?workspaceId=&path=` | **v1.3.0** make sure one workspace has a Project, filling it from the repository its git remote names (`path` optional; the host resolves it from the registry) | `{"enabled":bool,"applied":bool,"reason":string,"repository":string\|null,"project":Project\|null,"ambiguous":bool,"considered":number}` |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
 | `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
@@ -188,6 +193,14 @@ type WorkspaceBranch = {
   detached: boolean            // HEAD is not on a branch
   commit: string | null        // short sha when detached
   readAt: string | null        // ISO-8601 of the read behind this entry
+}
+
+// v1.3.0 — auto-bind provenance on a workspace binding (GET /bindings, /config).
+type AutoBindProvenance = {
+  repository: string           // "owner/name" the binding was derived from
+  ambiguous: boolean           // more than one open Project was linked
+  considered: number           // how many open Projects were candidates
+  appliedAt: string            // ISO-8601
 }
 
 // v1.1.0 — POST /item-status request body.
@@ -480,6 +493,50 @@ a cron notice, an entered goal round) does **not** refresh anything: only a real
 `revision` is monotonic and advances **only when a branch fact changed**, so the polling client can
 skip a repaint. Without a workspace registry the route still answers 200 with an empty map and
 `git.available: null` — the chip simply never appears, and nothing throws.
+
+### 3.7 Workspace auto-bind (`git-remote.js` + `auto-bind.js`, v1.3.0)
+
+GitHub Projects v2 has **no "repository default Project" field**. What is real is a *link*: a
+repository carries a list of linked Projects (`Repository.projectsV2`), and one Project may be linked
+to several repositories. Separately, a Project can run GitHub's own **"Auto-add to project"**
+workflow, which is what automatically feeds new issues/PRs from its linked repositories into that
+Project — in practice the repository's intended board.
+
+Auto-bind turns that into the default a user expects: **a workspace that checks out a GitHub
+repository gets that repository's Project without anyone picking one.**
+
+**Resolution, one workspace at a time:**
+1. `readRemoteState(dir)` reads `git config --get remote.origin.url` (local `git`, no network) and
+   normalizes every URL shape git accepts — `git@github.com:o/r.git`, `ssh://`, `git://`, `https://`
+   with credentials or a port, an optional `.git`, a trailing slash — to `owner/name`.
+2. A remote that is not `github.com` (a local mirror, GitLab, Bitbucket) answers `not-github`; it is
+   **never** guessed into a GitHub repository. No `origin`, or not a repository: `no-remote`.
+3. `listRepoProjects(repo)` is **one** GraphQL call for the repository's linked Projects plus each
+   candidate's owner, `items.totalCount`, and workflows. A repository the token cannot see answers
+   an empty list, not an error.
+4. `selectRepoProject(candidates)` ranks them: a **closed** Project is never a candidate; among open
+   ones an enabled **Auto-add to project** workflow wins; otherwise the **most recently updated**
+   one. More than one open candidate is reported as `ambiguous` so the board can say the pick was a
+   choice.
+
+**Auto-bind only fills a gap.** A workspace the user bound is answered `already-bound` and never
+touched — an automatic answer must never overwrite a deliberate one. Successes and negative answers
+are both remembered for `autoBindTtlMs` so a repository without a usable Project is not re-queried;
+a `gh` failure is deliberately **not** remembered, because it is not a fact about the repository.
+Concurrent calls for one workspace share a single resolution.
+
+**Provenance is durable.** An automatic binding stores
+`{repository, ambiguous, considered, appliedAt}` beside the Project (`state.js`), which `/bindings`
+and `/config` expose as `workspace.autoBind`. A manual binding carries none, so the board can tell
+the two apart after a reload or a restart. Re-binding by hand clears it.
+
+**Triggers.** One startup pass over every registered workspace (`ensureAll`, waiting for
+`workspaceRegistry` to mount), a slow 60 s sweep for workspaces created later, and `GET /auto-bind`
+from the client for a workspace whose Project is still unknown. Every answer is remembered, so the
+steady state costs no `git` and no `gh`.
+
+**Config:** `autoBind` (default `true`), `autoBindTtlMs` (600000). A profile that wants the manual
+picker only sets `autoBind: false`.
 
 ## 4. Client plugin (`client.js`)
 
@@ -842,6 +899,24 @@ directly to the **right of the workspace title** and before the board entry icon
 - **Hooks**: `[data-ghp-workspace-branch]`, `[data-ghp-workspace-branch-text]`,
   `[data-ghp-workspace-branch-detached="0|1"]`.
 
+### 4.10 Auto-bind notice (v1.3.0)
+
+When the board's Project came from auto-bind (§3.7) rather than from the user, the toolbar says so:
+
+- **Where**: one line in the board toolbar, under the project title/meta block (`[data-ghp-autobind]`,
+  `role="note"`). It is information, not a control — the shipped `更换` button remains the way to
+  overrule the pick.
+- **Text**: `projects.autoBindNotice` names the repository and the Project. When the repository links
+  more than one open Project the pick was a choice, so `projects.autoBindAmbiguous` is used instead:
+  it says how many were linked and that `更换` changes it.
+- **Source**: the note reads `workspace.autoBind` from the durable binding map (`/bindings`), not from
+  the `/auto-bind` response, so it survives a page reload and a DSH restart. A manual binding carries
+  no provenance and therefore renders **no** note — the board never claims a choice the user made.
+- **Presentation**: muted tertiary text, one line, ellipsised; the leading icon is the success accent
+  normally and the warn accent when ambiguous. It never wraps the toolbar and never pushes the
+  actions out.
+- **Hooks**: `[data-ghp-autobind="1"]` / `[data-ghp-autobind="ambiguous"]`, `[data-ghp-autobind-text]`.
+
 ## 5. e2e harness (verifier)
 
 > Stage definitions, selectors and current assertions are owned by `scripts/e2e/README.md`
@@ -938,8 +1013,9 @@ at least one milestone) for the board and filter stages.
   (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
   milestone-filter, wide-layout, system-browser-open, conversation-header subtitle, sidebar
   subtitle (non-interactive, no overflow, row click selects the session), warm-open latency,
-  **v1.1.0 read-only default**, **v1.1.0 fixture write path**, and **v1.2.0 workspace branch chip**
-  (`17-workspace-branch.png`) stages.
+  **v1.1.0 read-only default**, **v1.1.0 fixture write path**, **v1.2.0 workspace branch chip**
+  (`17-workspace-branch.png`), and **v1.3.0 workspace auto-bind** (`18-auto-bind.png`, its own stack)
+  stages.
 - Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
   and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures. v1.1.0 adds tests
   for `GET /project-meta` (node id/field/options, `project-not-found`), `POST /item-status`
@@ -950,8 +1026,14 @@ at least one milestone) for the board and filter stages.
   per case — on-branch, unborn, detached, not-a-repository, missing directory, nested repo, missing
   `git`), the cache/single-flight, the workspace-id index (startup pass, one-prompt refresh, cwd
   fallback, revision only on change), the mock host's `/branches`, and the route shape.
+- v1.3.0 adds tests for the git-remote reader (`git-remote.js`: every remote URL shape, plus real
+  throw-away repositories — a subdirectory of a checkout, a non-GitHub remote, no repository, a
+  missing directory), the ranking rule (`selectRepoProject`: auto-add wins, newest next, closed never,
+  ambiguity reported), the orchestration (`auto-bind.js`: never overwrite a user binding, remember
+  negatives and the TTL, never remember a `gh` failure, share one resolution, survive a failed store
+  write), durable provenance (`state.js`), the mock host's `/auto-bind`, and the route.
 - Plugin loads with zero console errors in the browser, the `issue` conversation tab, the
-  workspace-row board icon, and the workspace-row branch chip.
+  workspace-row board icon, the workspace-row branch chip, and the board's auto-bind note.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence; v1.1.0 documents the opt-in
   write capability, the `project` scope prerequisite and the read-only default.

@@ -3,6 +3,44 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.3.0 — 2026-11-17
+
+**A workspace binds its Project by itself.** Most workspaces are a checkout of exactly one GitHub
+repository, and that repository already says which Project it belongs to — so making the user click
+a board icon and pick one is answering a question GitHub could answer. Auto-bind reads the git
+remote, finds the Project, and fills the binding. It only ever fills a *gap*: a Project you bound
+yourself is never touched.
+
+- **The rule.** `git config --get remote.origin.url` (local git, no network, no auth) →
+  `owner/name` → the Projects linked to that repository (one GraphQL call) → a pick: a **closed**
+  Project is never a candidate, an enabled **"Auto-add to project"** workflow wins because that is
+  the repository's intended board, otherwise the **most recently updated** open Project. A remote
+  that is not `github.com` (a local mirror, GitLab, Bitbucket) is never guessed into a GitHub repo.
+- **It explains itself.** An auto-filled board shows one muted line in its toolbar —
+  `已根据仓库 ceasarXuu/Astropath 自动绑定 Project「Astropath-issues」` — and says so explicitly when
+  the repository links several Projects and the pick was a choice. The note reads the durable
+  binding's provenance, so it survives a reload and a restart, and it disappears the moment you bind
+  by hand. `更换` stays the way to overrule it.
+- **Never overwrites a choice.** A workspace with any existing binding is answered `already-bound`
+  and left alone. Re-binding by hand clears the provenance, so the board stops claiming it chose.
+- **Host API.** New `GET /auto-bind?workspaceId=&path=` (the path is optional; the host resolves it
+  from `workspaceRegistry`). A workspace's binding now optionally carries
+  `{repository, ambiguous, considered, appliedAt}` through `/bindings` and `/config`.
+  One startup pass covers every registered workspace; a 60 s sweep catches workspaces created later;
+  answers are remembered for `autoBindTtlMs`, so the steady state costs no `git` and no `gh`.
+- **Config.** `autoBind` (default **true**) and `autoBindTtlMs` (600000). Set `autoBind: false` for
+  the manual picker only.
+- No breaking change, no new runtime dependencies, no DSH compatibility change (`engines.dsh` still
+  `>=0.2.1-rc.3 <0.3.0`). Existing installs keep working; a workspace that was unbound simply gains
+  a Project on the next start, and one you bound by hand is untouched.
+- Verification: host tests **191/191** pass (33 new: every git remote URL shape against real
+  throw-away repositories, the ranking rule against a live-captured `Repository.projectsV2` fixture,
+  the orchestration — never overwrite, remember negatives, never remember a `gh` failure — durable
+  provenance, and the route). The e2e harness passes in both fixture and real-host mode including a
+  new `auto-bind` stage on its own isolated stack (screenshot `18-auto-bind.png`): the workspace is
+  filled with no user action, a second call answers `already-bound`, the sidebar icon flips to bound,
+  and the board renders a readable two-line note naming the repository.
+
 ## 1.2.0 — 2026-11-16
 
 **Workspace branch in the left sidebar.** Every workspace row now shows which git branch that

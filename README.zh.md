@@ -1,14 +1,17 @@
 # dsh-github-projects
 
-**v1.2.0 — 当前版本。** 把 GitHub Project 看板、会话绑定的 Issue、**左侧栏工作区行的 git branch**，以及**可选的 Project Status 写操作**带进 DSH——默认只读。
+**v1.3.0 — 当前版本。** 把 GitHub Project 看板、会话绑定的 Issue、**左侧栏工作区行的 git branch**、
+**按仓库自动绑定 Project**，以及**可选的 Project Status 写操作**带进 DSH——默认只读。
 
 这个 DSH 插件向会话头部追加 `issue` 视图：展示绑定到**会话**的 Issue，并在会话标题下显示一行
 **Issue 副标题**（v0.4.1 起左侧栏会话列表的会话行标题下也会显示）。**项目看板**——绑定到**工作区**的
 GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤——在 v1.0.2 从会话头部移到 DSH 的
 **右侧栏**：左侧栏每个工作区行上有一个小看板图标，点击即可打开（工作区已绑定时高亮）。v1.2.0 起
 每个**工作区行**还会在**工作区名字右侧**显示该目录当前所在的 **git branch**（启动时读一次、该工作区每发
-一条用户消息再读一次，另有 15 秒轮询）。**默认只读**：
-设置 `allowWrites: true`（v1.1.0，可选）后可以在 Status 泳道之间移动卡片（拖拽或卡片的「移动到」菜单），
+一条用户消息再读一次，另有 15 秒轮询）。**工作区不再需要手动挑选 Project**（v1.3.0）：插件读该目录的
+`origin` remote，找到这个仓库关联的 Project 并自动绑定，看板上会写明「已根据仓库 … 自动绑定」；你自己
+绑定过的 Project 永远不会被覆盖，`autoBind: false` 可关闭。**默认只读**：设置
+`allowWrites: true`（v1.1.0，可选）后可以在 Status 泳道之间移动卡片（拖拽或卡片的「移动到」菜单），
 成功后弹出带「撤销」的 toast——这是插件唯一能做的 GitHub 写操作。点卡片或头部副标题会在**系统默认
 浏览器**新标签页打开 GitHub；左侧栏副标题不可交互，点会话行任意位置只会打开该会话。绑定由显式「绑定」
 按钮或 agent 工具完成。除可选的 Status 写外，它仍是查看面板，不是写入工具。
@@ -22,9 +25,47 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
 
 ![保留 `issue` 页签的会话头部，以及右侧栏中的项目看板（v1.1.0 e2e）](artifacts/screenshots/01-tabs.png)
 
+## 1.3.0 发布说明（按仓库自动绑定 Project）
+
+当前版本。绝大多数工作区就是某个 GitHub 仓库的检出目录，而仓库本身已经说明了它属于哪个 Project——
+所以再让用户点看板图标手动挑一次，其实是在回答一个 GitHub 已经能回答的问题。v1.3.0 让插件自己读
+`origin` remote、找到该仓库关联的 Project 并填上绑定。它**只补空缺**：你自己绑定过的 Project
+永远不会被改动。
+
+| | |
+|---|---|
+| npm 包 | `@ceasarxuu/dsh-github-projects@1.3.0` |
+| 变更 | `GET /auto-bind`；`git-remote.js`（remote → `owner/name`）、`auto-bind.js`（选 Project + 记住答案）、`selectRepoProject`（排名规则）；绑定记录新增 `autoBind` 来源信息；看板新增自动绑定说明 |
+| 开关 | `autoBind`（默认 **true**）、`autoBindTtlMs`（600000） |
+| 兼容性 | 无破坏性变更；已手动绑定的工作区不受影响；无新增运行时依赖；DSH 兼容范围不变 |
+
+- **GitHub 的实际情况。** Projects v2 **没有**「仓库默认 Project」这个字段。真实存在的是**关联**：
+  一个仓库带一份已关联 Project 列表（`Repository.projectsV2`），一个 Project 也可以关联多个仓库；
+  另外 Project 上有 GitHub 自己的 **「Auto-add to project」** workflow——它才是把新 issue/PR 自动
+  收进这个 Project 的机制，实际上就是这个仓库的「默认看板」。
+- **选择规则。** 读 `git config --get remote.origin.url`（本地 git，不走网络、不需要 auth）→ 归一化为
+  `owner/name`（`git@github.com:o/r.git`、`ssh://`、`git://`、带凭据或端口的 `https://`、可选 `.git`
+  都支持）→ 一次 GraphQL 读该仓库关联的 Project → 排序：**已关闭**的永不入选；多个里优先启用了
+  **Auto-add to project** 的；否则取**最近更新**的。不是 `github.com` 的 remote（本地镜像、GitLab、
+  Bitbucket）**绝不**被猜成 GitHub 仓库。
+- **它自己会说明。** 自动绑定的看板会在工具栏显示一行灰字：
+  `已根据仓库 ceasarXuu/Astropath 自动绑定 Project「Astropath-issues」`；当仓库关联了多个 Project、
+  这一选择是「挑出来的」时，文案会明确说明并提示用「更换」修改。说明读的是**持久化**的来源信息，所以
+  刷新页面、重启 DSH 都还在；一旦你手动绑定，它就消失。
+- **永不覆盖你的选择。** 已有绑定的工作区一律返回 `already-bound` 并被跳过；手动重新绑定会清掉来源
+  信息，看板就不再声称是自动选的。
+- **触发时机。** 启动时对全部已注册工作区跑一遍（等 `workspaceRegistry` 就绪）；之后每 60 秒慢扫一次，
+  接住新建的工作区；客户端对 Project 仍未知的工作区调用 `GET /auto-bind`。每个答案都会被记住
+  （`autoBindTtlMs`），所以稳定状态下既不起 `git` 也不起 `gh`。
+- **验收。** 宿主测试 **191/191** 通过（新增 33 项：真实临时仓库覆盖每种 remote URL 形态、用线上抓取的
+  `Repository.projectsV2` fixture 驱动排名规则、编排层「永不覆盖 / 记住否定答案 / 不记住 gh 失败」、
+  持久化来源信息、HTTP 路由）。e2e fixture 与 real 两种模式均 PASS，新增独立的 `auto-bind` 阶段
+  （截图 `18-auto-bind.png`）：无人工操作即完成绑定、第二次调用返回 `already-bound`、侧栏图标变为已绑定、
+  看板渲染出完整可读的两行说明。
+
 ## 1.1.0 发布说明（可选 Project Status 写操作）
 
-当前版本。插件的第一项 GitHub 写操作是**可选的**：`allowWrites`（默认 **false**）把只读看板变成可移动
+历史版本。插件的第一项 GitHub 写操作是**可选的**：`allowWrites`（默认 **false**）把只读看板变成可移动
 看板，并注册第 4 个 agent 工具。已有安装保持原有只读行为，直到用户显式开启。
 
 | | |
@@ -69,6 +110,8 @@ GitHub Project，默认泳道看板、可切换列表并支持 milestone 过滤�
       gitCommand: git
       gitTimeoutMs: 4000
       branchTtlMs: 30000
+      autoBind: true
+      autoBindTtlMs: 600000
       allowWrites: true
   ```
 

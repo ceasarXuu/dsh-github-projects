@@ -34,6 +34,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { createStateStore, STATE_WRITE_FAILED } from './state.js'
 import { createWorkspaceBranchIndex } from './branch-index.js'
+import { createWorkspaceAutoBinder } from './auto-bind.js'
 import {
   GhError,
   boundedInt,
@@ -85,7 +86,7 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['internal', 500],
 ])
 
-const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/projects', '/items', '/issue', '/project-meta'])
+const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/auto-bind', '/projects', '/items', '/issue', '/project-meta'])
 const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
@@ -150,6 +151,13 @@ export function resolveConfig(raw) {
       : 'git',
     gitTimeoutMs: boundedInt(config.gitTimeoutMs, 200, 60_000, 4_000),
     branchTtlMs: boundedInt(config.branchTtlMs, 0, 24 * 60 * 60 * 1000, 30_000),
+    // v1.3.0 workspace auto-bind (contract §3.7): fill a workspace's Project
+    // from the repository its git remote names, never replacing a user's own
+    // binding. On by default; `autoBind: false` keeps the manual flow only.
+    autoBind: config.autoBind !== false,
+    autoBindTtlMs: boundedInt(config.autoBindTtlMs, 0, 24 * 60 * 60 * 1000, 10 * 60 * 1000),
+    // Test seam: replace the git-backed remote reader (auto-bind tests).
+    readRemote: typeof config.readRemote === 'function' ? config.readRemote : undefined,
     statePath,
     // Test seam: the same injectable runner `github.js` accepts.
     run: typeof config.run === 'function' ? config.run : undefined,
@@ -1020,7 +1028,10 @@ export function createAgentToolDefinitions({ gh, store, allowWrites = false }) {
 /* 6. The HTTP API.                                                    */
 /* ------------------------------------------------------------------ */
 
-function createApi({ gh, store, cache, health, logFault, writesAllowed = false, branches = null }) {
+function createApi({
+  gh, store, cache, health, logFault, writesAllowed = false, branches = null, autoBind = null,
+  resolveWorkspacePath = null,
+}) {
   const writesAllowedNow = writesAllowed === true
   const iso = (timestamp) => new Date(timestamp).toISOString()
 
@@ -1065,7 +1076,11 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false, 
       if (!Number.isInteger(project.number) || project.number <= 0) continue
       // Same object `/config` exposes as `workspace.project` (already detached
       // by the store snapshot): the client only needs the icon/summary fields.
-      workspaces[workspaceId] = project
+      // v1.3.0: an automatic binding also carries where it came from, so the
+      // board can still say "chosen for you" after a reload (§4.10).
+      workspaces[workspaceId] = isRecord(entry.autoBind)
+        ? { ...project, autoBind: entry.autoBind }
+        : project
     }
     return {
       sessions,
@@ -1087,6 +1102,38 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false, 
       return { revision: 0, updatedAt: null, git: { available: null, error: null }, workspaces: {} }
     }
     return branches.read()
+  }
+
+  /**
+   * `GET /auto-bind?workspaceId=&path=` (v1.3.0, contract §3.7): make sure one
+   * workspace has a Project, filling it from the repository its git remote names
+   * when the user has not chosen one. Idempotent and cheap when the answer is
+   * remembered; a user's own binding is never replaced.
+   */
+  async function readAutoBind(query) {
+    if (autoBind === null || autoBind.enabled !== true) {
+      return { enabled: false, applied: false, reason: 'disabled' }
+    }
+    const workspaceId = optionalId(query.get('workspaceId'))
+    if (workspaceId === null) return { enabled: true, applied: false, reason: 'no-workspace' }
+    // The client only knows workspace ids (that is what its rows carry), so the
+    // path comes from the host's own registry unless the caller supplies one.
+    const declared = typeof query.get('path') === 'string' ? query.get('path').trim() : ''
+    const path = declared !== ''
+      ? declared
+      : (typeof resolveWorkspacePath === 'function' ? resolveWorkspacePath(workspaceId) : null)
+    if (typeof path !== 'string' || path === '') return { enabled: true, applied: false, reason: 'no-path' }
+    const result = await autoBind.ensure(workspaceId, path)
+    return {
+      enabled: true,
+      workspaceId,
+      applied: result.applied === true,
+      reason: result.reason,
+      repository: result.repository ?? null,
+      project: result.project ?? null,
+      ambiguous: result.ambiguous === true,
+      considered: Number.isInteger(result.considered) ? result.considered : 0,
+    }
   }
 
   async function readProjects(query) {
@@ -1283,6 +1330,7 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false, 
       if (path === '/config') return sendJson(res, 200, await readConfig(query))
       if (path === '/bindings') return sendJson(res, 200, readBindings())
       if (path === '/branches') return sendJson(res, 200, await readBranches())
+      if (path === '/auto-bind') return sendJson(res, 200, await readAutoBind(query))
       if (path === '/projects') return sendJson(res, 200, await readProjects(query))
       if (path === '/items') return sendJson(res, 200, await readItems(query))
       if (path === '/project-meta') return sendJson(res, 200, await readProjectMeta(query))
@@ -1365,13 +1413,76 @@ export function apply(ctx, config) {
     ttlMs: settings.branchTtlMs,
     reader: settings.branchReader,
   })
+  // v1.3.0 auto-bind (contract §3.7): fills a workspace's Project from the
+  // repository its `origin` remote names. It only ever fills a gap.
+  const autoBind = createWorkspaceAutoBinder({
+    store,
+    gh,
+    enabled: settings.autoBind,
+    ttlMs: settings.autoBindTtlMs,
+    gitCommand: settings.gitCommand,
+    timeoutMs: settings.gitTimeoutMs,
+    readRemote: settings.readRemote,
+    logFault,
+  })
+  /** Workspace id → its registered directory, for the auto-bind route. */
+  const resolveWorkspacePath = (workspaceId) => {
+    const registry = serviceOf(ctx, 'workspaceRegistry')
+    if (registry === null || registry === undefined || typeof registry.list !== 'function') return null
+    try {
+      for (const entity of registry.list() ?? []) {
+        if (entity?.id === workspaceId && typeof entity.path === 'string') return entity.path
+      }
+    } catch (error) {
+      logFault(error)
+    }
+    return null
+  }
   const api = createApi({
-    gh, store, cache, health, logFault, writesAllowed: settings.allowWrites, branches,
+    gh, store, cache, health, logFault, writesAllowed: settings.allowWrites, branches, autoBind,
+    resolveWorkspacePath,
   })
 
   // One startup pass, so the first `/branches` read already carries every
   // workspace instead of spawning one `git` per row on first paint.
   void branches.refreshAll().catch(logFault)
+  // One startup pass for auto-bind too; the registry may mount later, so it
+  // waits for the service instead of reading an empty list at load.
+  if (settings.autoBind && typeof ctx?.inject === 'function') {
+    try {
+      ctx.inject(['workspaceRegistry'], (scope) => {
+        scope.effect(() => {
+          const registry = serviceOf(scope, 'workspaceRegistry')
+          if (registry === null || registry === undefined || typeof registry.list !== 'function') return undefined
+          let stopped = false
+          const pass = () => {
+            if (stopped) return
+            let entries = []
+            try {
+              entries = (registry.list() ?? [])
+                .map(entity => ({ id: entity?.id, path: entity?.path }))
+                .filter(entry => typeof entry.id === 'string' && typeof entry.path === 'string')
+            } catch (error) {
+              logFault(error)
+              return
+            }
+            void autoBind.ensureAll(entries).catch(logFault)
+          }
+          pass()
+          // A workspace created later is picked up by this slow sweep; the
+          // remembered answers make it nearly free for the existing ones.
+          const timer = setInterval(pass, 60_000)
+          if (typeof timer?.unref === 'function') timer.unref()
+          return () => {
+            stopped = true
+            clearInterval(timer)
+          }
+        }, 'github-projects: workspace auto-bind')
+      })
+    } catch (error) {
+      logFault(error)
+    }
+  }
   // Every human prompt re-reads the branch of that session's workspace: a
   // `git checkout` done by the agent (or the user) shows up on the next prompt.
   if (typeof ctx?.on === 'function') {

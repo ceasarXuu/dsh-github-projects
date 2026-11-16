@@ -78,6 +78,23 @@ function isStoredWorkspaceEntry(value) {
   return isRecord(value) && isStoredProject(value.project)
 }
 
+/**
+ * Auto-bind provenance (v1.3.0, contract §3.7): which repository the binding
+ * came from, whether the pick was one of several, and how many were linked. It
+ * is plain data beside the binding so the board can still explain an automatic
+ * pick after a reload or a restart; a manual binding carries none.
+ */
+function sanitizeAutoBind(value) {
+  if (!isRecord(value)) return null
+  if (typeof value.repository !== 'string' || value.repository === '') return null
+  return {
+    repository: value.repository,
+    ambiguous: value.ambiguous === true,
+    considered: Number.isInteger(value.considered) && value.considered > 0 ? value.considered : 0,
+    appliedAt: typeof value.appliedAt === 'string' ? value.appliedAt : null,
+  }
+}
+
 function isStoredSessionEntry(value) {
   return isRecord(value) && isStoredIssue(value.issue)
 }
@@ -95,6 +112,9 @@ function sanitizeSnapshot(parsed) {
       workspaces[workspaceId] = {
         project: copy(entry.project),
         boundAt: typeof entry.boundAt === 'string' ? entry.boundAt : null,
+        // Absent for a binding the user made by hand, which is exactly how the
+        // board knows not to claim it was chosen automatically.
+        ...entry.autoBind === undefined ? {} : { autoBind: sanitizeAutoBind(entry.autoBind) },
       }
     }
   }
@@ -144,7 +164,15 @@ function createQueue() {
 
 /** Bindings exposed to callers always carry their id, even on unknown ids. */
 function workspaceBinding(workspaceId, entry) {
-  return { workspaceId, project: entry === null ? null : copy(entry.project) }
+  if (entry === null) return { workspaceId, project: null }
+  const provenance = sanitizeAutoBind(entry.autoBind)
+  return {
+    workspaceId,
+    project: copy(entry.project),
+    // Present only for a binding auto-bind produced: a manual binding keeps the
+    // exact shape earlier versions wrote, so readers cannot mistake it for one.
+    ...provenance === null ? {} : { autoBind: provenance },
+  }
 }
 
 function sessionBinding(sessionId, entry) {
@@ -230,14 +258,18 @@ export function createStateStore(filePath) {
      * Bind (or replace) the Project of one workspace.
      * @returns {Promise<{workspaceId: string, project: object}>}
      */
-    bindWorkspace(workspaceId, project) {
+    bindWorkspace(workspaceId, project, autoBind = null) {
       if (!isId(workspaceId)) throw new TypeError('bindWorkspace: workspaceId must be a non-empty string')
       if (!isStoredProject(project)) throw new TypeError('bindWorkspace: project must carry an owner and a positive number')
       const stored = copy(project)
+      // Provenance travels with an automatic bind only; passing it also clears
+      // any provenance a previous automatic pick left behind.
+      const provenance = sanitizeAutoBind(autoBind)
       return mutate((snapshot) => {
         snapshot.workspaces[workspaceId] = {
           project: stored,
           boundAt: new Date().toISOString(),
+          ...provenance === null ? {} : { autoBind: { ...provenance, appliedAt: new Date().toISOString() } },
         }
         return workspaceBinding(workspaceId, snapshot.workspaces[workspaceId])
       })
