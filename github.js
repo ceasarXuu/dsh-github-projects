@@ -458,6 +458,42 @@ export const GRAPHQL_PROJECTS_QUERY = `query {
 }`
 
 /**
+ * Projects **linked to one repository** (v1.3.0, contract §3.7).
+ *
+ * This is the reverse link GitHub actually models: Projects v2 has no
+ * "repository default Project" field — a repository instead carries a list of
+ * linked Projects (`Repository.projectsV2`), and a Project may be linked to
+ * several repositories. The auto-bind rule reads this list for the workspace's
+ * git remote and picks one, so it needs each candidate's owner (the Project
+ * lives under a user or an organization), its workflows (GitHub's own
+ * "Auto-add to project" marks the repository's intended Project), and its item
+ * count/description for the bound summary. One call answers all of it.
+ *
+ * Mirrors `test/fixtures/queries/repo-projects.graphql`.
+ */
+export const GRAPHQL_REPO_PROJECTS_QUERY = `query($owner:String!,$repo:String!){
+  repository(owner:$owner,name:$repo){
+    nameWithOwner
+    hasProjectsEnabled
+    projectsV2(first:50){
+      totalCount
+      nodes{
+        number
+        title
+        url
+        closed
+        shortDescription
+        updatedAt
+        createdAt
+        items{ totalCount }
+        owner{ __typename ... on User { login } ... on Organization { login } }
+        workflows(first:20){ nodes{ name enabled } }
+      }
+    }
+  }
+}`
+
+/**
  * One page of a Project's items plus the Project summary, mirroring
  * `test/fixtures/queries/items.graphql` (plus `closed`/`__typename` so the
  * `/items` response can carry the full `Project` without a second read).
@@ -616,6 +652,93 @@ export function normalizeGraphqlProject(raw, context = {}) {
     itemCount,
     closed: source.closed === true,
     description: rawDescription === '' ? null : truncateChars(rawDescription, MAX_DESCRIPTION_CHARS).text,
+  }
+}
+
+/**
+ * One `ProjectV2` node linked to a repository → a candidate for auto-bind.
+ *
+ * `autoAdd` reports GitHub's own "Auto-add to project" workflow: it is the
+ * closest thing Projects v2 has to "this is the repository's default Project",
+ * because that workflow is what adds every new issue/PR in the linked
+ * repository to this Project.
+ *
+ * @param {object} raw - one `projectsV2.nodes[]` entry.
+ * @param {{nameWithOwner?: string}} [context] - the repository that answered.
+ * @returns {object|null} the candidate, or null when it cannot be addressed.
+ */
+export function normalizeRepoProject(raw, context = {}) {
+  if (!isRecord(raw)) return null
+  const ownerNode = isRecord(raw.owner) ? raw.owner : null
+  const login = ownerNode !== null && typeof ownerNode.login === 'string' ? ownerNode.login.trim() : ''
+  const number = Number.isInteger(raw.number) && raw.number > 0 ? raw.number : 0
+  if (login === '' || number === 0) return null
+  const workflows = isRecord(raw.workflows) && Array.isArray(raw.workflows.nodes) ? raw.workflows.nodes : []
+  return {
+    owner: login,
+    ownerType: String(ownerNode?.__typename ?? '') === 'Organization' ? 'organization' : 'user',
+    number,
+    title: typeof raw.title === 'string' ? raw.title : '',
+    url: httpUrl(raw.url),
+    closed: raw.closed === true,
+    repository: typeof context.nameWithOwner === 'string' ? context.nameWithOwner : null,
+    autoAdd: workflows.some(node => isRecord(node)
+      && node.enabled === true
+      && typeof node.name === 'string'
+      && /^auto-add to project$/iu.test(node.name.trim())),
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : null,
+    itemCount: isRecord(raw.items) && Number.isInteger(raw.items.totalCount) && raw.items.totalCount >= 0
+      ? raw.items.totalCount
+      : null,
+    description: typeof raw.shortDescription === 'string' && raw.shortDescription !== ''
+      ? truncateChars(raw.shortDescription, MAX_DESCRIPTION_CHARS).text
+      : null,
+  }
+}
+
+/**
+ * Pick the Project a workspace should be auto-bound to (v1.3.0, §3.7).
+ *
+ * The rule is deliberately conservative and explainable, because a wrong
+ * automatic pick silently shows the wrong board:
+ *
+ *   1. a **closed** Project is never a candidate (it is finished or abandoned);
+ *   2. among open ones, an **enabled "Auto-add to project" workflow** wins —
+ *      that is the repository's intended Project, the one GitHub itself feeds;
+ *   3. then the **most recently updated** Project;
+ *   4. a tie leaves the choice to registry order, which is stable per read.
+ *
+ * When more than one open Project is linked the caller reports
+ * `ambiguous: true` so the UI can say the pick was chosen, not certain.
+ *
+ * @param {readonly object[]} candidates - `normalizeRepoProject` results.
+ * @returns {{project: object|null, ambiguous: boolean, reason: string, considered: number}}
+ */
+export function selectRepoProject(candidates) {
+  const open = (Array.isArray(candidates) ? candidates : [])
+    .filter(candidate => isRecord(candidate) && candidate.closed !== true && typeof candidate.owner === 'string' && Number.isInteger(candidate.number) && candidate.number > 0)
+  if (open.length === 0) {
+    return { project: null, ambiguous: false, reason: 'no-open-project', considered: 0 }
+  }
+  const timeOf = value => {
+    const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  const ranked = [...open].sort((left, right) => {
+    // 1. GitHub's auto-add workflow is the repository's intended Project.
+    if ((left.autoAdd === true) !== (right.autoAdd === true)) return left.autoAdd === true ? -1 : 1
+    // 2. Otherwise the most recently touched Project is the live one.
+    const byTime = timeOf(right.updatedAt) - timeOf(left.updatedAt)
+    if (byTime !== 0) return byTime
+    return 0
+  })
+  const chosen = ranked[0]
+  return {
+    project: chosen,
+    ambiguous: open.length > 1,
+    reason: chosen.autoAdd === true ? 'auto-add-workflow' : 'most-recently-updated',
+    considered: open.length,
   }
 }
 
@@ -841,6 +964,41 @@ export function createGh(options = {}) {
    * Closed Projects are dropped; GraphQL errors that arrive beside a usable
    * payload are preserved as the per-owner `errors` array.
    */
+  /**
+   * Projects linked to one repository (v1.3.0, contract §3.7): the input of the
+   * workspace auto-bind rule. Closed Projects are dropped here — a finished
+   * Project must never be picked — and the survivors are returned with their
+   * owner and auto-add workflow so the caller can rank them.
+   *
+   * @param {string} repo - `owner/name` (parsed like every other repo input).
+   */
+  async function listRepoProjects(repo) {
+    const parsed = parseRepoParam(repo)
+    if (parsed === null) throw new GhError('bad-request', 'repo 必须是 owner/name 形式')
+    const slash = parsed.repo.indexOf('/')
+    const payload = await execGraphql(GRAPHQL_REPO_PROJECTS_QUERY, {
+      owner: parsed.repo.slice(0, slash),
+      repo: parsed.repo.slice(slash + 1),
+    })
+    const data = isRecord(payload.data) ? payload.data : null
+    const repository = data !== null && isRecord(data.repository) ? data.repository : null
+    // A repository the token cannot see answers `null` (not an error): report it
+    // as "no linked Projects" so auto-bind simply does not apply.
+    if (repository === null) return { repository: parsed.repo, hasProjectsEnabled: false, projects: [] }
+    const connection = isRecord(repository.projectsV2) ? repository.projectsV2 : null
+    const projects = []
+    for (const node of connection !== null && Array.isArray(connection.nodes) ? connection.nodes : []) {
+      const candidate = normalizeRepoProject(node, { nameWithOwner: parsed.repo })
+      if (candidate === null || candidate.closed === true) continue
+      projects.push(candidate)
+    }
+    return {
+      repository: parsed.repo,
+      hasProjectsEnabled: repository.hasProjectsEnabled === true,
+      projects,
+    }
+  }
+
   async function listProjects() {
     const payload = await execGraphql(GRAPHQL_PROJECTS_QUERY)
     const errors = graphqlOwnerErrors(payload)
@@ -1183,6 +1341,8 @@ export function createGh(options = {}) {
   return {
     health,
     listProjects,
+    // v1.3.0 auto-bind: the Projects one repository links to.
+    listRepoProjects,
     projectItems,
     getIssue,
     resolveIssueRef,

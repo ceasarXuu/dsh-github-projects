@@ -241,3 +241,53 @@ test('invalid arguments are rejected before touching the disk', async () => {
     cleanup(dir)
   }
 })
+
+/* ------------------------------------------------------------------ */
+/* v1.3.0 auto-bind provenance (§3.7)                                  */
+/* ------------------------------------------------------------------ */
+
+test('a manual binding carries no auto-bind provenance', async (t) => {
+  const dir = tempDir()
+  t.after(() => cleanup(dir))
+  const store = createStateStore(join(dir, 'state.json'))
+  await store.bindWorkspace('w1', PROJECT)
+  const binding = store.getWorkspace('w1')
+  assert.equal(binding.project.number, 9)
+  assert.equal(Object.hasOwn(binding, 'autoBind'), false, 'a manual binding must stay indistinguishable from pre-v1.3.0')
+})
+
+test('an automatic binding records its repository and survives a reload', async (t) => {
+  const dir = tempDir()
+  t.after(() => cleanup(dir))
+  const path = join(dir, 'state.json')
+  const store = createStateStore(path)
+  await store.bindWorkspace('w1', PROJECT, { repository: 'acme/web', ambiguous: true, considered: 2 })
+
+  const binding = store.getWorkspace('w1')
+  assert.equal(binding.autoBind.repository, 'acme/web')
+  assert.equal(binding.autoBind.ambiguous, true)
+  assert.equal(binding.autoBind.considered, 2)
+  assert.equal(typeof binding.autoBind.appliedAt, 'string')
+
+  const reopened = createStateStore(path)
+  assert.equal(reopened.getWorkspace('w1').autoBind.repository, 'acme/web')
+
+  // Re-binding by hand clears the claim it was automatic.
+  await reopened.bindWorkspace('w1', { ...PROJECT, number: 4 })
+  assert.equal(Object.hasOwn(reopened.getWorkspace('w1'), 'autoBind'), false)
+})
+
+test('malformed auto-bind provenance is dropped, the binding kept', async (t) => {
+  const dir = tempDir()
+  t.after(() => cleanup(dir))
+  const path = join(dir, 'state.json')
+  const store = createStateStore(path)
+  await store.bindWorkspace('w1', PROJECT)
+  const snapshot = JSON.parse(readFileSync(path, 'utf8'))
+  snapshot.workspaces.w1.autoBind = { repository: '', ambiguous: 'yes' }
+  writeFileSync(path, JSON.stringify(snapshot))
+
+  const binding = createStateStore(path).getWorkspace('w1')
+  assert.equal(binding.project.number, 9, 'the binding must survive')
+  assert.equal(Object.hasOwn(binding, 'autoBind'), false, 'an unusable provenance is dropped')
+})

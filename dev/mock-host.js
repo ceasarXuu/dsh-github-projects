@@ -211,6 +211,49 @@ for (const pair of String(process.env.MOCK_BRANCHES ?? '').split(',')) {
   else branchOverrides.set(id, parsed)
 }
 
+/**
+ * v1.3.0 `GET /auto-bind` fixture. The mode comes from `MOCK_AUTOBIND` (read
+ * per request so the e2e harness can switch it without a second stack).
+ */
+function autoBindPayload(workspaceId) {
+  const mode = String(process.env.MOCK_AUTOBIND ?? 'bound').trim() || 'bound'
+  if (mode === 'disabled') return { enabled: false, applied: false, reason: 'disabled' }
+  if (typeof workspaceId !== 'string' || workspaceId === '') {
+    return { enabled: true, applied: false, reason: 'no-workspace' }
+  }
+  // Mirror the real contract: a workspace that already has a binding is never
+  // re-bound, whichever way that binding was made. The explicit mode stays so a
+  // test can reach the answer without a prior bind.
+  if (workspaceBindings.has(workspaceId) || mode === 'already-bound') {
+    return { enabled: true, applied: false, reason: 'already-bound' }
+  }
+  if (mode === 'no-project') {
+    return { enabled: true, applied: false, reason: 'no-project', repository: 'acme/web', project: null, ambiguous: false, considered: 0 }
+  }
+  const project = projects.find(entry => entry.number === 9) ?? projects[0]
+  const ambiguous = mode === 'ambiguous'
+  const binding = {
+    project,
+    autoBind: {
+      repository: 'acme/web',
+      ambiguous,
+      considered: ambiguous ? 2 : 1,
+      appliedAt: new Date().toISOString(),
+    },
+  }
+  workspaceBindings.set(workspaceId, { workspaceId, ...binding })
+  return {
+    enabled: true,
+    workspaceId,
+    applied: true,
+    reason: ambiguous ? 'bound-ambiguous' : 'bound',
+    repository: 'acme/web',
+    project,
+    ambiguous,
+    considered: ambiguous ? 2 : 1,
+  }
+}
+
 /** Live branch of `branchGitDirectory`, or `null` when it cannot be read. */
 function liveGitBranch() {
   if (branchGitDirectory === null || branchGitDirectory === '') return null
@@ -358,7 +401,11 @@ async function handle(req, res, allowWrites) {
     const sessions = {}
     for (const [id, binding] of sessionBindings.entries()) sessions[id] = binding.issue
     const workspaces = {}
-    for (const [id, binding] of workspaceBindings.entries()) workspaces[id] = binding.project
+    for (const [id, binding] of workspaceBindings.entries()) {
+      workspaces[id] = binding.autoBind === undefined
+        ? binding.project
+        : { ...binding.project, autoBind: binding.autoBind }
+    }
     return send(res, 200, { sessions, workspaces, updatedAt: new Date().toISOString() })
   }
   // Mock-only debug/assertion aid (NOT part of the shipped contract): the e2e
@@ -398,6 +445,12 @@ async function handle(req, res, allowWrites) {
   }
   if (req.method === 'GET' && route === '/branches') {
     return send(res, 200, branchPayload())
+  }
+  // v1.3.0 auto-bind: mirror the real host's contract. `MOCK_AUTOBIND` decides
+  // which answer the fixture returns, so every reason is reachable in e2e:
+  // `bound` (default), `ambiguous`, `no-project`, `already-bound`, `disabled`.
+  if (req.method === 'GET' && route === '/auto-bind') {
+    return send(res, 200, autoBindPayload(workspaceId))
   }
   // v1.1.0 write-side metadata: Project node id + Status field options.
   if (req.method === 'GET' && route === '/project-meta') {

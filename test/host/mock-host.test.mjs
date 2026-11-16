@@ -265,3 +265,56 @@ test('mock /branches honors MOCK_BRANCHES overrides, including a non-repository'
     delete process.env.MOCK_BRANCHES
   }
 })
+
+/* ------------------------------------------------------------------ */
+/* v1.3.0: GET /auto-bind                                              */
+/* ------------------------------------------------------------------ */
+
+test('mock /auto-bind binds the fixture Project and reports its provenance', async (t) => {
+  const mock = await startMock(t)
+  const body = (await mock.request('/auto-bind?workspaceId=ws-auto')).body
+  assert.equal(body.enabled, true)
+  assert.equal(body.applied, true)
+  assert.equal(body.reason, 'bound')
+  assert.equal(body.repository, 'acme/web')
+  assert.equal(body.project.number, 9)
+  assert.equal(body.ambiguous, false)
+
+  // The binding is visible in /bindings with the provenance beside it.
+  const bindings = (await mock.request('/bindings')).body
+  assert.equal(bindings.workspaces['ws-auto'].number, 9)
+  assert.equal(bindings.workspaces['ws-auto'].autoBind.repository, 'acme/web')
+  assert.equal(bindings.workspaces['ws-auto'].autoBind.ambiguous, false)
+})
+
+test('mock /auto-bind reaches every reason through MOCK_AUTOBIND', async (t) => {
+  const previous = process.env.MOCK_AUTOBIND
+  t.after(() => {
+    if (previous === undefined) delete process.env.MOCK_AUTOBIND
+    else process.env.MOCK_AUTOBIND = previous
+  })
+  const mock = await startMock(t)
+
+  process.env.MOCK_AUTOBIND = 'disabled'
+  assert.deepEqual((await mock.request('/auto-bind?workspaceId=w')).body, { enabled: false, applied: false, reason: 'disabled' })
+
+  process.env.MOCK_AUTOBIND = 'already-bound'
+  assert.equal((await mock.request('/auto-bind?workspaceId=w')).body.reason, 'already-bound')
+
+  process.env.MOCK_AUTOBIND = 'no-project'
+  assert.equal((await mock.request('/auto-bind?workspaceId=w')).body.reason, 'no-project')
+
+  process.env.MOCK_AUTOBIND = 'ambiguous'
+  const ambiguous = (await mock.request('/auto-bind?workspaceId=w2')).body
+  assert.equal(ambiguous.reason, 'bound-ambiguous')
+  assert.equal(ambiguous.ambiguous, true)
+  assert.equal(ambiguous.considered, 2)
+  const bindings = (await mock.request('/bindings')).body
+  assert.equal(bindings.workspaces.w2.autoBind.ambiguous, true)
+  assert.equal(bindings.workspaces.w2.autoBind.considered, 2)
+})
+
+test('mock /auto-bind rejects a missing workspace id', async (t) => {
+  const mock = await startMock(t)
+  assert.equal((await mock.request('/auto-bind')).body.reason, 'no-workspace')
+})

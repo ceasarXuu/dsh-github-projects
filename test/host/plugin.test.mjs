@@ -1516,3 +1516,83 @@ test('a user prompt refreshes only that workspace, and revises only on change', 
   assert.equal(second.workspaces.wb.branch, 'dev')
   assert.equal(second.revision, first.revision + 1)
 })
+
+/* ------------------------------------------------------------------ */
+/* v1.3.0 workspace auto-bind (§3.7)                                   */
+/* ------------------------------------------------------------------ */
+
+test('/auto-bind fills an unbound workspace from the repository it checks out', async (t) => {
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' } })
+
+  const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
+  assert.equal(body.enabled, true)
+  assert.equal(body.applied, true)
+  assert.equal(body.reason, 'bound')
+  assert.equal(body.repository, 'acme/web')
+  assert.equal(body.project.number, 9)
+  assert.equal(body.project.owner, 'ceasarXuu')
+  assert.equal(body.project.title, 'web-issues')
+  // The durable store now carries it, so the sidebar icon lights up.
+  const bindings = expectJson(await app.get('/bindings'))
+  assert.equal(bindings.workspaces.wa.number, 9)
+})
+
+test('/auto-bind never overwrites a Project the user bound', async (t) => {
+  const app = useApp(t)
+  // Bind a different Project by hand, exactly as the picker does.
+  expectJson(await app.post('/bind-workspace', {
+    workspaceId: 'wa',
+    project: { owner: 'acme-labs', ownerType: 'organization', number: 2, title: '我的看板', url: null, itemCount: 3, closed: false, description: null },
+  }))
+  app.remote['/ws/a'] = 'acme/web'
+
+  const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
+  assert.equal(body.applied, false)
+  assert.equal(body.reason, 'already-bound')
+  const bindings = expectJson(await app.get('/bindings'))
+  assert.equal(bindings.workspaces.wa.number, 2, 'the user binding must survive auto-bind')
+  assert.equal(bindings.workspaces.wa.owner, 'acme-labs')
+})
+
+test('/auto-bind reports each reason it will not bind', async (t) => {
+  const app = useApp(t, { remote: { '/ws/plain': null } })
+
+  assert.equal(expectJson(await app.get('/auto-bind?workspaceId=a&path=%2Fws%2Fplain')).reason, 'no-remote')
+  // A repository the token cannot see (the fixture runner answers 404-style).
+  app.remote['/ws/other'] = 'ceasarXuu/NotVisible'
+  assert.equal(expectJson(await app.get('/auto-bind?workspaceId=b&path=%2Fws%2Fother')).reason, 'no-project')
+  // Missing inputs never throw.
+  assert.equal(expectJson(await app.get('/auto-bind')).reason, 'no-workspace')
+  assert.equal(expectJson(await app.get('/auto-bind?workspaceId=x')).reason, 'no-path')
+})
+
+test('/auto-bind is inert when the config flag is off', async (t) => {
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' }, config: { autoBind: false } })
+  const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
+  assert.deepEqual(body, { enabled: false, applied: false, reason: 'disabled' })
+  assert.deepEqual(expectJson(await app.get('/bindings')).workspaces, {})
+})
+
+test('an auto-filled binding carries its provenance through /bindings', async (t) => {
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' } })
+  const filled = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
+  assert.equal(filled.applied, true)
+  assert.equal(filled.ambiguous, false, 'only one open Project is linked, so the pick is unambiguous')
+
+  const bindings = expectJson(await app.get('/bindings'))
+  // The Project fields stay flat on the entry, with the provenance beside them.
+  assert.equal(bindings.workspaces.wa.number, 9)
+  assert.equal(bindings.workspaces.wa.title, 'web-issues')
+  assert.deepEqual(bindings.workspaces.wa.autoBind.repository, 'acme/web')
+  assert.equal(bindings.workspaces.wa.autoBind.ambiguous, false)
+  assert.equal(typeof bindings.workspaces.wa.autoBind.appliedAt, 'string')
+
+  // A manual re-bind drops the provenance: the board stops claiming it chose.
+  expectJson(await app.post('/bind-workspace', {
+    workspaceId: 'wa',
+    project: { owner: 'ceasarXuu', ownerType: 'user', number: 4, title: 'web-kanban', url: null, itemCount: 0, closed: false, description: null },
+  }))
+  const after = expectJson(await app.get('/bindings'))
+  assert.equal(after.workspaces.wa.number, 4)
+  assert.equal(Object.hasOwn(after.workspaces.wa, 'autoBind'), false)
+})

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "GitHub 项目与议题",
-    "description": "给工作区绑定 GitHub Project、给会话绑定 Issue，并在左侧栏每个工作区行显示该目录当前所在的 git branch：状态泳道看板、Issue 详情页、会话头部与左侧栏副标题、内置浏览器跳转，以及 Agent 绑定/切换/解除工具。"
+    "description": "给工作区绑定 GitHub Project、给会话绑定 Issue，左侧栏每个工作区行显示当前 git branch，并按仓库自动绑定 Project：状态泳道看板、Issue 详情页、会话头部与左侧栏副标题、内置浏览器跳转，以及 Agent 绑定/切换/解除工具。"
   }
 }

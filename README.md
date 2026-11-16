@@ -1,8 +1,8 @@
 # dsh-github-projects
 
-**v1.2.0 — current release.** The GitHub Project board, the Issue bound to your session, the **git
-branch of each workspace** in the left sidebar, and **opt-in Project status writes** — read-only by
-default.
+**v1.3.0 — current release.** The GitHub Project board, the Issue bound to your session, the **git
+branch of each workspace** in the left sidebar, **automatic Project binding from each workspace's git
+remote**, and **opt-in Project status writes** — read-only by default.
 
 This DSH plugin appends the `issue` view to the conversation header — it shows the Issue bound to the
 **session**, with a one-line **issue subtitle** under the session title in the conversation header
@@ -12,7 +12,10 @@ a milestone filter — moved in v1.0.2 out of the conversation header into DSH's
 small board icon in every workspace row of the left sidebar opens it (highlighted when that workspace
 is bound). Since v1.2.0 every workspace row also shows that directory's **current git branch**,
 directly to the right of the workspace name (read once at startup, again on every user message in
-that workspace, plus a 15 s poll). **Read-only by default**: set `allowWrites: true` (v1.1.0,
+that workspace, plus a 15 s poll). Since v1.3.0 a workspace **no longer needs you to pick a Project**:
+the plugin reads the checkout's `origin` remote, finds the Project that repository links, and binds
+it — the board says `已根据仓库 … 自动绑定`, a Project you bound by hand is never overwritten, and
+`autoBind: false` turns it off. **Read-only by default**: set `allowWrites: true` (v1.1.0,
 opt-in) and you can move items between Status lanes (drag, or the card's 移动到 menu) with an Undo toast — the only GitHub write the
 plugin can perform. Clicking a card or the header subtitle opens GitHub in your **system default
 browser** (new tab); the sidebar subtitle is non-interactive and clicking anywhere on a session row
@@ -28,9 +31,45 @@ left sidebar:         web  main  ▣  →  right sidebar tab  [ 项目 / Project
 
 ![Session header with the `issue` tab, and the board in the right sidebar (v1.1.0 e2e)](artifacts/screenshots/01-tabs.png)
 
+## Release 1.3.0 — Project bound from the repository
+
+Current release. Most workspaces are a checkout of exactly one GitHub repository, and that
+repository already says which Project it belongs to — so making you click a board icon and pick one
+is answering a question GitHub could answer. v1.3.0 reads the `origin` remote, finds the Project, and
+fills the binding. It **only ever fills a gap**: a Project you bound yourself is never touched.
+
+| | |
+|---|---|
+| npm package | `@ceasarxuu/dsh-github-projects@1.3.0` |
+| Changes | `GET /auto-bind`; `git-remote.js` (remote → `owner/name`), `auto-bind.js` (pick + memo), `selectRepoProject` (ranking); a binding now optionally carries `autoBind` provenance; a note in the board toolbar |
+| Switch | `autoBind` (default **true**), `autoBindTtlMs` (600000) |
+| Compatibility | no breaking change; workspaces you bound are unaffected; no new runtime dependencies; no DSH change |
+
+- **What GitHub actually models.** Projects v2 has **no** "repository default Project" field. What is
+  real is a *link*: a repository carries a list of linked Projects (`Repository.projectsV2`), and one
+  Project may be linked to several repositories. Separately a Project can run GitHub's own
+  **"Auto-add to project"** workflow — the mechanism that pulls new issues/PRs into it, in practice
+  the repository's intended board.
+- **The rule.** `git config --get remote.origin.url` (local git, no network, no auth) → `owner/name`
+  (every shape git accepts) → one GraphQL read of the repository's linked Projects → rank: a
+  **closed** Project is never a candidate; an enabled **Auto-add to project** workflow wins;
+  otherwise the **most recently updated** open one. A remote that is not `github.com` (a local
+  mirror, GitLab, Bitbucket) is never guessed into a GitHub repository.
+- **It explains itself.** An auto-filled board shows one muted line —
+  `已根据仓库 acme/web 自动绑定 Project「web-issues」` — and says so explicitly when
+  several Projects were linked and the pick was a choice. The note reads the durable provenance, so
+  it survives a reload and a restart, and disappears the moment you bind by hand.
+- **Never overwrites your choice.** A workspace with any existing binding is answered
+  `already-bound` and skipped; re-binding by hand clears the provenance.
+- **Triggers.** One startup pass over every registered workspace, a 60 s sweep for workspaces created
+  later, and `GET /auto-bind` from the client for a workspace whose Project is still unknown. Answers
+  are remembered for `autoBindTtlMs`, so the steady state costs no `git` and no `gh`.
+- **Verification.** Host tests **191/191**; the e2e harness passes in fixture **and** real-host mode
+  including a dedicated `auto-bind` stage on its own isolated stack (screenshot `18-auto-bind.png`).
+
 ## Release 1.1.0 — opt-in Project status writes
 
-Current release. The first GitHub write is **opt-in**: `allowWrites` (default **false**) turns the
+Previous release. The first GitHub write is **opt-in**: `allowWrites` (default **false**) turns the
 read-only board into a movable one and registers a fourth agent tool. Existing installs keep the
 read-only behavior until they explicitly opt in.
 
@@ -79,6 +118,8 @@ read-only behavior until they explicitly opt in.
       gitCommand: git
       gitTimeoutMs: 4000
       branchTtlMs: 30000
+      autoBind: true
+      autoBindTtlMs: 600000
       allowWrites: true
   ```
 

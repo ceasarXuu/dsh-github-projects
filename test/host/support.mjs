@@ -38,6 +38,8 @@ export const fixture = {
   graphqlProjectMeta: loadFixture('graphql-project-meta.json'),
   graphqlUpdateItemStatus: loadFixture('graphql-update-item-status.json'),
   graphqlClearItemStatus: loadFixture('graphql-clear-item-status.json'),
+  // v1.3.0 auto-bind: Projects linked to acme/web (captured live).
+  graphqlRepoProjects: loadFixture('graphql-repo-projects.json'),
 }
 
 /** Real GraphQL ids captured 2026-10-29 (`gh` 2.96.0, Project `web-issues`). */
@@ -119,6 +121,15 @@ export async function fixtureRun(args) {
           variables[key] = args[index + 1].slice(separator + 1)
         }
       }
+    }
+    // v1.3.0 auto-bind: Projects linked to one repository.
+    if (/projectsV2\(first:50\)/u.test(query) || /repository\(owner:\$owner,name:\$repo\)/u.test(query)) {
+      const owner = variables.owner
+      const repo = variables.repo
+      if (owner !== 'ceasarXuu' || repo !== 'web') {
+        return { stdout: `${JSON.stringify({ data: { repository: null }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }] })}\n`, stderr: '' }
+      }
+      return { stdout: `${JSON.stringify(fixture.graphqlRepoProjects)}\n`, stderr: '' }
     }
     if (/updateProjectV2ItemFieldValue/u.test(query)) {
       return { stdout: `${JSON.stringify(fixture.graphqlUpdateItemStatus)}\n`, stderr: '' }
@@ -230,6 +241,7 @@ export function startApp(options = {}) {
   const registryEntries = Array.isArray(options.registry) ? options.registry : []
   const registry = { list: () => registryEntries }
   const branchNames = { ...(options.branches ?? {}) }
+  const remoteMap = options.remote !== null && typeof options.remote === 'object' ? { ...options.remote } : {}
   /** Every directory list the branch reader was asked for. */
   const branchReads = []
   const branchReader = {
@@ -278,6 +290,20 @@ export function startApp(options = {}) {
     // v1.2.0 branch seam: when the test declares branch names, never spawn
     // `git`; without them the real git-backed reader is exercised.
     branchReader: options.branches === undefined ? undefined : branchReader,
+    // v1.3.0 auto-bind seam: `options.remote` maps workspace dir → GitHub repo
+    // (or null for "not a GitHub remote"), so tests never spawn `git`.
+    readRemote: options.remote === undefined
+      ? undefined
+      : async (directory) => {
+        const repository = remoteMap[directory] ?? null
+        return {
+          dir: directory,
+          repository,
+          github: typeof repository === 'string' && repository !== '',
+          remoteUrl: typeof repository === 'string' ? `git@github.com:${repository}.git` : null,
+          readAt: new Date().toISOString(),
+        }
+      },
   })
   const route = fake.routes[0]
   const request = (requestOptions) => invokeHandler(route.handler, requestOptions)
@@ -294,6 +320,8 @@ export function startApp(options = {}) {
     request,
 
     branchReads,
+    /** Mutable workspace dir → GitHub repo map for the auto-bind seam. */
+    remote: remoteMap,
     /** Drive an accepted `session/event` through the plugin's listeners. */
     emitSessionEvent(session, event) {
       for (const listener of [...sessionEventListeners]) listener(session, event)

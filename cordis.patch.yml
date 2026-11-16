@@ -48,6 +48,14 @@
         # re-reads it. A human prompt and the 15 s client poll both refresh on
         # their own; this only bounds an external `git checkout`.
         branchTtlMs: 30000
+        # v1.3.0 workspace auto-bind: fill an unbound workspace's Project from
+        # the GitHub repository its `origin` remote names. It only ever fills a
+        # gap — a Project you bound yourself is never replaced. Set false to
+        # keep the manual picker only.
+        autoBind: true
+        # How long one resolved auto-bind answer (including "no Project") is
+        # trusted before it is re-checked.
+        autoBindTtlMs: 600000
         # Opt-in GitHub writes (v1.1.0): board drag / move menu and the
         # `github_project_item_status` agent tool update a Project item's
         # Status field. Requires the `project` scope on the `gh` token.

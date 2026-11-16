@@ -471,6 +471,65 @@ window.__ModuleLoader__.load({
       return promise
     }
 
+    /**
+     * Workspace ids auto-bind already asked the host about (v1.3.0, §4.10), so a
+     * 4 s poll never turns into a 4 s `git`/`gh` sweep. A workspace that gains a
+     * binding drops out naturally: it is no longer unbound.
+     */
+    const autoBindAsked = new Set()
+
+    /**
+     * Ask the host to fill a workspace's Project from the repository it checks
+     * out. Only ever called for a workspace the user has not bound; the host
+     * refuses to replace an existing binding anyway.
+     */
+    function requestAutoBind(workspaceId) {
+      if (typeof workspaceId !== 'string' || workspaceId === '') return
+      if (autoBindAsked.has(workspaceId)) return
+      autoBindAsked.add(workspaceId)
+      requestWithCache(
+        `/auto-bind${queryString({ workspaceId })}`,
+        `auto-bind:${workspaceId}`,
+        { allowStaleRetry: false },
+      )
+        .then((data) => {
+          if (!isPlainObject(data) || data.enabled !== true) return
+          if (data.applied === true) {
+            // The binding landed: repaint the row icon and the board at once.
+            refreshBindingMap().catch(() => { /* the next poll retries */ })
+            onBindingChangedDispatch()
+          }
+        })
+        .catch(() => { /* auto-bind is best effort; the manual flow still works */ })
+    }
+
+    /** Pop the plugin's own binding-changed event, if the client registered one. */
+    function onBindingChangedDispatch() {
+      try {
+        window.dispatchEvent(new CustomEvent(BINDING_CHANGED_EVENT))
+      } catch (_dispatchFailed) { /* no window listener is fine */ }
+    }
+
+    /**
+     * The auto-bind note shown in an auto-filled board, or null.
+     *
+     * The provenance rides on the durable workspace binding (`/bindings` →
+     * `workspaces[id].autoBind`), so the note survives a page reload and a DSH
+     * restart, and disappears the moment the user binds a Project by hand.
+     */
+    function autoBindNoteOf(workspaceId) {
+      const project = workspaceBindingOf(workspaceId)
+      if (project === null || !isPlainObject(project.autoBind)) return null
+      const provenance = project.autoBind
+      return {
+        repository: typeof provenance.repository === 'string' ? provenance.repository : '',
+        projectTitle: textOf(project.title)
+          || `${textOf(project.owner)} #${String(project.number ?? '')}`.trim(),
+        ambiguous: provenance.ambiguous === true,
+        considered: Number.isInteger(provenance.considered) ? provenance.considered : 0,
+      }
+    }
+
     /** Poll + binding-changed plumbing, owned by the plugin effect in apply(). */
     function installBindingMap(ctx) {
       ctx.effect(() => {
@@ -481,7 +540,25 @@ window.__ModuleLoader__.load({
         }
         tick()
         const timer = window.setInterval(tick, SESSION_POLL_MS)
-        const off = onBindingChanged(tick)
+        const off = onBindingChanged(() => {
+          tick()
+          offerAutoBind()
+        })
+        /**
+         * Offer auto-bind to every registered workspace whose Project is still
+         * unknown. The host answers `already-bound` for anything the user chose,
+         * and one request per workspace per page life keeps this free.
+         */
+        const offerAutoBind = () => {
+          if (stopped) return
+          // The /branches map is keyed by every registered workspace, so it is
+          // the workspace inventory this half already polls — no extra read.
+          for (const workspaceId of workspaceBranches.keys()) {
+            if (workspaceId === '' || workspaceId === 'ungrouped') continue
+            if (workspaceBindingOf(workspaceId) !== null) continue
+            requestAutoBind(workspaceId)
+          }
+        }
         return () => {
           stopped = true
           window.clearInterval(timer)
@@ -675,6 +752,9 @@ window.__ModuleLoader__.load({
       'projects.unboundText': '将工作区关联到一个 GitHub Project，之后每个会话都能在这里浏览它按状态分组的 Issue、PR 与 Draft。',
       'projects.unboundAction': '选择 Project',
       'projects.workspaceHint': '绑定只作用于当前工作区：{title}',
+      'projects.autoBindNotice': '已根据仓库 {repository} 自动绑定 Project「{project}」',
+      'projects.autoBindAmbiguous': '该仓库关联了 {count} 个 Project，已自动选择「{project}」，可在下方「更换」中修改',
+      'projects.autoBindNoticeAria': '自动绑定说明',
       'projects.workspacePath': '路径：{path}',
       'projects.noWorkspaceTitle': '当前会话不属于任何工作区',
       'projects.noWorkspaceText': '工作区绑定以工作区为归属；请先把会话放进一个工作区，再回来绑定 Project。',
@@ -804,6 +884,9 @@ window.__ModuleLoader__.load({
       'projects.unboundText': 'Link this workspace to a GitHub Project; every session can then browse its Issues, PRs and Drafts grouped by status here.',
       'projects.unboundAction': 'Choose a Project',
       'projects.workspaceHint': 'The binding applies to this workspace only: {title}',
+      'projects.autoBindNotice': 'Bound automatically from repository {repository} to Project "{project}"',
+      'projects.autoBindAmbiguous': 'This repository links {count} Projects; "{project}" was chosen automatically — use 更换 to change it',
+      'projects.autoBindNoticeAria': 'Auto-bind note',
       'projects.workspacePath': 'Path: {path}',
       'projects.noWorkspaceTitle': 'This session is not in a workspace',
       'projects.noWorkspaceText': 'Project bindings belong to a workspace. Move this session into one, then come back to bind a Project.',
@@ -3206,7 +3289,10 @@ window.__ModuleLoader__.load({
       }))
     }
 
-    function ProjectToolbar({ t, project, itemCount, refreshing, updating, viewMode, onViewModeChange, milestoneValue, milestoneOptions, onMilestoneChange, onRefresh, onChange, onUnbind, unbinding, readOnly = false }) {
+    function ProjectToolbar({
+      t, project, itemCount, refreshing, updating, viewMode, onViewModeChange, milestoneValue, milestoneOptions,
+      onMilestoneChange, onRefresh, onChange, onUnbind, unbinding, readOnly = false, autoBindNote = null,
+    }) {
       const title = textOf(project.title) || `${textOf(project.owner)} #${project.number}`
       const meta = []
       meta.push(h('span', { key: 'owner', className: 'ghp-repochip' }, `${textOf(project.owner)} / #${project.number}`))
@@ -3233,7 +3319,8 @@ window.__ModuleLoader__.load({
             h('div', { className: 'ghp-toolbar-meta' }, meta),
             textOf(project.description) === ''
               ? null
-              : h('div', { className: 'ghp-toolbar-desc' }, textOf(project.description)))),
+              : h('div', { className: 'ghp-toolbar-desc' }, textOf(project.description))),
+          h(AutoBindNotice, { note: autoBindNote, t })),
         h('div', { className: 'ghp-toolbar-actions' },
           h(ViewModeToggle, { t, viewMode, onChange: onViewModeChange }),
           h(MilestoneDropdown, {
@@ -3379,6 +3466,29 @@ window.__ModuleLoader__.load({
                 'aria-label': t('projects.bindIssueAria', { title: textOf(item.title) }),
               }, binding ? h(Spinner, { size: 12 }) : null, t('common.bind')))
             : null))
+    }
+
+    /**
+     * The auto-bind note (v1.3.0, §4.10): a quiet line in the board toolbar that
+     * says the binding was chosen for the user, why, and — when the repository
+     * links several Projects — that the pick was a choice, so 更换 stays the
+     * obvious way to overrule it. Renders nothing for a manual binding.
+     */
+    function AutoBindNotice({ note, t }) {
+      if (note === null) return null
+      const ambiguous = note.ambiguous === true && note.considered > 1
+      const text = ambiguous
+        ? t('projects.autoBindAmbiguous', { count: String(note.considered), project: note.projectTitle })
+        : t('projects.autoBindNotice', { repository: note.repository, project: note.projectTitle })
+      return h('p', {
+        className: 'ghp-autobind',
+        'data-ghp-autobind': ambiguous ? 'ambiguous' : '1',
+        role: 'note',
+        'aria-label': t('projects.autoBindNoticeAria'),
+        title: text,
+      },
+      h(IconCheck, { size: 12 }),
+      h('span', { className: 'ghp-autobind-text', 'data-ghp-autobind-text': '' }, text))
     }
 
     function ProjectsEmpty({ t, workspace, onChoose }) {
@@ -4252,6 +4362,7 @@ window.__ModuleLoader__.load({
             onUnbind: unbindProject,
             unbinding,
             readOnly: !writesAllowed && isBoardMode,
+            autoBindNote: autoBindNoteOf(workspaceId),
           }),
           allItems.length === 0 || itemsState.status === 'loading' || itemsState.status === 'error'
             ? null
@@ -5114,6 +5225,34 @@ window.__ModuleLoader__.load({
   box-shadow: var(--dsw-elevation-soft, none);
 }
 .ghp-toolbar-main { display: flex; flex: 1 1 320px; gap: 12px; min-width: 0; }
+/* Auto-bind note (v1.3.0, §4.10): a quiet one-line statement that the Project
+   was chosen for the user. It is information, not a control — the header's
+   更换 button stays the way to overrule it. */
+.ghp-autobind {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 0 0;
+  color: var(--ghp-text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+}
+.ghp-autobind > svg { flex: none; margin-top: 1px; color: var(--ghp-accent-success); }
+.ghp-autobind[data-ghp-autobind="ambiguous"] > svg { color: var(--ghp-accent-warn); }
+/* The sentence must be readable, not a truncated fragment: it explains a
+   decision the user did not make, so it wraps to at most two lines and the
+   full text stays in the title attribute. */
+.ghp-autobind-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .ghp-toolbar-icon {
   display: flex;
   align-items: center;
