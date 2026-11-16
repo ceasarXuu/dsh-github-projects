@@ -22,7 +22,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
-  createRunRoot, runTimestamp, startDshWeb, waitForHttpReady, writeOverlay,
+  createRunRoot, firstUseWorkspacePath, initWorkspaceRepo, runTimestamp, startDshWeb, waitForHttpReady,
+  writeOverlay,
 } from './lib/dsh.mjs'
 import { launchChrome, waitForDevToolsPort, connectPageTarget } from './lib/browser.mjs'
 import { startMockLlm } from './lib/mock-llm.mjs'
@@ -170,7 +171,7 @@ async function main() {
     '04-projects-board.png', '05-projects-list.png', '06-projects-milestone.png',
     '07-issue-empty.png', '08-issue-detail.png', '09-issue-comments.png',
     '10-desktop-tabs.png', '11-projects-wide.png', '12-external-open.png',
-    '13-issue-subtitle.png', '14-sidebar-subtitle.png',
+    '13-issue-subtitle.png', '14-sidebar-subtitle.png', '17-workspace-branch.png',
     // 16 is written only by the fixture `projects-status-write` stage (the
     // second, allowWrites:true fixture stack); a real run preserves it.
     '16-projects-status-write.png',
@@ -185,6 +186,14 @@ async function main() {
       try { rmSync(join(SCREENSHOT_DIR, name), { force: true }) } catch { /* ignore */ }
     }
   }
+
+  // v1.2.0: the isolated first-use workspace becomes a real git repository, so
+  // both modes can exercise the branch chip. Fixture mode answers fabricated
+  // names from the mock host, but a real repository keeps the two modes'
+  // sidebar identical and lets `--mode real` read a genuine `git` fact.
+  // The first-use Workspace lives under `documentsDirectory` (pinned by the
+  // overlay), not at the `dsh web` process cwd — see firstUseWorkspacePath.
+  const workspaceRepo = initWorkspaceRepo(firstUseWorkspacePath(root.documents))
 
   /** @type {{cdp: import('./lib/cdp.mjs').CdpClient|null, chrome: any, dsh: any, llm: any}} */
   const resources = { cdp: null, chrome: null, dsh: null, llm: null }
@@ -276,6 +285,9 @@ async function main() {
           env: {
             DEEPSEEK_API_KEY: 'sk-e2e-mock',
             DEEPSEEK_BASE_URL: resources.llm.baseUrl,
+            // Fixture mode: the mock host fabricates this branch for every
+            // workspace, so it must match the real repository the run created.
+            ...(workspaceRepo.ok ? { MOCK_BRANCHES: `*=${workspaceRepo.branch}` } : {}),
           },
         })
         const url = await resources.dsh.waitForUrl(emitTimeout(90_000))
@@ -1197,6 +1209,11 @@ async function main() {
         const sample = chip.rows.find(row => row.chip)
         assert(sample.tag === 'SPAN', `workspace branch chip must be a non-interactive <span>, got <${String(sample.tag)}>`)
         assert(typeof sample.text === 'string' && sample.text.length > 0, 'workspace branch chip text is empty')
+        // The run's workspace is a real repository on this branch, so both modes
+        // must agree with the filesystem rather than with a fixture.
+        assert(workspaceRepo.ok, `the run workspace is not a git repository: ${String(workspaceRepo.reason)}`)
+        assert(sample.text === workspaceRepo.branch,
+          `workspace branch chip reads ${JSON.stringify(sample.text)}, expected ${JSON.stringify(workspaceRepo.branch)}`)
         assert(typeof sample.title === 'string' && sample.title.length > 0, 'workspace branch chip has no title tooltip')
         assert(sample.detached === '0' || sample.detached === '1', `workspace branch chip carried data-ghp-workspace-branch-detached=${JSON.stringify(sample.detached)}`)
         // Placement: directly right of the title, inside the row's content box.
@@ -1226,6 +1243,7 @@ async function main() {
           screenshot,
           chipCount: chip.withChip,
           workspaceRows: chip.rows.length,
+          workspaceRepo,
           sample: {
             rowKey: sample.rowKey,
             text: sample.text,

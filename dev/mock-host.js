@@ -185,17 +185,21 @@ const MOCK_BRANCHES = [
 ]
 
 const branchOverrides = new Map()
+/** `*=<branch>` sets the value for every workspace without its own entry. */
+let branchDefault = null
 for (const pair of String(process.env.MOCK_BRANCHES ?? '').split(',')) {
   const index = pair.indexOf('=')
   if (index <= 0) continue
   const id = pair.slice(0, index).trim()
   const value = pair.slice(index + 1).trim()
   if (id === '' || value === '') continue
-  branchOverrides.set(id, value === 'detached'
+  const parsed = value === 'detached'
     ? { branch: null, detached: true, commit: '9f2c1ab' }
     : value.startsWith('!')
       ? { repo: false }
-      : { branch: value, detached: false })
+      : { branch: value, detached: false }
+  if (id === '*') branchDefault = parsed
+  else branchOverrides.set(id, parsed)
 }
 
 /** True when a workspace id is a real workspace row (not the ungrouped bucket). */
@@ -204,7 +208,7 @@ function branchPayload() {
   let index = 0
   for (const workspaceId of workspaceBindings.keys()) {
     if (typeof workspaceId !== 'string' || workspaceId === '' || workspaceId === 'ungrouped') continue
-    const override = branchOverrides.get(workspaceId)
+    const override = branchOverrides.get(workspaceId) ?? branchDefault
     const fixture = override ?? MOCK_BRANCHES[index % MOCK_BRANCHES.length]
     index += 1
     if (fixture.repo === false) continue

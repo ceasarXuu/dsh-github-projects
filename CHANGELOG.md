@@ -34,13 +34,16 @@ branch, a file, or a GitHub object.
   baseline plus 29 new tests covering a real throw-away repository per branch state, the cache and
   single-flight, the workspace-id index, the route shape and the mock host's `/branches`), and the
   fixture e2e harness passes every stage including the new `workspace-branch` stage (screenshot
-  `17-workspace-branch.png`).
+  `17-workspace-branch.png`) in **both** fixture and real-host mode — both modes create a real git
+  repository for the run's first-use Workspace and assert the chip matches it.
 - Two e2e harness fixes were needed for the newer DSH build (0.2.2-rc.3) and are **harness-only, no
   product change**: the session-header tabs that overflow are folded into a `更多会话视图` menu the
   helper could not read (it returned `null`, failing `issue-bind-subtitle`), and the right-sidebar tab
   close menu (`data-dockkit-tab-menu`) does not exist in that build, so the warm-open stage now
   unmounts the pane by collapsing the sidebar instead. The harness also resolves the `dsh` CLI by
-  probing the renamed app bundle (`$DSH_E2E_CLI` first).
+  probing the renamed app bundle (`$DSH_E2E_CLI` first), and builds its first-use Workspace
+  repository at the path `workspace-controller` actually registers
+  (`<documents>/deepseek-harness/...`) rather than the process cwd.
 
 ## 1.1.0 — 2026-10-29
 
