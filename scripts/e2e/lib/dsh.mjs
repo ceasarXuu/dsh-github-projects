@@ -9,7 +9,7 @@
 // The plugin is loaded through a `--patch` overlay applied after the profile
 // layer, so nothing is installed into any profile.
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { accessSync, constants, createWriteStream, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -71,6 +71,55 @@ export function createRunRoot({ base = '/tmp/dsh-github-projects-e2e', name }) {
   const logs = join(root, 'logs')
   for (const dir of [home, workspace, documents, logs]) mkdirSync(dir, { recursive: true })
   return { root, home, workspace, documents, logs }
+}
+
+/**
+ * The directory the run's first-use Workspace actually points at.
+ *
+ * `workspace-controller` creates the first-use Workspace inside
+ * `documentsDirectory` (the overlay pins that to `<root>/documents`), naming it
+ * after the product — **not** the `dsh web` process cwd (`<root>/workspace`),
+ * which is a different directory.
+ *
+ * @param {string} documents absolute Documents override directory.
+ * @param {string} [product] first-use directory name.
+ * @returns {string} absolute path of the run's first-use Workspace.
+ */
+export function firstUseWorkspacePath(documents, product = 'deepseek-harness') {
+  return join(documents, product)
+}
+
+/**
+ * Turn the directory that becomes the run's Workspace into a real git
+ * repository on a named branch, so the v1.2.0 branch chip has a genuine local
+ * fact to read.
+ *
+ * Fixture mode does not need this (the mock host fabricates branch names), but
+ * `--mode real` runs the real host's `git` reads — without a repository that
+ * workspace correctly renders **no** chip, which cannot exercise the feature.
+ *
+ * @param {string} workspace absolute directory that becomes the Workspace.
+ * @param {string} [branch] branch to create and check out.
+ * @returns {{ok: boolean, branch: string, path: string, reason?: string}} what happened.
+ */
+export function initWorkspaceRepo(workspace, branch = 'e2e/workspace-branch') {
+  mkdirSync(workspace, { recursive: true })
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.email=e2e@example.com', '-c', 'user.name=e2e-e2e',
+    '-c', 'init.defaultBranch=main',
+    ...args,
+  ], { cwd: workspace, encoding: 'utf8', stdio: 'pipe' })
+  try {
+    git('init', '-q')
+    git('commit', '-q', '--allow-empty', '-m', 'e2e: isolated run workspace')
+    // A slash branch: exercises the chip's truncation and its non-default name.
+    git('checkout', '-q', '-b', branch)
+    return { ok: true, branch, path: workspace }
+  } catch (error) {
+    // A machine without git still runs every other stage; the chip stage then
+    // reports that the repository could not be prepared.
+    return { ok: false, branch, path: workspace, reason: String(error?.message ?? error) }
+  }
 }
 
 /**
