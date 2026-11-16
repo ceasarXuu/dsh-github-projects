@@ -33,7 +33,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { createStateStore, STATE_WRITE_FAILED } from './state.js'
-import { createWorkspaceBranchIndex } from './branches.js'
+import { createWorkspaceBranchIndex } from './branch-index.js'
 import {
   GhError,
   boundedInt,
