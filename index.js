@@ -33,6 +33,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { createStateStore, STATE_WRITE_FAILED } from './state.js'
+import { createWorkspaceBranchIndex } from './branches.js'
 import {
   GhError,
   boundedInt,
@@ -84,7 +85,7 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['internal', 500],
 ])
 
-const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/projects', '/items', '/issue', '/project-meta'])
+const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/projects', '/items', '/issue', '/project-meta'])
 const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
@@ -141,9 +142,21 @@ export function resolveConfig(raw) {
     // v1.1.0 opt-in GitHub writes (contract §3.0): only an explicit `true`
     // enables `POST /item-status`, the board write UI, and the write tool.
     allowWrites: config.allowWrites === true,
+    // v1.2.0 workspace branch chip (contract §3.6): `git` executable for the
+    // local branch read, one invocation deadline, and how long a workspace's
+    // branch stays fresh before `/branches` re-reads it.
+    gitCommand: typeof config.gitCommand === 'string' && config.gitCommand.trim() !== ''
+      ? config.gitCommand.trim()
+      : 'git',
+    gitTimeoutMs: boundedInt(config.gitTimeoutMs, 200, 60_000, 4_000),
+    branchTtlMs: boundedInt(config.branchTtlMs, 0, 24 * 60 * 60 * 1000, 30_000),
     statePath,
     // Test seam: the same injectable runner `github.js` accepts.
     run: typeof config.run === 'function' ? config.run : undefined,
+    // Test seam: replace the git-backed branch reader with an in-memory one.
+    branchReader: config.branchReader !== null && typeof config.branchReader === 'object'
+      ? config.branchReader
+      : undefined,
   }
 }
 
@@ -1007,7 +1020,7 @@ export function createAgentToolDefinitions({ gh, store, allowWrites = false }) {
 /* 6. The HTTP API.                                                    */
 /* ------------------------------------------------------------------ */
 
-function createApi({ gh, store, cache, health, logFault, writesAllowed = false }) {
+function createApi({ gh, store, cache, health, logFault, writesAllowed = false, branches = null }) {
   const writesAllowedNow = writesAllowed === true
   const iso = (timestamp) => new Date(timestamp).toISOString()
 
@@ -1063,8 +1076,20 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false }
     }
   }
 
-  async function readProjects(query) {
-    const record = await cache.get('projects', isRefresh(query.get('refresh')), () => gh.listProjects())
+  /**
+   * `GET /branches` (v1.2.0, contract §3.6): the current git branch of every
+   * registered workspace, for the left-sidebar workspace-row chip. Local `git`
+   * only (never `gh`, never the network) and cached per directory, so a
+   * polling client never spawns one process per request.
+   */
+  async function readBranches() {
+    if (branches === null) {
+      return { revision: 0, updatedAt: null, git: { available: null, error: null }, workspaces: {} }
+    }
+    return branches.read()
+  }
+
+  async function readProjects(query) {    const record = await cache.get('projects', isRefresh(query.get('refresh')), () => gh.listProjects())
     const value = record.value
     return {
       owners: Array.isArray(value.owners) ? value.owners : [],
@@ -1256,6 +1281,7 @@ function createApi({ gh, store, cache, health, logFault, writesAllowed = false }
       if (path === '/health') return sendJson(res, 200, { ok: true, gh: await health.read() })
       if (path === '/config') return sendJson(res, 200, await readConfig(query))
       if (path === '/bindings') return sendJson(res, 200, readBindings())
+      if (path === '/branches') return sendJson(res, 200, await readBranches())
       if (path === '/projects') return sendJson(res, 200, await readProjects(query))
       if (path === '/items') return sendJson(res, 200, await readItems(query))
       if (path === '/project-meta') return sendJson(res, 200, await readProjectMeta(query))
@@ -1328,7 +1354,32 @@ export function apply(ctx, config) {
     if (typeof logger?.warn !== 'function') return
     logger.warn(error instanceof Error ? error : new Error(String(error)))
   }
-  const api = createApi({ gh, store, cache, health, logFault, writesAllowed: settings.allowWrites })
+  // v1.2.0 workspace branch chip (contract §3.6). The registry is resolved per
+  // call because `workspaceRegistry` may mount after this plugin; without it
+  // the route still answers an empty map.
+  const branches = createWorkspaceBranchIndex({
+    getRegistry: () => serviceOf(ctx, 'workspaceRegistry'),
+    gitCommand: settings.gitCommand,
+    timeoutMs: settings.gitTimeoutMs,
+    ttlMs: settings.branchTtlMs,
+    reader: settings.branchReader,
+  })
+  const api = createApi({
+    gh, store, cache, health, logFault, writesAllowed: settings.allowWrites, branches,
+  })
+
+  // One startup pass, so the first `/branches` read already carries every
+  // workspace instead of spawning one `git` per row on first paint.
+  void branches.refreshAll().catch(logFault)
+  // Every human prompt re-reads the branch of that session's workspace: a
+  // `git checkout` done by the agent (or the user) shows up on the next prompt.
+  if (typeof ctx?.on === 'function') {
+    ctx.effect(() => ctx.on('session/event', (session, event) => {
+      if (event?.type !== 'user/message') return
+      if (event?.data?.source?.kind !== 'user') return
+      void branches.refreshForSession(session).catch(logFault)
+    }), 'github-projects: refresh the workspace branch on a user message')
+  }
 
   // Agent tools (contract §3.4): effect-owned registrations on the `tools`
   // service, so unloading the plugin removes them. The v1.1.0 write tool is
