@@ -76,6 +76,9 @@ read-only behavior until they explicitly opt in.
       healthCacheTtlMs: 5000
       healthFirstReadTimeoutMs: 3000
       statePath: null
+      gitCommand: git
+      gitTimeoutMs: 4000
+      branchTtlMs: 30000
       allowWrites: true
   ```
 
