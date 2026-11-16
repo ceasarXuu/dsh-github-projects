@@ -51,7 +51,8 @@ Repo root: `/Volumes/inwolf-4T/projects/dsh-github-projects`
 | `index.js` | host-github | Cordis host plugin entry (`export const name`, `export function apply(ctx, config)`) |
 | `github.js` | host-github | `gh` CLI adapter, GraphQL/REST queries, normalizers, ref parser |
 | `state.js` | host-github | Durable binding store (atomic JSON write) |
-| `branches.js` | host-github | **v1.2.0** per-directory local `git` branch reader (cached, single-flight) + the workspace-id index behind `GET /branches` |
+| `branches.js` | host-github | **v1.2.0** per-directory local `git` branch reader (cached, single-flight) |
+| `branch-index.js` | host-github | **v1.2.0** workspace-id branch index behind `GET /branches`: refresh triggers, `revision`, payload |
 | `client.js` | client-ui | Browser plugin: slots, views, UI, fetch client, CSS, locale dicts |
 | `package.json`, `cordis.patch.yml`, `icon.svg`, `docs/CONTRACT.md` | Lead | package manifest / bundle patch / identity |
 | `dev/mock-host.js` | Lead → host-github (v1.1.0 write support) | contract-shaped mock host for UI/e2e development (fixtures, no `gh`; v1.1.0 adds `allowWrites` + `POST /item-status` + `GET /project-meta` fixtures) |
@@ -447,7 +448,7 @@ The user opens the projects tab often; the read path must not block on GitHub af
 - Acceptance: warm projects open renders cached data with no skeleton (<300 ms host response); cold
   first board load on a 195-item Project is logged and expected ≤3.5 s.
 
-### 3.6 Workspace branch reader (`branches.js`, v1.2.0)
+### 3.6 Workspace branch reader (`branches.js` + `branch-index.js`, v1.2.0)
 
 The left sidebar shows which git branch each workspace is on (§4.9). That fact belongs to the
 workspace directory, so it is read with local `git` — never `gh`, never the network, never auth.
@@ -464,7 +465,7 @@ workspace directory, so it is read with local `git` — never `gh`, never the ne
 Every invocation runs with `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`, a bounded
 output buffer, and the `gitTimeoutMs` deadline, so a hung or prompting git can never wedge the route.
 
-**The `/branches` index** (`createWorkspaceBranchIndex`) resolves a workspace id to its directory
+**The `/branches` index** (`branch-index.js`, `createWorkspaceBranchIndex`) resolves a workspace id to its directory
 through the optional `ctx.workspaceRegistry` service and keeps one branch state per workspace:
 
 | Trigger | Scope | Why |

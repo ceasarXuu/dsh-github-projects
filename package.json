@@ -42,6 +42,7 @@
   "files": [
     "index.js",
     "branches.js",
+    "branch-index.js",
     "github.js",
     "state.js",
     "client.js",
