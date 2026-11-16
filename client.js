@@ -142,6 +142,10 @@ window.__ModuleLoader__.load({
     const LAST_PROJECT_STORAGE_KEY = 'dsh-github-projects:last-project'
     const SESSION_POLL_MS = 4000
     const STALE_RETRY_MS = 1200
+    /** v1.2.0 branch map: poll, prompt nudge delay, and nudge floor. */
+    const BRANCH_POLL_MS = 15_000
+    const BRANCH_NUDGE_DELAY_MS = 900
+    const BRANCH_NUDGE_MIN_MS = 1500
 
     function cachedResponseOf(key) {
       const value = responseCache.get(key)
@@ -487,6 +491,141 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* 1e. Workspace branch map (v1.2.0, §4.9).                            */
+    /*     WorkspaceId → its git branch, polled from GET /branches.        */
+    /* ------------------------------------------------------------------ */
+
+    /** WorkspaceId → `{workspaceId, repo, branch, detached, commit, path}`. */
+    const workspaceBranches = new Map()
+    const branchMapListeners = new Set()
+    let branchMapInflight = null
+    let branchMapRevision = -1
+    /**
+     * One local nudge after this browser half's own prompt: the host refreshes
+     * the branch on `user/message`, so reading a moment later picks it up
+     * without waiting for the poll.
+     */
+    let branchNudgedAt = 0
+
+    function branchOfWorkspace(workspaceId) {
+      if (typeof workspaceId !== 'string' || workspaceId === '') return null
+      const branch = workspaceBranches.get(workspaceId)
+      return isPlainObject(branch) ? branch : null
+    }
+
+    function sameBranchState(left, right) {
+      if (left === null || left === undefined) return right === null || right === undefined
+      if (right === null || right === undefined) return false
+      return left.path === right.path
+        && left.repo === right.repo
+        && left.branch === right.branch
+        && left.detached === right.detached
+        && left.commit === right.commit
+    }
+
+    function notifyBranchMapListeners() {
+      for (const listener of [...branchMapListeners]) {
+        try { listener() } catch (_listenerFailed) { /* one bad listener must not break the rest */ }
+      }
+    }
+
+    function subscribeBranchMap(listener) {
+      branchMapListeners.add(listener)
+      return () => { branchMapListeners.delete(listener) }
+    }
+
+    /** Replace the map from a `/branches` payload; notify once when changed. */
+    function applyBranchesSnapshot(payload) {
+      const revision = isPlainObject(payload) && typeof payload.revision === 'number' ? payload.revision : -1
+      const workspaces = isPlainObject(payload) && isPlainObject(payload.workspaces) ? payload.workspaces : {}
+      const next = new Map()
+      for (const [workspaceId, entry] of Object.entries(workspaces)) {
+        if (typeof workspaceId !== 'string' || workspaceId === '' || !isPlainObject(entry)) continue
+        next.set(workspaceId, {
+          workspaceId,
+          path: typeof entry.path === 'string' ? entry.path : '',
+          repo: entry.repo === true,
+          branch: typeof entry.branch === 'string' ? entry.branch : null,
+          detached: entry.detached === true,
+          commit: typeof entry.commit === 'string' ? entry.commit : null,
+        })
+      }
+      let changed = next.size !== workspaceBranches.size
+      if (!changed) {
+        for (const [workspaceId, entry] of next) {
+          if (!sameBranchState(workspaceBranches.get(workspaceId) ?? null, entry)) {
+            changed = true
+            break
+          }
+        }
+      }
+      const revisionChanged = revision !== branchMapRevision
+      branchMapRevision = revision
+      workspaceBranches.clear()
+      for (const [workspaceId, entry] of next) workspaceBranches.set(workspaceId, entry)
+      // A revision bump repaints a chip whose text did not change (the tooltip
+      // and any detached sha still may), so both signals fan out.
+      if (changed || revisionChanged) notifyBranchMapListeners()
+      return changed || revisionChanged
+    }
+
+    /** Read `GET /branches` (single-flight); never throws to the caller. */
+    function refreshBranchMap() {
+      if (branchMapInflight !== null) return branchMapInflight
+      const promise = apiGet('/branches')
+        .then((data) => {
+          applyBranchesSnapshot(data)
+          return workspaceBranches
+        })
+        .catch(() => workspaceBranches)
+        .finally(() => {
+          if (branchMapInflight === promise) branchMapInflight = null
+        })
+      branchMapInflight = promise
+      return promise
+    }
+
+    /**
+     * Nudge the map shortly after a prompt leaves this browser. Bounded so a
+     * burst of sends still costs one or two reads, never one read per message.
+     */
+    function nudgeBranchMap() {
+      const now = Date.now()
+      if (now - branchNudgedAt < BRANCH_NUDGE_MIN_MS) return
+      branchNudgedAt = now
+      window.setTimeout(() => { refreshBranchMap() }, BRANCH_NUDGE_DELAY_MS)
+    }
+
+    /** Poll + binding-changed plumbing, owned by the plugin effect in apply(). */
+    function installBranchMap(ctx) {
+      ctx.effect(() => {
+        let stopped = false
+        const tick = () => {
+          if (stopped) return
+          refreshBranchMap().catch(() => { /* keep the last known map */ })
+        }
+        tick()
+        const timer = window.setInterval(tick, BRANCH_POLL_MS)
+        // A prompt sent from this page updates the branch within a second or so.
+        const onKeyDown = (event) => {
+          if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+          const target = event.target
+          if (!(target instanceof HTMLElement)) return
+          // Only the conversation composer: `[data-composer-card]` is the shipped
+          // composer root; plain textareas cover future composer surfaces.
+          if (target.closest('[data-composer-card]') === null && target.closest('textarea') === null) return
+          nudgeBranchMap()
+        }
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          stopped = true
+          window.clearInterval(timer)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, 'github-projects: /branches map')
+    }
+
+    /* ------------------------------------------------------------------ */
     /* 2. Dictionaries — every content string, zh first and en complete.   */
     /* ------------------------------------------------------------------ */
 
@@ -511,6 +650,7 @@ window.__ModuleLoader__.load({
 
       'projects.sidebarTab': '项目',
       'projects.openEntry': '打开 GitHub Project',
+      'branch.detached': '游离 HEAD',
       'projects.unboundTitle': '绑定 GitHub Project',
       'projects.unboundText': '将工作区关联到一个 GitHub Project，之后每个会话都能在这里浏览它按状态分组的 Issue、PR 与 Draft。',
       'projects.unboundAction': '选择 Project',
@@ -639,6 +779,7 @@ window.__ModuleLoader__.load({
 
       'projects.sidebarTab': 'Project',
       'projects.openEntry': 'Open GitHub Project',
+      'branch.detached': 'Detached HEAD',
       'projects.unboundTitle': 'Bind a GitHub Project',
       'projects.unboundText': 'Link this workspace to a GitHub Project; every session can then browse its Issues, PRs and Drafts grouped by status here.',
       'projects.unboundAction': 'Choose a Project',
@@ -2370,6 +2511,153 @@ window.__ModuleLoader__.load({
           removeWorkspaceEntries()
         }
       }, 'github-projects: workspace project entries')
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 8d. Workspace branch chip (v1.2.0, §4.9).                           */
+    /* ------------------------------------------------------------------ */
+
+    /** Branch text shown in the chip, or `null` when there is nothing to say. */
+    function branchLabelOf(state) {
+      if (!isPlainObject(state) || state.repo !== true) return null
+      if (state.detached === true) return state.commit !== null ? `@${state.commit}` : '@HEAD'
+      return typeof state.branch === 'string' && state.branch !== '' ? state.branch : null
+    }
+
+    /** Tooltip text: the full branch fact plus the workspace directory. */
+    function branchTitleOf(state, label, t) {
+      const scope = typeof state?.path === 'string' && state.path !== '' ? state.path : ''
+      const head = state?.detached === true ? `${label} · ${t('branch.detached')}` : label
+      return scope === '' ? head : `${head}\n${scope}`
+    }
+
+    /**
+     * One non-interactive chip. A plain `span` (never a button) so a click
+     * bubbles to the shipped workspace-row handler and only toggles the row —
+     * the chip must never navigate, select, or stop propagation.
+     */
+    function workspaceBranchNodeFor(state, label, t) {
+      const node = document.createElement('span')
+      node.className = 'ghp-workspace-branch'
+      node.setAttribute('data-ghp-workspace-branch', '')
+      node.setAttribute('data-ghp-workspace-branch-detached', state.detached === true ? '1' : '0')
+      node.setAttribute('dir', 'auto')
+      const text = document.createElement('span')
+      text.className = 'ghp-workspace-branch-text'
+      text.setAttribute('data-ghp-workspace-branch-text', '')
+      node.appendChild(text)
+      updateWorkspaceBranchNode(node, state, label, t)
+      return node
+    }
+
+    function updateWorkspaceBranchNode(node, state, label, t) {
+      const text = node.querySelector('[data-ghp-workspace-branch-text]')
+      if (text !== null && text.textContent !== label) text.textContent = label
+      const title = branchTitleOf(state, label, t)
+      if (node.getAttribute('title') !== title) node.setAttribute('title', title)
+      const detached = state.detached === true ? '1' : '0'
+      if (node.getAttribute('data-ghp-workspace-branch-detached') !== detached) {
+        node.setAttribute('data-ghp-workspace-branch-detached', detached)
+      }
+    }
+
+    /** The row's title cell (`<span class=projectText><span class=title>…`). */
+    function titleCellOf(row) {
+      for (const child of row.children) {
+        if (!(child instanceof HTMLElement)) continue
+        if (child.tagName !== 'SPAN') continue
+        if (child.querySelector('button') !== null) continue
+        if (child.querySelector('[data-ghp-workspace-entry]') !== null) continue
+        if (child.querySelector('[data-ghp-workspace-branch]') !== null) continue
+        // Skip pure icon slots (the folder cell and the chevron cell).
+        if (child.textContent.trim() === '' && child.querySelector('svg') !== null) continue
+        return child
+      }
+      return null
+    }
+
+    function removeWorkspaceBranchChips() {
+      for (const node of document.querySelectorAll('[data-ghp-workspace-branch]')) node.remove()
+    }
+
+    /**
+     * Guarded workspace-row decorator (§4.9): the current git branch as a chip
+     * directly to the right of the workspace title. The shipped row has no such
+     * slot, so this sweeps `[data-row-key^="workspace:"]`, injects/removes one
+     * chip per row, and degrades to nothing when the anchors are missing.
+     */
+    function installWorkspaceBranchChips(ctx, t) {
+      ctx.effect(() => {
+        let stopped = false
+        let scheduled = false
+        let observer = null
+        let observedTree = null
+
+        const findTree = () => {
+          const sampleRow = document.querySelector('[data-row-key^="workspace:"]')
+          if (sampleRow === null) return null
+          const tree = sampleRow.closest('[role="tree"]')
+          if (tree !== null) return tree
+          const parent = sampleRow.parentElement
+          return parent === null ? null : parent.parentElement ?? parent
+        }
+
+        const ensureObserver = () => {
+          if (stopped) return
+          if (observedTree !== null && observedTree.isConnected) return
+          if (observer === null) observer = new MutationObserver(() => schedule())
+          observer.disconnect()
+          observedTree = findTree()
+          if (observedTree !== null) observer.observe(observedTree, { childList: true, subtree: true })
+        }
+
+        const sweep = () => {
+          scheduled = false
+          if (stopped) return
+          ensureObserver()
+          const rows = document.querySelectorAll('[data-row-key^="workspace:"]')
+          for (const row of rows) {
+            if (!(row instanceof HTMLElement)) continue
+            const rowKey = row.getAttribute('data-row-key') ?? ''
+            if (!rowKey.startsWith('workspace:')) continue
+            const workspaceId = rowKey.slice('workspace:'.length)
+            const existing = row.querySelector('[data-ghp-workspace-branch]')
+            const state = workspaceId === '' || workspaceId === 'ungrouped' ? null : branchOfWorkspace(workspaceId)
+            const label = state === null ? null : branchLabelOf(state)
+            if (label === null) {
+              if (existing !== null) existing.remove()
+              continue
+            }
+            const cell = titleCellOf(row)
+            if (cell === null) continue
+            if (existing === null) {
+              cell.appendChild(workspaceBranchNodeFor(state, label, t))
+            } else {
+              if (existing.parentElement !== cell) cell.appendChild(existing)
+              updateWorkspaceBranchNode(existing, state, label, t)
+            }
+          }
+        }
+
+        const schedule = () => {
+          if (stopped || scheduled) return
+          scheduled = true
+          window.requestAnimationFrame(sweep)
+        }
+
+        schedule()
+        const timer = window.setInterval(() => { ensureObserver(); schedule() }, 1500)
+        const unsubscribe = subscribeBranchMap(schedule)
+        window.addEventListener('resize', schedule)
+        return () => {
+          stopped = true
+          if (observer !== null) observer.disconnect()
+          window.clearInterval(timer)
+          unsubscribe()
+          window.removeEventListener('resize', schedule)
+          removeWorkspaceBranchChips()
+        }
+      }, 'github-projects: workspace branch chips')
     }
 
     /**
@@ -5781,6 +6069,68 @@ a.ghp-board-card { text-decoration: none; }
 .ghp-workspace-entry[data-ghp-workspace-entry-bound="1"] { color: var(--ghp-accent-brand); }
 .ghp-workspace-entry svg { display: block; width: 14px; height: 14px; }
 
+/* Workspace branch chip (§4.9, v1.2.0): the current git branch, sitting
+   directly to the right of the workspace title. It is decoration, never a
+   control: no pointer cursor, no click target, and it shrinks first when the
+   row gets narrow so the title keeps its space. */
+.ghp-workspace-branch {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  margin-inline-start: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(255, 255, 255, .12));
+  border-radius: var(--dsw-radius-xs, 4px);
+  background: var(--dsw-alias-bg-layer-2, rgba(255, 255, 255, .05));
+  color: var(--dsw-alias-label-tertiary, #8a8a8a);
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: none;
+}
+.ghp-workspace-branch-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A detached HEAD is a fact worth noticing, not an error: muted amber. */
+.ghp-workspace-branch[data-ghp-workspace-branch-detached="1"] {
+  border-color: color-mix(in srgb, var(--ghp-accent-warn, #d97706) 34%, transparent);
+  background: color-mix(in srgb, var(--ghp-accent-warn, #d97706) 12%, transparent);
+  color: var(--ghp-accent-warn, #d97706);
+}
+/* The shipped title cell is a COLUMN flex box (title, and room for a future
+   subtitle), so a chip appended to it would stack underneath. While the chip is
+   present, that cell becomes one row: title first, chip directly after it. */
+[data-row-key^="workspace:"] > span:has(> [data-ghp-workspace-branch]) {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+/* The title keeps the free space and ellipsises first; the chip takes what is
+   left, up to its own cap. */
+[data-row-key^="workspace:"] > span:has(> [data-ghp-workspace-branch]) > span:not([data-ghp-workspace-branch]) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+[data-row-key^="workspace:"] > span:has(> [data-ghp-workspace-branch]) > .ghp-workspace-branch {
+  margin-inline-start: 0;
+}
+/* The shipped row keeps the title cell flexible; the chip must never widen it
+   past the row (sidebar overflow regressions, §4.6). */
+[data-row-key^="workspace:"] { min-width: 0; }
+[data-row-key^="workspace:"] > span { min-width: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .ghp-workspace-branch { transition: none; }
+}
+
 /* Right-sidebar project board (v1.0.2 preview, §4.7): the existing projects
    view adapted to the narrow pane. */
 .ghp-sidebar-project {
@@ -5878,6 +6228,9 @@ a.ghp-board-card { text-decoration: none; }
       const t = ctx.locale.bind(NS)
       installBindingMap(ctx)
       installSidebarSubtitles(ctx)
+      // v1.2.0: the workspace-row branch chip reads its own polled map (§4.9).
+      installBranchMap(ctx)
+      installWorkspaceBranchChips(ctx, t)
 
       // v1.0.2 preview: the workspace board lives in DSH's right sidebar as a
       // custom tab type (§4.7), not as a session tab.

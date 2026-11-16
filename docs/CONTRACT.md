@@ -51,6 +51,7 @@ Repo root: `/Volumes/inwolf-4T/projects/dsh-github-projects`
 | `index.js` | host-github | Cordis host plugin entry (`export const name`, `export function apply(ctx, config)`) |
 | `github.js` | host-github | `gh` CLI adapter, GraphQL/REST queries, normalizers, ref parser |
 | `state.js` | host-github | Durable binding store (atomic JSON write) |
+| `branches.js` | host-github | **v1.2.0** per-directory local `git` branch reader (cached, single-flight) + the workspace-id index behind `GET /branches` |
 | `client.js` | client-ui | Browser plugin: slots, views, UI, fetch client, CSS, locale dicts |
 | `package.json`, `cordis.patch.yml`, `icon.svg`, `docs/CONTRACT.md` | Lead | package manifest / bundle patch / identity |
 | `dev/mock-host.js` | Lead → host-github (v1.1.0 write support) | contract-shaped mock host for UI/e2e development (fixtures, no `gh`; v1.1.0 adds `allowWrites` + `POST /item-status` + `GET /project-meta` fixtures) |
@@ -108,6 +109,9 @@ whole `config` object, so restate every key you need there.
 | `healthFirstReadTimeoutMs` | `3000` | Legacy key still accepted so old profile patches load; unused by v0.4.0 (config is non-blocking). |
 | `statePath` | `$DSH_HOME/plugin-data/github-projects/state.json` | Durable binding file (`null` resolves the default). |
 | `allowWrites` | `false` | **Opt-in GitHub writes (v1.1.0)**: enables `POST /item-status`, the board drag / `移动到` menu, and the `github_project_item_status` agent tool. When false, writes are refused with `writes-disabled` (403), the tool is not registered, and the board stays read-only. |
+| `gitCommand` | `git` | **v1.2.0 workspace branch chip**: local `git` executable (absolute path recommended). It reads branch names only; it never fetches, checks out, or touches the network. |
+| `gitTimeoutMs` | `4000` | One `git symbolic-ref` / `git rev-parse` invocation deadline (0.2 s – 1 min). |
+| `branchTtlMs` | `30000` | How long one workspace's branch stays fresh before `GET /branches` re-reads it. Startup and every human prompt refresh on their own; this only bounds an external `git checkout`. |
 
 ### 3.1 HTTP API (prefix `/plugin/github-projects`)
 
@@ -119,6 +123,7 @@ Errors are a non-2xx status plus `{"error":{"code":"...","message":"human messag
 | `GET /health` | `gh` availability | `{"ok":true,"gh":GhHealth}` |
 | `GET /config?sessionId=&workspaceId=` | current bindings + cached `gh` health + write capability (see notes) | `{"gh":GhHealth,"workspace":WorkspaceBinding,"session":SessionBinding,"writes":{"allowed":boolean}}` |
 | `GET /bindings` | every durable Issue + workspace Project binding (sidebar decoration; local state only) | `{"sessions":{SessionId:IssueSummary},"workspaces":{WorkspaceId:Project},"updatedAt":ISO}` |
+| `GET /branches` | **v1.2.0** current git branch of every registered workspace (left-sidebar chip; local `git` only, never `gh`) | `{"revision":number,"updatedAt":ISO\|null,"git":{"available":bool\|null,"error":string\|null},"workspaces":{WorkspaceId:WorkspaceBranch}}` |
 | `GET /projects?refresh=1` | accessible Projects, grouped by owner | `{"owners":[Owner],"projects":[Project],"fetchedAt":ISO,"stale":bool,"errors":[OwnerError]}` |
 | `GET /items?owner=&number=&refresh=1` | one Project's items | `{"project":Project,"items":[ProjectItem],"fetchedAt":ISO,"truncated":bool,"stale":bool}` |
 | `GET /issue?repo=owner/name&number=N&refresh=1` | one Issue + comments | `{"issue":IssueDetail,"fetchedAt":ISO,"stale":bool}` |
@@ -171,6 +176,17 @@ type ProjectMeta = {
   statusField: { id: string, name: 'Status', options: { id: string, name: string }[] }
   fetchedAt: string
   stale: boolean
+}
+
+// v1.2.0 — one workspace's git state (GET /branches, contract §3.6).
+type WorkspaceBranch = {
+  workspaceId: string
+  path: string                 // absolute workspace directory that was read
+  repo: boolean                // false: not a git repository (or missing dir) — show nothing
+  branch: string | null        // current branch name; null on a detached HEAD
+  detached: boolean            // HEAD is not on a branch
+  commit: string | null        // short sha when detached
+  readAt: string | null        // ISO-8601 of the read behind this entry
 }
 
 // v1.1.0 — POST /item-status request body.
@@ -256,6 +272,11 @@ Behaviour rules:
   that has an Issue bound plus every workspace that has a Project bound, so the client can decorate
   the sidebar (session subtitle + workspace project icon) without one request per row. Cheap enough
   to poll every few seconds.
+- `/branches` (v1.2.0, §3.6) is the only route that spawns `git` instead of `gh`: it answers the
+  current branch of every registered workspace for the left-sidebar chip. It never fetches, checks
+  out, or needs auth, and it answers `repo: false` (not an error) for a directory that is not a
+  repository. Cheap enough to poll: results are cached per directory and concurrent reads share one
+  process.
 - `/config` reads local bindings: `workspaceId`/`sessionId` come from the query; missing/unknown ids
   yield `project: null` / `issue: null` (not errors). It NEVER waits for GitHub: the `gh` field is the
   last cached health snapshot, or `{available:false,version:null,account:null,error:'pending'}` on a
@@ -425,6 +446,39 @@ The user opens the projects tab often; the read path must not block on GitHub af
   skeleton appears only when no cached data exists.
 - Acceptance: warm projects open renders cached data with no skeleton (<300 ms host response); cold
   first board load on a 195-item Project is logged and expected ≤3.5 s.
+
+### 3.6 Workspace branch reader (`branches.js`, v1.2.0)
+
+The left sidebar shows which git branch each workspace is on (§4.9). That fact belongs to the
+workspace directory, so it is read with local `git` — never `gh`, never the network, never auth.
+
+**Per-directory read** (`readBranchState(directory)`, cache-free):
+1. `stat` the directory; a missing directory is `repo: false`, not an error.
+2. `git symbolic-ref --short -q HEAD` → exit `0` answers the branch name, including an **unborn**
+   branch that has no commit yet.
+3. exit `1` means a **detached HEAD**: one `git rev-parse --short HEAD` supplies the short sha, and
+   the entry is `branch: null, detached: true, commit: <sha>`.
+4. exit `128` (not a repository) is `repo: false` — the row shows no chip. Only a missing `git`
+   executable (`ENOENT`) is a real failure; it is reported once in the payload's `git.available`.
+
+Every invocation runs with `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`, a bounded
+output buffer, and the `gitTimeoutMs` deadline, so a hung or prompting git can never wedge the route.
+
+**The `/branches` index** (`createWorkspaceBranchIndex`) resolves a workspace id to its directory
+through the optional `ctx.workspaceRegistry` service and keeps one branch state per workspace:
+
+| Trigger | Scope | Why |
+|---|---|---|
+| startup, once | every registered workspace | the first paint already has every chip |
+| every **human** `user/message` | only that prompt's workspace | a `git checkout` made by the agent or the user shows up on the next prompt |
+| `branchTtlMs` (30 s) staleness, on read | only stale entries | covers an external `git checkout` between prompts |
+
+A `user/message` whose `data.source.kind` is not `'user'` (an `agent.inject()` context, a skill body,
+a cron notice, an entered goal round) does **not** refresh anything: only a real prompt does.
+
+`revision` is monotonic and advances **only when a branch fact changed**, so the polling client can
+skip a repaint. Without a workspace registry the route still answers 200 with an empty map and
+`git.available: null` — the chip simply never appears, and nothing throws.
 
 ## 4. Client plugin (`client.js`)
 
@@ -749,6 +803,35 @@ information under its title:
 - Hooks: `[data-ghp-sidebar-subtitle]` on the injected row, `[data-ghp-sidebar-subtitle-chip]` on the
   chip, `[data-ghp-sidebar-subtitle-title]` on the truncated title.
 
+### 4.9 Workspace branch chip (v1.2.0)
+
+Every workspace row (`[data-row-key^="workspace:"]`) shows the branch its directory is currently on,
+directly to the **right of the workspace title** and before the board entry icon (§4.7).
+
+- **Data**: the client keeps a module-level `WorkspaceId → WorkspaceBranch` map from `GET /branches`
+  (§3.6), refreshed by a 15 s poll plus an immediate nudge after a prompt leaves this page. It is a
+  separate map from `/bindings`: a branch read is local `git` and must never be coupled to GitHub.
+- **Rendering**: a plain `span` (`[data-ghp-workspace-branch]`) containing one truncating text child
+  (`[data-ghp-workspace-branch-text]`). It is **non-interactive** — no button, no click handler, no
+  `pointer-events` capture — so a click lands on the shipped workspace row and only toggles it.
+- **Placement**: the shipped title cell is a **column** flex box (title, and room for a future
+  subtitle), so a chip appended to it would stack underneath. While the chip is present the cell
+  becomes one row (`flex-direction: row`), the title keeps `flex: 1 1 auto` and ellipsises first, and
+  the chip takes the remainder up to a `40%` cap. The chip must share the title's line, start at or
+  after the title's right edge, and stay inside the row's content box; the row and the sidebar
+  tree must not gain a horizontal scrollbar (the §4.6 overflow rule).
+- **Presentations**: a branch name is muted text; a **detached HEAD** shows `@<short sha>` with
+  `data-ghp-workspace-branch-detached="1"` in the muted warn colour; a workspace that is not a git
+  repository (or whose directory vanished, or where `git` is missing) renders **no chip at all**
+  rather than a placeholder.
+- **Tooltip**: the chip's `title` carries the full branch fact plus the workspace directory; a
+  detached HEAD names the state via `branch.detached` (zh `游离 HEAD`, en `Detached HEAD`).
+- **Degradation**: implemented as a guarded DOM decorator (sweep `[data-row-key^="workspace:"]`,
+  inject/update/remove one chip per row, MutationObserver on the tree + 1.5 s re-ensure). If the row
+  anchors are absent, or `/branches` is unavailable, no chip appears and nothing throws.
+- **Hooks**: `[data-ghp-workspace-branch]`, `[data-ghp-workspace-branch-text]`,
+  `[data-ghp-workspace-branch-detached="0|1"]`.
+
 ## 5. e2e harness (verifier)
 
 > Stage definitions, selectors and current assertions are owned by `scripts/e2e/README.md`
@@ -845,15 +928,20 @@ at least one milestone) for the board and filter stages.
   (once) real-host mode, covering the board (incl. the hidden-empty-No-status rule), list,
   milestone-filter, wide-layout, system-browser-open, conversation-header subtitle, sidebar
   subtitle (non-interactive, no overflow, row click selects the session), warm-open latency,
-  **v1.1.0 read-only default** and **v1.1.0 fixture write path** stages.
+  **v1.1.0 read-only default**, **v1.1.0 fixture write path**, and **v1.2.0 workspace branch chip**
+  (`17-workspace-branch.png`) stages.
 - Host unit tests cover the three agent tools (fake `ctx.tools` capture + fake `exec.agent.session`)
   and the GraphQL normalizers / cache SWR behaviour using the GraphQL fixtures. v1.1.0 adds tests
   for `GET /project-meta` (node id/field/options, `project-not-found`), `POST /item-status`
   (`writes-disabled` 403 when off, option move, clear, invalid option 400, `item-not-found` 404,
   `items` cache invalidation), `/config.writes`, and `github_project_item_status` being registered
   only when `allowWrites` is true.
-- Plugin loads with zero console errors in the browser, the `issue` conversation tab and the
-  workspace-row board icon.
+- v1.2.0 adds tests for the branch reader itself (`branches.test.mjs`: a real throw-away repository
+  per case — on-branch, unborn, detached, not-a-repository, missing directory, nested repo, missing
+  `git`), the cache/single-flight, the workspace-id index (startup pass, one-prompt refresh, cwd
+  fallback, revision only on change), the mock host's `/branches`, and the route shape.
+- Plugin loads with zero console errors in the browser, the `issue` conversation tab, the
+  workspace-row board icon, and the workspace-row branch chip.
 - Docs: install steps (Plugin Manager / `dsh plugin add`), `gh` prerequisites, config table,
   design doc in Chinese, known limitations, verification evidence; v1.1.0 documents the opt-in
   write capability, the `project` scope prerequisite and the read-only default.

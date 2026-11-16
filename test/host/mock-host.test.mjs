@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { test } from 'node:test'
 
-import { apply } from '../../dev/mock-host.js'
+import { apply, __resetMockState } from '../../dev/mock-host.js'
 
 const PREFIX = '/plugin/github-projects'
 const TODO_ID = '8fc1d6c9'
@@ -21,6 +21,8 @@ const IN_REVIEW_ID = 'edd18149'
 
 /** Mount the mock host on a real loopback HTTP server. */
 async function startMock(t, config = {}) {
+  // The mock keeps its bindings at module scope; each case starts empty.
+  __resetMockState()
   const routes = []
   const ctx = {
     get(name) {
@@ -184,4 +186,82 @@ test('mock failure item always answers 502 and is visible to the e2e harness', a
   assert.equal(after.writes.at(-1).code, 'gh-failed')
   // The failed write must not change the item's status.
   assert.equal((await mock.request('/items?owner=ceasarXuu&number=9')).body.items.find(item => item.id === 'PVTI_mock_write_failure').status, 'TODO')
+})
+
+/* ------------------------------------------------------------------ */
+/* v1.2.0: GET /branches                                               */
+/* ------------------------------------------------------------------ */
+
+test('mock /branches answers one entry per bound workspace, cycling presentations', async (t) => {
+  const mock = await startMock(t)
+  // The mock has no workspace registry: entries follow the workspace bindings.
+  const project = { owner: 'ceasarXuu', ownerType: 'user', number: 9, title: 'Astropath-issues', url: null, itemCount: 195, closed: false, description: null }
+  for (const workspaceId of ['ws-alpha', 'ws-beta', 'ws-gamma']) {
+    const response = await mock.postJson('/bind-workspace', { workspaceId, project })
+    assert.equal(response.status, 200)
+  }
+
+  const body = (await mock.request('/branches')).body
+  assert.equal(body.git.available, true)
+  assert.deepEqual(Object.keys(body.workspaces).sort(), ['ws-alpha', 'ws-beta', 'ws-gamma'])
+  const entries = Object.values(body.workspaces)
+  assert.equal(entries[0].branch, 'main')
+  assert.equal(entries[0].detached, false)
+  assert.equal(entries[1].branch, 'feat/left-sidebar-branch')
+  assert.equal(entries[2].detached, true)
+  assert.equal(entries[2].branch, null)
+  assert.match(entries[2].commit ?? '', /^[0-9a-f]+$/u)
+  for (const entry of entries) {
+    assert.equal(entry.repo, true)
+    assert.equal(entry.workspaceId, entry.workspaceId)
+    assert.equal(typeof entry.path, 'string')
+  }
+})
+
+test('mock /branches is empty before any workspace is bound', async (t) => {
+  const mock = await startMock(t)
+  const body = (await mock.request('/branches')).body
+  assert.deepEqual(body.workspaces, {})
+  assert.equal(body.revision, 1)
+})
+
+test('mock /branches honors MOCK_BRANCHES overrides, including a non-repository', async (t) => {
+  process.env.MOCK_BRANCHES = 'ws-alpha=release/2.0,ws-beta=!not-a-repo,ws-gamma=detached'
+  try {
+    // The override table is read at module load; re-import to apply it.
+    const moduleUrl = new URL('../../dev/mock-host.js', import.meta.url)
+    const fresh = await import(`${moduleUrl.href}?override=1`)
+    const routes = []
+    fresh.apply({
+      get: name => name === 'webServer'
+        ? { register: route => { routes.push(route); return () => {} } }
+        : undefined,
+      effect: callback => { callback(); return () => {} },
+    })
+    const server = createServer((req, res) => routes[0].handler(req, res))
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    t.after(() => { server.close() })
+    const base = `http://127.0.0.1:${String(server.address().port)}${PREFIX}`
+    const request = async (path, options = {}) => {
+      const response = await fetch(`${base}${path}`, options)
+      return { status: response.status, body: await response.json() }
+    }
+    for (const workspaceId of ['ws-alpha', 'ws-beta', 'ws-gamma']) {
+      await request('/bind-workspace', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, project: { owner: 'ceasarXuu', number: 9, title: 'Astropath-issues' } }),
+      })
+    }
+    const body = (await request('/branches')).body
+    assert.equal(body.workspaces['ws-alpha'].branch, 'release/2.0')
+    // A non-repository workspace answers no entry at all.
+    assert.equal(Object.hasOwn(body.workspaces, 'ws-beta'), false)
+    assert.equal(body.workspaces['ws-gamma'].detached, true)
+  } finally {
+    delete process.env.MOCK_BRANCHES
+  }
 })

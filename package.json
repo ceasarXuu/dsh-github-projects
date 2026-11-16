@@ -1,7 +1,7 @@
 {
   "name": "@ceasarxuu/dsh-github-projects",
-  "version": "1.1.0",
-  "description": "GitHub Projects board, session-bound Issues, header/sidebar issue subtitles, and agent bind/unbind/switch tools inside DeepSeek Harness.",
+  "version": "1.2.0",
+  "description": "GitHub Projects board, session-bound Issues, header/sidebar issue subtitles, per-workspace git branch chips, and agent bind/unbind/switch tools inside DeepSeek Harness.",
   "type": "module",
   "license": "MIT",
   "author": "ceasarXuu",
