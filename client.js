@@ -616,11 +616,30 @@ window.__ModuleLoader__.load({
           if (target.closest('[data-composer-card]') === null && target.closest('textarea') === null) return
           nudgeBranchMap()
         }
+        // Sending with the composer's primary button is a prompt too: watch the
+        // press on the send control inside the composer card (the click itself
+        // is the shipped handler; this only schedules a read).
+        const onPointerDown = (event) => {
+          const target = event.target
+          if (!(target instanceof HTMLElement)) return
+          if (target.closest('[data-composer-card]') === null) return
+          const button = target.closest('button')
+          if (button === null || button.disabled) return
+          // The primary send control is the last enabled button in the card; the
+          // stop control shares it while a turn runs, so a busy button is skipped.
+          const card = target.closest('[data-composer-card]')
+          if (card === null) return
+          const buttons = [...card.querySelectorAll('button')].filter(el => !el.disabled && el.getAttribute('aria-busy') !== 'true')
+          if (buttons.length === 0 || buttons.at(-1) !== button) return
+          nudgeBranchMap()
+        }
         document.addEventListener('keydown', onKeyDown, true)
+        document.addEventListener('pointerdown', onPointerDown, true)
         return () => {
           stopped = true
           window.clearInterval(timer)
           document.removeEventListener('keydown', onKeyDown, true)
+          document.removeEventListener('pointerdown', onPointerDown, true)
         }
       }, 'github-projects: /branches map')
     }
