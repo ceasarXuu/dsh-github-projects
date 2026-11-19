@@ -11,9 +11,7 @@
 // Only `react` / `react-dom` from the platform module table are required. The
 // HTTP contract lives in the host half (`/plugin/github-projects`, see
 // docs/CONTRACT.md §3.1). GitHub is read-only except for the durable bindings
-// and — only when `GET /config` answers `writes.allowed === true` — the opt-in
-// Project item Status write (`POST /item-status`, §4.8): drag between canonical
-// lanes or the per-card `移动到` menu, optimistically applied, host answer wins.
+// and the project and Issue actions enabled by the existing opt-in write gate.
 window.__ModuleLoader__.load({
   id: '@ceasarxuu/dsh-github-projects',
   factory(require) {
@@ -56,7 +54,7 @@ window.__ModuleLoader__.load({
         abortedExternally = true
         controller.abort()
       }
-      timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      timer = window.setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS)
       if (externalSignal !== undefined) {
         if (externalSignal.aborted) controller.abort()
         else externalSignal.addEventListener('abort', onExternalAbort, { once: true })
@@ -114,8 +112,8 @@ window.__ModuleLoader__.load({
 
     const apiGet = (path, options) => requestJson(path, options)
 
-    function apiPost(path, body) {
-      return requestJson(path, { method: 'POST', body })
+    function apiPost(path, body, options) {
+      return requestJson(path, { ...options, method: 'POST', body })
     }
 
     function queryString(params) {
@@ -3528,6 +3526,15 @@ window.__ModuleLoader__.load({
     }) {
       const rootRef = useRef(null)
       const viewportHeight = useContainedViewport(rootRef)
+      const [Management, setManagement] = useState(null)
+      useEffect(() => {
+        if (!sidebar) return
+        let live = true
+        import(`${API_BASE}/sidebar-client.js`).then(({ createSidebarManagement }) => {
+          if (live) setManagement(() => createSidebarManagement({ React, Button, ConfirmAction, AutoBindNotice, Markdown, apiGet, apiPost }))
+        }).catch(error => { console.warn('GitHub Projects sidebar module:', error) })
+        return () => { live = false }
+      }, [sidebar])
       const ackedRequestRef = useRef(null)
       const mountedRef = useRef(true)
       useEffect(() => () => { mountedRef.current = false }, [])
@@ -3677,6 +3684,7 @@ window.__ModuleLoader__.load({
       // this read start in parallel with `/config`. Previous data is kept while
       // `refresh=1` re-reads (only the user's Refresh sends refresh=1).
       useEffect(() => {
+        if (Management) return undefined
         const configResolved = configState.status === 'ready' || configState.status === 'no-workspace' || configState.status === 'error'
         const candidateProject = isPlainObject(project)
           ? project
@@ -3719,13 +3727,14 @@ window.__ModuleLoader__.load({
             })
         }
         return () => { cancelled = true }
-      }, [configState.status, project, itemsQuery.n, workspaceId])
+      }, [configState.status, project, itemsQuery.n, workspaceId, Management])
 
       // Write-side metadata (§4.8): requested only in allowed mode, lazily when
       // the board is on screen, cached per Project for the module lifetime and
       // refreshed together with the board's refresh action. Read-only mode never
       // touches `/project-meta`.
       useEffect(() => {
+        if (Management) return undefined
         if (!writesAllowed) {
           setProjectMeta(null)
           setMetaFailed(false)
@@ -3757,7 +3766,7 @@ window.__ModuleLoader__.load({
             .catch(() => { if (!cancelled) setMetaFailed(true) })
         }
         return () => { cancelled = true }
-      }, [writesAllowed, projectOwner, projectNumber, viewMode, metaQuery.n])
+      }, [writesAllowed, projectOwner, projectNumber, viewMode, metaQuery.n, Management])
 
       // A different Project has a different Status field and item set.
       useEffect(() => {
@@ -4222,6 +4231,16 @@ window.__ModuleLoader__.load({
               bounds: pickerBounds,
             })
             : null)
+      }
+
+      if (Management) {
+        return h('div', { className: rootClass, ref: rootRef, style: rootStyle }, [
+          h(Management, { key: projectKey, t, workspaceId, project, sessionIssue, allowWrites: writesAllowed,
+            onChangeProject: () => setPickerOpen(true), onUnbind: unbindProject, onBind: bindIssue,
+            unbinding, autoBindNote: autoBindNoteOf(workspaceId) }),
+          actionError ? h(ActionBanner, { key: 'action-error', t, title: t('projects.issueBindFailed'), error: actionError, onDismiss: () => setActionError(null) }) : null,
+          pickerOpen ? h(ProjectPicker, { key: 'picker', t, onClose: () => setPickerOpen(false), onSelect: bindProject, currentProject: project, bounds: pickerBounds }) : null,
+        ])
       }
 
       const milestoneScopedItems = filterByMilestone(displayItems, milestoneFilter)

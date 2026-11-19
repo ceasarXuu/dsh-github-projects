@@ -25,6 +25,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { createSidebarGithub } from './sidebar-github.js'
 import { promisify } from 'node:util'
 
 /* ------------------------------------------------------------------ */
@@ -837,14 +838,19 @@ export function normalizeProjectMeta(raw, context = {}) {
 /* ------------------------------------------------------------------ */
 
 function createExecRunner({ ghCommand, timeoutMs, maxBuffer }) {
-  return async (args) => {
-    const result = await execFileAsync(ghCommand, args, {
+  return async (args, input) => {
+    const command = execFileAsync(ghCommand, args, {
       env: process.env,
       timeout: timeoutMs,
       maxBuffer,
       encoding: 'utf8',
       windowsHide: true,
     })
+    if (input !== undefined && command.child.stdin) {
+      command.child.stdin.on('error', () => { /* execFile reports the child failure */ })
+      command.child.stdin.end(input)
+    }
+    const result = await command
     return { stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') }
   }
 }
@@ -875,10 +881,10 @@ export function createGh(options = {}) {
     : createExecRunner({ ghCommand, timeoutMs, maxBuffer })
 
   /** Run one gh invocation, normalizing the runner result shape. */
-  async function exec(args) {
+  async function exec(args, input) {
     let result
     try {
-      result = await runner(args)
+      result = await runner(args, input)
     } catch (error) {
       throw classifyGhError(error)
     }
@@ -890,8 +896,8 @@ export function createGh(options = {}) {
   }
 
   /** Run one gh invocation and parse stdout as JSON. */
-  async function execJson(args) {
-    const { stdout } = await exec(args)
+  async function execJson(args, input) {
+    const { stdout } = await exec(args, input)
     try {
       return JSON.parse(stdout)
     } catch {
@@ -1338,8 +1344,25 @@ export function createGh(options = {}) {
     return { ref: parsed, summary: toIssueSummary(issue) }
   }
 
+  const sidebar = createSidebarGithub({
+    GhError, parseRepo: parseRepoParam, normalizeItem: normalizeGraphqlItem,
+    maxItems: maxProjectItems, maxComments,
+    async graphql(query, variables) {
+      const data = await execJson(['api', 'graphql', '--input', '-'], JSON.stringify({ query, variables }))
+      const error = firstGraphqlError(data)
+      if (error !== null) throw new GhError('gh-failed', error.message)
+      return data.data
+    },
+    rest(method, path, data) {
+      const args = ['api', path]
+      if (method === 'GET') return execJson(args)
+      return execJson([...args, '--method', method, '--input', '-'], JSON.stringify(data))
+    },
+  })
+
   return {
     health,
+    sidebar,
     listProjects,
     // v1.3.0 auto-bind: the Projects one repository links to.
     listRepoProjects,
