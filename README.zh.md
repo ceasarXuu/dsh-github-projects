@@ -1,5 +1,7 @@
 # dsh-github-projects
 
+> 开发分支的右侧栏支持 GitHub 已保存视图、看板、表格和条目详情。通过 `allowWrites: true` 可编辑字段和 Issue、发表评论并添加条目。以下安装说明和截图对应已发布的 1.3.0。
+
 **把 GitHub Projects v2 带进 DeepSeek Harness。** 给每个工作区绑定一个 Project、给每个会话绑定一个
 Issue，让看板、分支和任务贴在对话旁边，而不是藏在另一个标签页里。
 

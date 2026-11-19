@@ -15,9 +15,8 @@
  * - persists workspace → Project and session → Issue bindings via `state.js`.
  *
  * It is read-only against GitHub unless the operator opts in with
- * `allowWrites: true` (default false). The only write is `POST /item-status`
- * and its agent tool, both routed through `gh api graphql` (the `gh` CLI owns
- * auth; this module never reads tokens). Reads never write. There are no npm
+ * `allowWrites: true` (default false). Project and Issue writes use the
+ * `gh` CLI, which owns authentication. Reads never write. There are no npm
  * dependencies, no token/body logging, and every failure answers
  * `{"error":{"code","message"}}` with a contract status code. The handler owns
  * the full `node:http` request/response; `webServer` matches the prefix and
@@ -35,6 +34,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path'
 import { createStateStore, STATE_WRITE_FAILED } from './state.js'
 import { createWorkspaceBranchIndex } from './branch-index.js'
 import { createWorkspaceAutoBinder } from './auto-bind.js'
+import { createSidebarApi, SIDEBAR_READS, SIDEBAR_WRITE } from './sidebar-api.js'
 import {
   GhError,
   boundedInt,
@@ -69,6 +69,7 @@ export const ROUTE_PATH = '/plugin/github-projects'
 
 /** POST bodies above this many bytes are rejected with 413. */
 const MAX_BODY_BYTES = 64 * 1024
+const MAX_SIDEBAR_BODY_BYTES = 768 * 1024
 
 /** Error code → HTTP status (contract §3.1). */
 const STATUS_BY_ERROR_CODE = new Map([
@@ -77,6 +78,8 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['issue-not-found', 404],
   ['project-not-found', 404],
   ['item-not-found', 404],
+  ['forbidden', 403],
+  ['conflict', 409],
   ['gh-missing', 503],
   ['gh-auth', 503],
   ['gh-failed', 502],
@@ -86,8 +89,9 @@ const STATUS_BY_ERROR_CODE = new Map([
   ['internal', 500],
 ])
 
-const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/auto-bind', '/projects', '/items', '/issue', '/project-meta'])
-const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status'])
+const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/auto-bind', '/projects', '/items', '/issue', '/project-meta', ...SIDEBAR_READS])
+const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status', SIDEBAR_WRITE])
+const SIDEBAR_CLIENT_FILES = new Set(['/sidebar-client.js', '/sidebar-view.js', '/sidebar-detail.js', '/sidebar-style.js'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
 const MALFORMED_PERCENT_PATTERN = /%(?![0-9a-fA-F]{2})/u
@@ -282,13 +286,13 @@ async function readBoundedBody(req, limit) {
 }
 
 /** Read + gate + parse one POST body as a JSON object. */
-async function readJsonBody(req) {
+async function readJsonBody(req, limit = MAX_BODY_BYTES) {
   const contentType = String(req.headers?.['content-type'] ?? '')
   if (!/^application\/json(?:\s*;.*)?$/iu.test(contentType.trim())) {
     throw new HttpError(415, 'unsupported-media-type', 'Content-Type 必须是 application/json')
   }
-  const buffer = await readBoundedBody(req, MAX_BODY_BYTES)
-  if (buffer === null) throw new HttpError(413, 'payload-too-large', '请求体超过 64 KiB 上限')
+  const buffer = await readBoundedBody(req, limit)
+  if (buffer === null) throw new HttpError(413, 'payload-too-large', `请求体超过 ${limit / 1024} KiB 上限`)
   const text = buffer.toString('utf8')
   if (text.trim().length === 0) throw badRequest('请求体为空')
   let parsed
@@ -428,6 +432,7 @@ function createSwrCache({ cacheTtlMs, staleTtlMs, disk }) {
     const promise = (async () => {
       const value = await load()
       const record = { value, fetchedAt: Date.now() }
+      if (pending.get(key) !== promise) return record
       entries.set(key, record)
       prune()
       try {
@@ -478,6 +483,15 @@ function createSwrCache({ cacheTtlMs, staleTtlMs, disk }) {
         }
       }
       return existed
+    },
+    invalidatePrefix(prefix) {
+      let changed = false
+      for (const key of new Set([...entries.keys(), ...pending.keys()])) {
+        if (!key.startsWith(prefix)) continue
+        changed = entries.delete(key) || changed
+        pending.delete(key)
+      }
+      if (changed) void disk.save(entries)
     },
     /** Diagnostic helper: number of in-memory entries. */
     size() { return entries.size },
@@ -1033,6 +1047,7 @@ function createApi({
   resolveWorkspacePath = null,
 }) {
   const writesAllowedNow = writesAllowed === true
+  const sidebarApi = createSidebarApi({ github: gh.sidebar, store, cache })
   const iso = (timestamp) => new Date(timestamp).toISOString()
 
   /* ---- GET handlers (read-only; no GitHub writes) ---- */
@@ -1274,7 +1289,7 @@ function createApi({
   }
 
   /**
-   * `POST /item-status` (v1.1.0, contract §3.1) — the ONLY GitHub write.
+   * `POST /item-status` (v1.1.0, contract §3.1) — the original Status write.
    * Dispatch already refused the request with `writes-disabled` (403) when
    * `allowWrites` is false, so this handler is unreachable in read-only mode.
    * `optionId: null` clears the Status field (No status); a non-null id must be
@@ -1302,6 +1317,7 @@ function createApi({
     }
     const applied = await gh.updateItemStatus({ owner, number, itemId, optionId })
     cache.invalidate(`items:${owner}/${number}`)
+    cache.invalidatePrefix(`sidebar-items:${owner.toLowerCase()}/${number}:`)
     return {
       item: { id: itemId },
       status: applied.status,
@@ -1325,7 +1341,13 @@ function createApi({
     const query = requestUrl.searchParams
 
     if (method === 'GET') {
+      if (SIDEBAR_CLIENT_FILES.has(path)) {
+        const source = readFileSync(new URL(`.${path}`, import.meta.url))
+        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
+        return res.end(source)
+      }
       if (!GET_ROUTES.has(path)) throw new HttpError(404, 'not-found', `未知接口: GET ${path}`)
+      if (SIDEBAR_READS.has(path)) return sendJson(res, 200, await sidebarApi.read(path, query))
       if (path === '/health') return sendJson(res, 200, { ok: true, gh: await health.read() })
       if (path === '/config') return sendJson(res, 200, await readConfig(query))
       if (path === '/bindings') return sendJson(res, 200, readBindings())
@@ -1342,10 +1364,11 @@ function createApi({
       checkOrigin(req)
       // v1.1.0 write gate (contract §3.1): refuse before reading the body, so a
       // read-only host never touches a mutation path.
-      if (path === '/item-status' && writesAllowedNow !== true) {
+      if ((path === '/item-status' || path === SIDEBAR_WRITE) && writesAllowedNow !== true) {
         throw new HttpError(403, 'writes-disabled', '写操作未启用：请在插件配置中设置 allowWrites: true 后再试')
       }
-      const body = await readJsonBody(req)
+      const body = await readJsonBody(req, path === SIDEBAR_WRITE ? MAX_SIDEBAR_BODY_BYTES : MAX_BODY_BYTES)
+      if (path === SIDEBAR_WRITE) return sendJson(res, 200, await sidebarApi.write(body))
       if (path === '/bind-workspace') return sendJson(res, 200, await bindWorkspaceRequest(body))
       if (path === '/unbind-workspace') return sendJson(res, 200, await unbindWorkspaceRequest(body))
       if (path === '/bind-issue') return sendJson(res, 200, await bindIssueRequest(body))

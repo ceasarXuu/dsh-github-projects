@@ -1,5 +1,7 @@
 # dsh-github-projects
 
+> The development branch opens saved GitHub views, boards, tables, and item details in the right sidebar. With `allowWrites: true`, it can edit fields and issues, post comments, and add items. The installation instructions and screenshots below cover the published 1.3.0 release.
+
 **GitHub Projects v2 inside DeepSeek Harness.** Bind a Project to each workspace and an Issue to each
 session, so the board, the branch and the task sit next to the conversation instead of in another tab.
 

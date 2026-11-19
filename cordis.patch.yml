@@ -56,7 +56,6 @@
         # How long one resolved auto-bind answer (including "no Project") is
         # trusted before it is re-checked.
         autoBindTtlMs: 600000
-        # Opt-in GitHub writes (v1.1.0): board drag / move menu and the
-        # `github_project_item_status` agent tool update a Project item's
-        # Status field. Requires the `project` scope on the `gh` token.
+        # Opt-in GitHub writes from the sidebar; the existing agent tool still
+        # updates only item Status. GitHub enforces Project and repository permissions.
         allowWrites: false
