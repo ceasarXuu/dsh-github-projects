@@ -3,6 +3,45 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.4.0 — 2026-11-21
+
+**The right sidebar becomes a working GitHub Projects surface.** A Project's own saved views, a board
+and a table, item details, editing, comments and adding items — inside the `项目` tab, and still
+read-only until `allowWrites` is switched on.
+
+### Added — project management in the sidebar
+
+- The Project's own **saved views**, in GitHub's order; each keeps its layout, filter and fields
+  (`GET /project-layout`).
+- **Board and table layouts**: drag an item across a column to change that field, edit table cells in
+  place, open an item from either.
+- **Item detail in the same tab**: title and body edit in place, the discussion and a comment box, and
+  the field area holds assignees, labels, milestone and project fields. `Esc` / 返回项目 restores the
+  view, filter, scroll position and focus.
+- **Add items** from a column or the table's last row: a draft, an existing item, or a new Issue —
+  inheriting the field values of the group you started from.
+- **GitHub filter syntax**, passed to GitHub to resolve (`GET /project-view-items`).
+- Archive an item, save a view's visible fields, post a comment, edit an Issue.
+- `POST /project-operation` is the single write route, gated by `allowWrites` exactly as before.
+  GitHub still enforces its own Project and repository permissions, and a field write carries the value
+  it was edited from, so a concurrent change comes back as a conflict with the current value.
+- Read routes added: `GET /project-item`, `GET /project-choices`.
+
+### Performance
+
+- Project items are read **100 per page** instead of 50 — the page size `github.js` documents. For
+  Astropath-issues (229 items, cap 200) that is 4 paginated `gh` calls down to 2.
+- The panel **paints the first page** and fills in the remaining pages in the background, instead of
+  waiting for every page before showing anything.
+- Opening the panel uses the **SWR cache** rather than forcing a cold read each time; only 刷新 and a
+  retry force a fresh read, so reopening the panel is served from cache.
+- `cache.peek()` lets a route prefer an already-complete set without loading it.
+
+### Changed
+
+- The **workspace board icon shows on hover** and on keyboard focus, not permanently. Touch devices
+  keep it visible. It still occupies its box, so the row never reflows.
+
 ## 1.3.0 — 2026-11-17
 
 **A workspace binds its Project by itself.** Most workspaces are a checkout of exactly one GitHub

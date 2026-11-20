@@ -12,11 +12,7 @@ calls GitHub directly. **Read-only by default**: every write sits behind a singl
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
 > Release notes live in [CHANGELOG.md](CHANGELOG.md).
 
-> **Which version does this README describe?** The sidebar project management below — saved views, the
-> table layout, item details, editing, comments, adding items — is in **this checkout** and is **not in
-> the published npm release yet**; npm still serves the 1.3.0 feature set. That is why this README has
-> no screenshots of the newer panel. The released behaviour is recorded in
-> [CHANGELOG.md](CHANGELOG.md).
+> The panel management described below shipped in **1.4.0**; see [CHANGELOG.md](CHANGELOG.md).
 
 ## What you get
 
@@ -177,7 +173,7 @@ every write sits behind `allowWrites`**, which defaults to off — with it off t
 ## Install
 
 The plugin is **published on npm** as `@ceasarxuu/dsh-github-projects`. The current release is
-**v1.3.0**. Install it into the DSH profile your app runs (on a default Desktop install the profile is
+**v1.4.0**. Install it into the DSH profile your app runs (on a default Desktop install the profile is
 named `desktop`; use `web` / `headless` if that is what you run). Installing needs write access to the
 profile directory.
 
@@ -188,8 +184,8 @@ and the plugin icon.
 **CLI:**
 
 ```sh
-# install the release into the desktop profile (pin @1.3.0)
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.3.0
+# install the release into the desktop profile (pin @1.4.0)
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.4.0
 
 # verify it is installed in that profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -213,7 +209,7 @@ That records a `link:` dependency (the `link:` prefix may be omitted). Use this 
 installed users should use the npm package above.
 
 > The registry also lists an internal staging version (`0.0.0-stage`). Install the release explicitly
-> with `@1.3.0` so a staging tag can never be picked up.
+> with `@1.4.0` so a staging tag can never be picked up.
 
 ## Use
 
@@ -407,7 +403,7 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | This checkout adds the sidebar project management (saved views, table layout, Item details, editing, comments, adding items). The published npm release is **1.3.0** — automatic Project binding from the checkout's `origin` remote, per-workspace git branch chip, opt-in Status writes; read-only by default |
+| Plugin version | **1.4.0** — sidebar project management (saved views, board and table, Item details, editing, comments, adding items) on top of automatic Project binding from the checkout's `origin` remote (1.3.0), the per-workspace git branch chip (1.2.0) and opt-in Status writes (1.1.0); read-only by default |
 | Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
