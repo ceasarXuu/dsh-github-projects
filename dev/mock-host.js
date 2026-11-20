@@ -27,6 +27,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 const fixtureDir = join(here, '..', 'test', 'fixtures')
 const readJson = name => JSON.parse(readFileSync(join(fixtureDir, name), 'utf8'))
 
+// v1.4.0: the browser half loads the panel through the plugin's own HTTP route
+// (`client.js` does `import(`${API_BASE}/sidebar-client.js`)`), and only on the
+// sidebar surface. Without these four the import 404s and the panel silently
+// falls back to nothing — the failure was swallowed by a .catch(console.warn).
+const CLIENT_MODULES = new Set(['sidebar-client.js', 'sidebar-view.js', 'sidebar-detail.js', 'sidebar-style.js'])
+
 const projectList = readJson('project-list.json')
 const itemList = readJson('item-list.json')
 const issueFixture = readJson('issue.json')
@@ -317,7 +323,7 @@ function findProject(owner, number) {
 }
 
 function health() {
-  return { available: true, version: 'gh version 2.96.0 (mock)', account: 'ceasarXuu', error: null }
+  return { available: true, version: 'gh version 2.96.0 (mock)', account: 'acme', error: null }
 }
 
 function configFor(sessionId, workspaceId, allowWrites) {
@@ -391,6 +397,20 @@ async function handle(req, res, allowWrites) {
   const sessionId = query.get('sessionId') ?? ''
   const workspaceId = query.get('workspaceId') ?? ''
 
+  // Off by default: the e2e stages still assert the pre-1.4 board DOM, so serving
+  // the panel here changes what they see. Set DSH_MOCK_SERVE_CLIENT=1 to load the
+  // shipped 1.4 panel against fixture data (the "panel capture" path).
+  if (process.env.DSH_MOCK_SERVE_CLIENT === '1'
+    && req.method === 'GET' && CLIENT_MODULES.has(route.replace(/^\//u, ''))) {
+    const source = readFileSync(join(here, '..', route.replace(/^\//u, '')))
+    res.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-length': source.length,
+    })
+    return res.end(source)
+  }
+
   if (req.method === 'GET' && route === '/health') {
     return send(res, 200, { ok: true, gh: health() })
   }
@@ -421,7 +441,7 @@ async function handle(req, res, allowWrites) {
   if (req.method === 'GET' && route === '/projects') {
     await delay(180)
     return send(res, 200, {
-      owners: [{ login: 'ceasarXuu', type: 'user' }, { login: 'acme-labs', type: 'organization' }],
+      owners: [{ login: 'acme', type: 'user' }, { login: 'acme-labs', type: 'organization' }],
       projects,
       fetchedAt: new Date().toISOString(),
       stale: false,

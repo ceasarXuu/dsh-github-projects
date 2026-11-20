@@ -56,7 +56,7 @@ yourself is never touched.
   the repository's intended board, otherwise the **most recently updated** open Project. A remote
   that is not `github.com` (a local mirror, GitLab, Bitbucket) is never guessed into a GitHub repo.
 - **It explains itself.** An auto-filled board shows one muted line in its toolbar —
-  `已根据仓库 acme/web 自动绑定 Project「web-issues」` — and says so explicitly when
+  `已根据仓库 ceasarXuu/web 自动绑定 Project「web-issues」` — and says so explicitly when
   the repository links several Projects and the pick was a choice. The note reads the durable
   binding's provenance, so it survives a reload and a restart, and it disappears the moment you bind
   by hand. `更换` stays the way to overrule it.

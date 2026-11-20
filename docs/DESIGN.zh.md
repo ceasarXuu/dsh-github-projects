@@ -879,7 +879,7 @@ accent 本身与主题无关；所有 tint（背景、计数 pill、chip）用 `
 - **生命周期**：注册包在 `ctx.effect` 中，插件停用/卸载时工具随之消失；定义使用纯 JSON-Schema
   （`parameters` / `output.schema` / `output.render`）。
 - **UI 副作用**：绑定工具成功后，客户端在 ≤4s 内更新会话副标题与 `issue` 页签；`output.render` 返回
-  一行文本（如 `已绑定 #240（acme/web）`）供模型/用户确认。
+  一行文本（如 `已绑定 #240（ceasarXuu/web）`）供模型/用户确认。
 
 用法示例（可直接对模型说）：
 
@@ -1976,7 +1976,7 @@ harness real 模式 1280×800；`09-issue-comments` 为 real + `--extra-comments
 ![issue 未绑定空态](../artifacts/screenshots/07-issue-empty.png)
 ![已绑定 Issue 详情](../artifacts/screenshots/08-issue-detail.png)
 ![Issue 评论区](../artifacts/screenshots/09-issue-comments.png)
-![Desktop 安装后的会话头部（真实应用）](../artifacts/screenshots/10-desktop-tabs.png)
+> 该帧为真实 Desktop 应用截图，包含真实账号与会话内容，已因隐私原因移除；同场景的 fixture 采集见 `14-sidebar-subtitle.png`。
 ![2200×1300 宽窗口下的全宽泳道布局](../artifacts/screenshots/11-projects-wide.png)
 ![卡片点击在系统默认浏览器打开 GitHub](../artifacts/screenshots/12-external-open.png)
 ![会话 Issue 副标题](../artifacts/screenshots/13-issue-subtitle.png)
@@ -2081,7 +2081,7 @@ fixture/real e2e 与宿主测试。旧截图编号已随版本重排，不再保
 | B2 | fixture e2e | `node scripts/e2e/run.mjs --mode fixture --keep` → exit 0/PASS，run dir `2026-10-28T01-03-02-918Z`，**17/17 executed stages** |
 | B3 | real e2e | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` → exit 0/PASS，run dir `2026-10-28T01-03-18-830Z`，**18/18** |
 | B4 | console | 两个模式 **0 errors / 0 exceptions / 0 warnings**；良性 allowlist 已清空 |
-| B5 | 外部浏览器打开 | `projects-external-open`：stub `window.open` 恰好 1 次 `{url: "https://github.com/acme/web/issues/240", target: "_blank", features: "noopener,noreferrer"}`；`[data-sidebar-browser-frame]` false、dockkit browser tabs `[]`、未创建绑定、看板仍挂载；已移除 overlay 使能与 X-Frame allowlist；截图 `12-external-open.png`（sha256 `bcd73d15…110c`） |
+| B5 | 外部浏览器打开 | `projects-external-open`：stub `window.open` 恰好 1 次 `{url: "https://github.com/ceasarXuu/web/issues/240", target: "_blank", features: "noopener,noreferrer"}`；`[data-sidebar-browser-frame]` false、dockkit browser tabs `[]`、未创建绑定、看板仍挂载；已移除 overlay 使能与 X-Frame allowlist；截图 `12-external-open.png`（sha256 `bcd73d15…110c`） |
 | B6 | 侧栏无溢出 + 点击 | `sidebar-subtitle`：副标题为纯 `span`，行高 **41px**，`top 342 ≥ title.bottom 340−2`，chip `#240`、`title` 带全文；**无溢出**：subtitle right **260 ≤ row content right 260**、row `scrollWidth/clientWidth` **256/256**、sidebar **265/265**；在副标题坐标点击 → `window.open` **0 次**、`location.href` 不变、仍是同一会话（不打开 Issue）；截图 `14-sidebar-subtitle.png`（sha256 `ace38ff5…89e4`） |
 | B7 | 其它回归 | 隐藏空 No-status（real 196 条：TODO 27 / In Progress 2 / In Review 1 / Done 166）、milestone、wide 86.6%、头部副标题（13）均通过；warm **16→59 ms**、`skeletonSeen:false`；cold board 319→3804 ms（记录值） |
 | B8 | npm 1.0.1 安装 smoke | `node scripts/e2e/release-smoke.mjs --spec=@ceasarxuu/dsh-github-projects@1.0.1 --keep` → exit 0/PASS，run dir `2026-10-28T01-07-11-757Z`：干净临时 `DSH_HOME` + `web` profile；registry 安装 `+ @ceasarxuu/dsh-github-projects 1.0.1`（pnpm-lock integrity = registry `dist.integrity`，安装后 `client.js` sha 与仓库一致）；`dsh.profile.bundles` 含包名；无 overlay 启动；`/plugin/github-projects/health` **200**（gh 2.96.0、ceasarXuu）；页签 `对话\|轨迹\|projects\|issue`；console 0/0/0；tarball 14 文件 / 149 KB |

@@ -138,7 +138,7 @@ test('readRemoteState answers non-GitHub and non-repository directories plainly'
 /* ------------------------------------------------------------------ */
 
 /** Shaped like `Repository.projectsV2.nodes[]` in the real GraphQL answer. */
-function node({ number, title, login = 'ceasarXuu', type = 'User', closed = false, autoAdd = false, updatedAt }) {
+function node({ number, title, login = 'acme', type = 'User', closed = false, autoAdd = false, updatedAt }) {
   return {
     number,
     title,
@@ -162,7 +162,7 @@ test('normalizeRepoProject maps one linked Project', () => {
   const candidate = normalizeRepoProject(node({
     number: 9, title: 'web-issues', autoAdd: true, updatedAt: '2026-11-09T16:30:47Z',
   }), { nameWithOwner: 'acme/web' })
-  assert.equal(candidate.owner, 'ceasarXuu')
+  assert.equal(candidate.owner, 'acme')
   assert.equal(candidate.ownerType, 'user')
   assert.equal(candidate.number, 9)
   assert.equal(candidate.title, 'web-issues')
@@ -279,7 +279,7 @@ test('auto-bind fills an unbound workspace from its git remote', async () => {
   assert.equal(result.project.number, 9)
   assert.deepEqual(gh.calls, ['acme/web'])
   assert.equal(store.bindings.get('wa').number, 9)
-  assert.equal(store.bindings.get('wa').owner, 'ceasarXuu')
+  assert.equal(store.bindings.get('wa').owner, 'acme')
   // The provenance travels with the binding, so the board can explain the pick.
   assert.deepEqual(store.provenance.get('wa'), {
     repository: 'acme/web', ambiguous: false, considered: 1,

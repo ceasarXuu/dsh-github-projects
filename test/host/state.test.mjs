@@ -11,11 +11,11 @@ import { test } from 'node:test'
 import { createStateStore, STATE_WRITE_FAILED } from '../../state.js'
 
 const PROJECT = {
-  owner: 'ceasarXuu',
+  owner: 'acme',
   ownerType: 'user',
   number: 9,
   title: 'web-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
   closed: false,
   description: null,

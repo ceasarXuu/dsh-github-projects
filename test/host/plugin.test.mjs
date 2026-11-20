@@ -30,11 +30,11 @@ import {
 } from './support.mjs'
 
 const PROJECT = {
-  owner: 'ceasarXuu',
+  owner: 'acme',
   ownerType: 'user',
   number: 9,
   title: 'web-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
   closed: false,
   description: null,
@@ -129,7 +129,7 @@ test('GET /health answers the GhHealth contract', async (t) => {
   assert.deepEqual(body.gh, {
     available: true,
     version: 'gh version 2.96.0 (2026-07-02)',
-    account: 'ceasarXuu',
+    account: 'acme',
     error: null,
   })
 })
@@ -153,7 +153,7 @@ test('GET /config reads bindings only and never waits for gh', async (t) => {
   await sleep(25)
   const warm = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
   assert.equal(warm.gh.available, true)
-  assert.equal(warm.gh.account, 'ceasarXuu')
+  assert.equal(warm.gh.account, 'acme')
 
   const empty = expectJson(await app.get('/config'))
   assert.deepEqual(empty.workspace, { workspaceId: '', project: null })
@@ -255,7 +255,7 @@ test('GET /bindings returns every bound session with exact IssueSummary fields',
 
 test('GET /bindings includes workspace → Project bindings with exact stored fields', async (t) => {
   const app = useApp(t)
-  const secondProject = { ...PROJECT, number: 8, title: 'api-issues', url: 'https://github.com/users/ceasarXuu/projects/8', itemCount: 9 }
+  const secondProject = { ...PROJECT, number: 8, title: 'api-issues', url: 'https://github.com/users/acme/projects/8', itemCount: 9 }
 
   await app.post('/bind-workspace', { workspaceId: 'ws-1', project: PROJECT })
   await app.post('/bind-workspace', { workspaceId: 'ws-2', project: secondProject })
@@ -392,7 +392,7 @@ test('GET /projects returns owners, normalized Projects, fetchedAt, stale, error
   const body = expectJson(await app.get('/projects'))
   assert.deepEqual(Object.keys(body).sort(), ['errors', 'fetchedAt', 'owners', 'projects', 'stale'])
   assert.deepEqual(body.owners, [
-    { login: 'ceasarXuu', type: 'user' },
+    { login: 'acme', type: 'user' },
     { login: 'acme-labs', type: 'organization' },
     { login: 'northwind', type: 'organization' },
   ])
@@ -545,9 +545,9 @@ test('SWR: diskCache:false writes no cache file', async (t) => {
 
 test('GET /items returns the Project summary plus 195 normalized GraphQL items', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
+  const body = expectJson(await app.get('/items?owner=acme&number=9'))
   assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'items', 'project', 'stale', 'truncated'])
-  assert.equal(body.project.owner, 'ceasarXuu')
+  assert.equal(body.project.owner, 'acme')
   assert.equal(body.project.ownerType, 'user')
   assert.equal(body.project.number, 9)
   assert.equal(body.project.title, 'web-issues')
@@ -572,7 +572,7 @@ test('GET /items returns the Project summary plus 195 normalized GraphQL items',
 
 test('GET /items paginates at 100/page using the page cursor', async (t) => {
   const app = useApp(t)
-  expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
+  expectJson(await app.get('/items?owner=acme&number=9'))
   const itemQueries = app.calls.filter(args => (
     args[0] === 'api'
     && args[1] === 'graphql'
@@ -588,7 +588,7 @@ test('GET /items paginates at 100/page using the page cursor', async (t) => {
 
 test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
   const capped = useApp(t, { config: { maxProjectItems: 50 } })
-  const body = expectJson(await capped.get('/items?owner=ceasarXuu&number=9'))
+  const body = expectJson(await capped.get('/items?owner=acme&number=9'))
   assert.equal(body.items.length, 50)
   assert.equal(body.truncated, true)
   const queries = capped.commands().filter(command => command.includes('projectV2(number'))
@@ -596,7 +596,7 @@ test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
   assert.ok(queries[0].includes('-F limit=50'))
 
   const partial = useApp(t, { config: { maxProjectItems: 150 } })
-  const partialBody = expectJson(await partial.get('/items?owner=ceasarXuu&number=9'))
+  const partialBody = expectJson(await partial.get('/items?owner=acme&number=9'))
   assert.equal(partialBody.items.length, 150)
   assert.equal(partialBody.truncated, true)
   const partialQueries = partial.calls.filter(args => (
@@ -609,10 +609,10 @@ test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
 
 test('GET /items maps a missing Project to 404 and bad params to 400', async (t) => {
   const app = useApp(t)
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=99999'), 404, 'project-not-found')
+  expectErrorJson(await app.get('/items?owner=acme&number=99999'), 404, 'project-not-found')
   expectErrorJson(await app.get('/items?owner=bad/owner&number=9'), 400, 'bad-request')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=abc'), 400, 'bad-request')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu'), 400, 'bad-request')
+  expectErrorJson(await app.get('/items?owner=acme&number=abc'), 400, 'bad-request')
+  expectErrorJson(await app.get('/items?owner=acme'), 400, 'bad-request')
 })
 
 /* ------------------------------------------------------------------ */
@@ -649,11 +649,11 @@ test('GET /config reports writes.allowed from the opt-in allowWrites config', as
 
 test('GET /project-meta returns the Project node id and Status field options', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  const body = expectJson(await app.get('/project-meta?owner=acme&number=9'))
   assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'project', 'stale', 'statusField'])
   assert.deepEqual(body.project, {
     id: PROJECT_META_IDS.projectId,
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     title: 'web-issues',
   })
@@ -670,25 +670,25 @@ test('GET /project-meta returns the Project node id and Status field options', a
 
   // One GraphQL read, then the SWR cache; `refresh=1` forces a fresh read.
   assert.equal(metaCalls(app).length, 1)
-  const cached = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  const cached = expectJson(await app.get('/project-meta?owner=acme&number=9'))
   assert.equal(cached.fetchedAt, body.fetchedAt)
   assert.equal(metaCalls(app).length, 1)
-  expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9&refresh=1'))
+  expectJson(await app.get('/project-meta?owner=acme&number=9&refresh=1'))
   assert.equal(metaCalls(app).length, 2)
 })
 
 test('GET /project-meta maps a missing Project to 404 and bad params to 400', async (t) => {
   const app = useApp(t)
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=99999'), 404, 'project-not-found')
+  expectErrorJson(await app.get('/project-meta?owner=acme&number=99999'), 404, 'project-not-found')
   expectErrorJson(await app.get('/project-meta?owner=bad/owner&number=9'), 400, 'bad-request')
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=abc'), 400, 'bad-request')
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=acme&number=abc'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=acme'), 400, 'bad-request')
 })
 
 test('POST /item-status is refused with 403 writes-disabled when allowWrites is false', async (t) => {
   const app = useApp(t)
   const payload = {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options['In Review'],
@@ -705,7 +705,7 @@ test('POST /item-status is refused with 403 writes-disabled when allowWrites is 
 test('POST /item-status moves an item and returns the applied Status', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options['In Review'],
@@ -737,7 +737,7 @@ test('POST /item-status handles the real all-digit Done option id', async (t) =>
   assert.match(PROJECT_META_IDS.options['In Review'], /^[a-z0-9]+$/u)
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options.Done,
@@ -751,7 +751,7 @@ test('POST /item-status handles the real all-digit Done option id', async (t) =>
 test('POST /item-status with optionId:null clears the Status field', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -770,7 +770,7 @@ test('POST /item-status with optionId:null clears the Status field', async (t) =
 test('POST /item-status rejects an unknown option id with 400 and writes nothing', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: 'f0000000',
@@ -781,14 +781,14 @@ test('POST /item-status rejects an unknown option id with 400 and writes nothing
 
 test('POST /item-status validates the ItemStatusRequest body', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
-  const valid = { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }
+  const valid = { owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: null }
   expectErrorJson(await app.post('/item-status', { ...valid, owner: 'bad/owner' }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, number: 0 }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, itemId: 'not-a-node-id' }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, itemId: undefined }), 400, 'bad-request')
   // optionId is required: an omitted field is not an implicit clear.
   expectErrorJson(
-    await app.post('/item-status', { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID }),
+    await app.post('/item-status', { owner: 'acme', number: 9, itemId: ITEM_240_ID }),
     400,
     'bad-request',
   )
@@ -810,7 +810,7 @@ test('POST /item-status maps a GraphQL NOT_FOUND write error to 404 item-not-fou
   })
   const app = useApp(t, { runner, config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: 'PVTI_stale',
     optionId: PROJECT_META_IDS.options.Done,
@@ -830,7 +830,7 @@ test('POST /item-status maps a missing project scope to 503 gh-auth with the ref
   })
   const app = useApp(t, { runner, config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -841,7 +841,7 @@ test('POST /item-status maps a missing project scope to 503 gh-auth with the ref
 test('POST /item-status maps a missing Project to 404 project-not-found', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 99999,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -850,7 +850,7 @@ test('POST /item-status maps a missing Project to 404 project-not-found', async 
 
 test('POST /item-status invalidates the items SWR entry so the next /items re-reads', async (t) => {
   const app = useApp(t, { config: { allowWrites: true, cacheTtlMs: 60_000 } })
-  const itemsUrl = '/items?owner=ceasarXuu&number=9'
+  const itemsUrl = '/items?owner=acme&number=9'
   expectJson(await app.get(itemsUrl))
   assert.equal(itemPageCalls(app).length, 2, '195 items are two GraphQL pages')
   // Warm cache: a second /items read must not touch gh.
@@ -858,7 +858,7 @@ test('POST /item-status invalidates the items SWR entry so the next /items re-re
   assert.equal(itemPageCalls(app).length, 2)
 
   expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options.Done,
@@ -883,7 +883,7 @@ test('GET /issue returns a contract IssueDetail with comments', async (t) => {
   assert.equal(issue.title, fixture.issue.title)
   assert.equal(issue.url, 'https://github.com/acme/web/issues/240')
   assert.equal(issue.state, 'open')
-  assert.equal(issue.author, 'ceasarXuu')
+  assert.equal(issue.author, 'acme')
   assert.deepEqual(issue.labels, ['enhancement', 'todo'])
   assert.deepEqual(issue.assignees, [])
   assert.equal(issue.body.length, fixture.issue.body.length)
@@ -1050,7 +1050,7 @@ test('tool github_issue_bind refuses when the session is already bound', async (
   await tool.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
   await assert.rejects(tool.execute({ ref: 'acme/web#240' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'bad-request')
-    assert.match(error.message, /already bound: ceasarXuu\/web#240/u)
+    assert.match(error.message, /already bound: acme\/web#240/u)
     return true
   })
 })
@@ -1410,7 +1410,7 @@ test('without gh: /health and /config still work, GitHub reads answer 503 gh-mis
   assert.equal(config.gh.available, false)
 
   expectErrorJson(await app.get('/projects'), 503, 'gh-missing')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=9'), 503, 'gh-missing')
+  expectErrorJson(await app.get('/items?owner=acme&number=9'), 503, 'gh-missing')
   expectErrorJson(await app.get('/issue?repo=acme/web&number=240'), 503, 'gh-missing')
 })
 
@@ -1530,7 +1530,7 @@ test('/auto-bind fills an unbound workspace from the repository it checks out', 
   assert.equal(body.reason, 'bound')
   assert.equal(body.repository, 'acme/web')
   assert.equal(body.project.number, 9)
-  assert.equal(body.project.owner, 'ceasarXuu')
+  assert.equal(body.project.owner, 'acme')
   assert.equal(body.project.title, 'web-issues')
   // The durable store now carries it, so the sidebar icon lights up.
   const bindings = expectJson(await app.get('/bindings'))
@@ -1542,7 +1542,7 @@ test('/auto-bind never overwrites a Project the user bound', async (t) => {
   // Bind a different Project by hand, exactly as the picker does.
   expectJson(await app.post('/bind-workspace', {
     workspaceId: 'wa',
-    project: { owner: 'acme-labs', ownerType: 'organization', number: 2, title: '我的看板', url: null, itemCount: 3, closed: false, description: null },
+    project: { owner: 'acme-labs', ownerType: 'organization', number: 2, title: 'Web roadmap', url: null, itemCount: 3, closed: false, description: null },
   }))
   app.remote['/ws/a'] = 'acme/web'
 
@@ -1559,7 +1559,7 @@ test('/auto-bind reports each reason it will not bind', async (t) => {
 
   assert.equal(expectJson(await app.get('/auto-bind?workspaceId=a&path=%2Fws%2Fplain')).reason, 'no-remote')
   // A repository the token cannot see (the fixture runner answers 404-style).
-  app.remote['/ws/other'] = 'ceasarXuu/NotVisible'
+  app.remote['/ws/other'] = 'acme/NotVisible'
   assert.equal(expectJson(await app.get('/auto-bind?workspaceId=b&path=%2Fws%2Fother')).reason, 'no-project')
   // Missing inputs never throw.
   assert.equal(expectJson(await app.get('/auto-bind')).reason, 'no-workspace')
@@ -1590,7 +1590,7 @@ test('an auto-filled binding carries its provenance through /bindings', async (t
   // A manual re-bind drops the provenance: the board stops claiming it chose.
   expectJson(await app.post('/bind-workspace', {
     workspaceId: 'wa',
-    project: { owner: 'ceasarXuu', ownerType: 'user', number: 4, title: 'web-kanban', url: null, itemCount: 0, closed: false, description: null },
+    project: { owner: 'acme', ownerType: 'user', number: 4, title: 'web-kanban', url: null, itemCount: 0, closed: false, description: null },
   }))
   const after = expectJson(await app.get('/bindings'))
   assert.equal(after.workspaces.wa.number, 4)

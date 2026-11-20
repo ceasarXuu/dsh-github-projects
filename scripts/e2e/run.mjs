@@ -1004,7 +1004,7 @@ async function main() {
         // Detail-only markers before shooting (never capture the loading skeleton).
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'issue detail loading finished')
         await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(20_000), label: 'issue meta line' })
-        await waitForText(resources.cdp, '需求（用户', { timeoutMs: emitTimeout(20_000), label: 'issue body markdown' })
+        await waitForText(resources.cdp, 'Background', { timeoutMs: emitTimeout(20_000), label: 'issue body markdown' })
         await waitForText(resources.cdp, 'enhancement', { timeoutMs: emitTimeout(20_000), label: 'issue labels' })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-comment"]:not([class*="ghp-comments"])').length >= 1`, 'issue comments rendered')
         await settle(500)
@@ -2638,10 +2638,10 @@ async function unbindCurrentIssue(cdp, timeoutMs = 20_000) {
 
 /** The fixture Project used by the write-path stage (mock host `projects[0]`). */
 const WRITE_PROJECT = Object.freeze({
-  owner: 'ceasarXuu',
+  owner: 'acme',
   number: 9,
   title: 'web-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
 })
 

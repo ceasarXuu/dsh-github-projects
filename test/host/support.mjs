@@ -93,7 +93,7 @@ export function ghProjectNotFound(number) {
   return ghError(`GraphQL: Could not resolve to a ProjectV2 with the number ${String(number)}. (user.projectV2)`)
 }
 
-const PROJECT_OWNER = 'ceasarXuu'
+const PROJECT_OWNER = 'acme'
 const PR_NUMBER = 283
 
 /**
@@ -126,7 +126,7 @@ export async function fixtureRun(args) {
     if (/projectsV2\(first:50\)/u.test(query) || /repository\(owner:\$owner,name:\$repo\)/u.test(query)) {
       const owner = variables.owner
       const repo = variables.repo
-      if (owner !== 'ceasarXuu' || repo !== 'web') {
+      if (owner !== 'acme' || repo !== 'web') {
         return { stdout: `${JSON.stringify({ data: { repository: null }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }] })}\n`, stderr: '' }
       }
       return { stdout: `${JSON.stringify(fixture.graphqlRepoProjects)}\n`, stderr: '' }

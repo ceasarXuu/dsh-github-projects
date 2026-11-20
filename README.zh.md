@@ -77,38 +77,41 @@ dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
 清单——包含每一处宿主 DOM 依赖和每一处布局上限——见 **[已知限制](#已知限制)**。
 
 
-`01`–`09`、`12`–`14` 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集，1280×800；`11` 为同一 harness
-在 **2200×1300** 下最大化右侧栏采集；`16`–`18` 为 fixture 栈截图；`10` 为真实 Desktop 手动截图；
-`15` 由发布后的 release-smoke 重新生成。阶段定义与完整截图清单见
+下面每一张都是一个真实的 DeepSeek Harness 窗口在跑这个插件，数据来自 fixture 宿主
+（`dev/mock-host.js` + `test/fixtures`）：账号、仓库、Project 和 Issue 都是**生成的演示内容**，画面里
+不包含任何真实 GitHub 账号。`11` 为同一 harness 在 **2200×1300** 下最大化右侧栏采集；`15` 由发布后的
+release-smoke 在干净 profile 上重新生成。阶段定义与完整截图清单见
 [`scripts/e2e/README.md`](scripts/e2e/README.md)。
 
 | | |
 |---|---|
 | ![工作区分支标签与 Issue 副标题](artifacts/screenshots/17-workspace-branch.png) | ![自动绑定 Project](artifacts/screenshots/18-auto-bind.png) |
-| 工作区行在工作区名右侧显示该 checkout 的 **git branch 标签**（v1.2.0）；会话行与会话头部同时显示已绑定 Issue 的副标题（`#240 …`），`issue` 页展示该 Issue。 | **自动绑定（v1.3.0）**：看板直接以已绑定状态打开，并写明 `已根据仓库 acme/web 自动绑定`——Project 是从该 checkout 的 `origin` remote 找到的，不是手动挑的。 |
+| 工作区行在工作区名右侧显示该 checkout 的 **git branch 标签**（v1.2.0）；会话行与会话头部同时显示已绑定 Issue 的副标题，`issue` 页展示该 Issue。 | **自动绑定（v1.3.0）**：看板直接以已绑定状态打开，并写明它从哪个仓库推导出该 Project——Project 来自该 checkout 的 `origin` remote，不是手动挑的。 |
 | ![会话头部](artifacts/screenshots/01-tabs.png) | ![右侧栏未绑定空态](artifacts/screenshots/02-projects-empty.png) |
 | 会话头部保留 `对话 / 轨迹 / issue`（`projects` 页签已移除）；工作区行带看板图标。 | 点看板图标打开右侧栏 `项目` 面板：未绑定空态 + **选择 Project**。 |
 | ![Project 选择器](artifacts/screenshots/03-projects-picker.png) | ![泳道看板](artifacts/screenshots/04-projects-board.png) |
-| 选择器位于右侧栏面板内（按 owner 分组、可过滤）。 | 真实项目 #9 看板位于面板内：状态配色；空 No status 泳道自动隐藏（4 条泳道：TODO 27 / In Progress 1 / In Review 1 / Done 166，共 195）；默认只读提示可见。 |
+| 选择器位于右侧栏面板内（按 owner 分组、可过滤）。 | 看板位于面板内：状态配色；空 No status 泳道自动隐藏；共 9 个演示条目；默认只读提示可见。 |
 | ![列表视图](artifacts/screenshots/05-projects-list.png) | ![milestone 过滤](artifacts/screenshots/06-projects-milestone.png) |
-| 列表视图：状态色分组段 + 状态 chips（面板内）。 | milestone `v1.2.0` 筛选生效（195→19），No status 保持隐藏。 |
+| 列表视图：状态色分组段 + 状态 chips（面板内）。 | milestone `v1.2.0` 筛选生效（9→4），No status 保持隐藏。 |
 | ![Issue 未绑定空态](artifacts/screenshots/07-issue-empty.png) | ![Issue 详情](artifacts/screenshots/08-issue-detail.png) |
 | 未绑定会话：从项目选择或粘贴链接。 | 已绑定 Issue：绿色 Open 徽章、吸顶头部、正文、标签。 |
 | ![Issue 评论区](artifacts/screenshots/09-issue-comments.png) | ![最大化右侧栏看板](artifacts/screenshots/11-projects-wide.png) |
 | 评论：作者、相对时间与 GitHub 链接。 | **2200×1300**：最大化右侧栏看板——pane 2199px = 窗口 100%、`.ghp-page` 2191px = pane 99.6%、列宽均分。 |
 | ![系统浏览器打开](artifacts/screenshots/12-external-open.png) | ![Issue 副标题](artifacts/screenshots/13-issue-subtitle.png) |
 | 点 Issue 卡片正文在**系统默认浏览器**新标签页打开 GitHub，**不创建绑定**。绑定请用卡片上的「绑定」按钮。 | 已绑定会话标题下显示 `#N` chip + Issue 标题（单行省略；点击在系统浏览器打开）。 |
-| ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | ![真实 Desktop 手动截图](artifacts/screenshots/10-desktop-tabs.png) |
-| 左侧栏已绑定会话行：标题下第二行 `#240` chip + Issue 标题（行高 32→41px，无横向溢出）；副标题**不可交互**，点会话行只会打开该会话；绑定变化经 `/bindings` 同步。 | **真实 Desktop 应用**安装后的手动截图：三个已绑定会话行各显示第二行 Issue 副标题（`#240 …` / `#289 …` / `#240 …`，均裁在行内），footer/头像区域干净（`1438×1370`，sha256 `3860f7b9…988c`；头部页签 `对话 / 轨迹 / issue`）。 |
+| ![侧栏会话行副标题](artifacts/screenshots/14-sidebar-subtitle.png) | ![发布版安装](artifacts/screenshots/15-published-install.png) |
+| 左侧栏已绑定会话行：标题下第二行 `#N` chip + Issue 标题（行高 32→41px，无横向溢出）；副标题**不可交互**，点会话行只会打开该会话；绑定变化经 `/bindings` 同步。 | 已发布版本从 npm 安装到干净 `web` profile——每次发布后由 release-smoke 重新生成。 |
 | ![发布版安装](artifacts/screenshots/15-published-install.png) | ![Status 写路径](artifacts/screenshots/16-projects-status-write.png) |
 | 已发布版本安装到干净 `web` profile——每次发布后由 release-smoke 重新生成。 | **写路径**（fixture 栈，`allowWrites: true`）：通过「移动到」菜单把卡片 TODO→In Progress；成功 toast 带撤销；失败会回滚卡片。 |
 
-`01`–`09`、`12`–`14` 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集（真实 Project #9 与 Issue #240；
-1280×800；`09` 需 `--extra-comments`）；`11` 为同一 harness 在 **2200×1300** 下最大化右侧栏采集。
-`16-projects-status-write.png` 为 fixture 专用写路径证据（第二个隔离栈，`allowWrites: true`；只读默认态
-见 `04-projects-board.png` 中的只读提示）。`10-desktop-tabs.png` 为真实 Desktop 应用手动截图（非
-harness 产出）。`15-published-install.png` 在发布后由干净 profile release-smoke 重新生成。看板/选择器
-截图（`02`–`06`、`12`）为右侧栏面板形态；`07`/`08`/`13`/`14` 与之前一样在右侧栏收起时采集。
+`01`–`09`、`11`–`14`、`16`–`18` 由隔离 e2e 在 fixture 模式下采集，1280×800（`09` 需
+`--extra-comments`）；`11` 为同一 harness 在 **2200×1300** 下最大化右侧栏采集。
+`16-projects-status-write.png` 为写路径证据（第二个隔离栈，`allowWrites: true`；只读默认态见
+`04-projects-board.png` 中的只读提示）。`15-published-install.png` 在发布后由干净 profile 的
+release-smoke 重新生成。看板/选择器截图（`02`–`06`、`12`）为右侧栏面板形态；`07`/`08`/`13`/`14`
+在右侧栏收起时采集。
+
+重新采集这一套：`node scripts/e2e/run.mjs --mode fixture --extra-comments`。
 
 ## 工作方式
 

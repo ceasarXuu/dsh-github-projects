@@ -103,7 +103,7 @@ The run prints one JSON line per stage: `{"step": "<name>", "ok": true|false, "d
 | 14 | `sidebar-subtitle` | **v1.0.1 §4.6**: with the session still bound to #240, waits up to 6 s for the left-sidebar decorator (module-level binding map from `GET /bindings`, SWR poll ≈4 s) to inject the row subtitle: exactly one `[data-ghp-sidebar-subtitle]` — a plain **`span`, not a button** — inside the bound `[data-row-key^="session:"]` row, chip `#240`, full `repo#N title` in the `title` attribute, row ≥ 40px, subtitle below the row title; **no horizontal overflow** (subtitle right ≤ row content right, row and sidebar tree/list `scrollWidth ≤ clientWidth + 1` — the stray-scrollbar user bug); **non-interactive click behavior**: a real mouse click at the subtitle coordinates must not call `window.open`, must not navigate (`location.href` unchanged) and must keep the same session row selected and the current issue view open (the shipped row `onOpen` is a no-op for the already-selected session; Lead confirmed `对话` must not be required there); then the stage returns to the `issue` view for the whole-window screenshot | `14-sidebar-subtitle.png` |
 | 15 | `project-picker-replay` | v1.0.2 picker replay regression (frozen from the preview probe): after resetting the session Issue binding through the shipped unbind flow, asserts an explicit `从项目选择` opens the sidebar picker exactly once; choosing a project closes the picker, consumes the one-shot intent (no replay on remount), keeps one sidebar tab / expanded sidebar / `data-ghp-workspace-entry-bound="1"`; session switch-away/return and sidebar collapse/expand do not replay it; a second explicit open opens exactly once and can be dismissed with no replay; then the existing Issue-binding path still works from the sidebar board (issue detail + header/sidebar subtitles kept after a session switch, one sidebar tab) | — |
 | 16 | `projects-warm` | **v0.4.0 §3.5** adapted to v1.0.2: closes the right-sidebar `项目` tab through its dockkit context menu (this unmounts the pane/`ProjectsView`), asserts the pane is gone, then reopens it from the workspace-row board icon and measures until the cached `[data-ghp-view-mode="board"]`/board renders with **no** `[class*="ghp-skeleton"]`; asserts ≤ **1500 ms** and that no cold skeleton was ever rendered (module-level SWR cache hit), and logs the cold duration from `projects-board` (`coldBoardMs`) alongside `warmMs` | — |
-| 16b | `projects-status-write` | **v1.1.0 §4.8**, fixture mode only: boots a **second** isolated fixture stack with `allowWrites: true` in the overlay row config, then asserts the write UI (`draggable` + grip + `移动到` on every card, canonical drop lanes, `/project-meta` requested, move menu = every option + clear with the current one active); TODO → In Progress repaints the card in the target lane and `mock-state.writes[0]` = `{itemId PVTI_lAHOAwDbXM4Bocj3zhDFe-U, optionId 47fc9ee4, name "In Progress", ok:true, owner ceasarXuu, number 9}`; success toast carries Undo and Undo re-POSTs the previous TODO option `8fc1d6c9` (`writes[1]`, statuses back to `TODO`); the deterministic failure item `PVTI_mock_write_failure` gets 502 `gh-failed` (`writes[2]`, `ok:false`) with rollback to TODO + error toast; write-stack `/item-status` responses `[200,200,502]` and no browser errors | `16-projects-status-write.png` |
+| 16b | `projects-status-write` | **v1.1.0 §4.8**, fixture mode only: boots a **second** isolated fixture stack with `allowWrites: true` in the overlay row config, then asserts the write UI (`draggable` + grip + `移动到` on every card, canonical drop lanes, `/project-meta` requested, move menu = every option + clear with the current one active); TODO → In Progress repaints the card in the target lane and `mock-state.writes[0]` = `{itemId PVTI_lAHOAwDbXM4Bocj3zhDFe-U, optionId 47fc9ee4, name "In Progress", ok:true, owner acme, number 9}`; success toast carries Undo and Undo re-POSTs the previous TODO option `8fc1d6c9` (`writes[1]`, statuses back to `TODO`); the deterministic failure item `PVTI_mock_write_failure` gets 502 `gh-failed` (`writes[2]`, `ok:false`) with rollback to TODO + error toast; write-stack `/item-status` responses `[200,200,502]` and no browser errors | `16-projects-status-write.png` |
 | 17 | `console` | zero browser console errors, zero uncaught exceptions, zero unexpected plugin HTTP ≥400 responses (the single intentional read-only `POST /item-status` 403 probe is allowlisted by exact URL/status; everything else still fails), zero plugin network failures, and — v1.1.0 — **zero `/project-meta` requests / zero 2xx `/item-status` responses in the default/real stack** (warnings are reported, not failed; the benign-console allowlist is **empty**). The stage also asserts a boolean `stale` on every 2xx `/projects`, `/items`, `/issue` response and logs per-request host timings | — |
 
 Screenshots are 1280×800 viewport PNGs written to
@@ -127,7 +127,7 @@ artifact cleanup preserves it.
 Board screenshots reflect the v0.3.0 hidden-empty-No-status rule: fixture mode
 shows five lanes, real Project #9 shows four lanes with
 `data-ghp-hidden-lanes="no-status"`.
-`10-desktop-tabs.png` is **not** produced by this harness: it is the manual
+`10-desktop-tabs.png` was retired for privacy (a real Desktop window); it is **not** produced
 evidence from the user's installed Desktop app (full-window screenshot of a real
 session header showing `对话 | 轨迹 | issue` plus the workspace-row board icon).
 The harness deletes stale numbered shots from earlier runs (and `09` unless
@@ -154,7 +154,7 @@ The harness deletes stale numbered shots from earlier runs (and `09` unless
   - Chrome: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (v156)
 - Node.js ≥ 22 (validated on Node 24; the harness uses the global `WebSocket`/`fetch` and `node:*` only — no npm dependencies).
 - `--mode real` additionally needs the GitHub CLI (`gh` ≥ 2.4, `gh auth login`
-  completed; validated with `gh` 2.96.0, account `ceasarXuu`). All `gh` use is
+  completed; validated with `gh` 2.96.0, account `acme`). All `gh` use is
   read-only (`gh api user`, `gh api user/orgs`, `gh project list`,
   `gh project item-list`, `gh api repos/.../issues/...`).
 
@@ -374,7 +374,7 @@ default + opt-in `allowWrites` write path).
 | Mode | Command | Exit | Run dir |
 |---|---|---|---|
 | fixture | `node scripts/e2e/run.mjs --mode fixture --extra-comments --keep` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-13-691Z` (write stack: `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-13-691Z-write-fixture`) |
-| real (`gh` 2.96.0, `ceasarXuu`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-44-274Z` |
+| real (`gh` 2.96.0, `acme`, Project #9) | `node scripts/e2e/run.mjs --mode real --keep --extra-comments` | `0` (PASS) | `/tmp/dsh-github-projects-e2e/2026-10-29T00-17-44-274Z` |
 
 **21/21 stages `ok:true`** in fixture mode (both new v1.1.0 stages; `issue-comments`
 included via `--extra-comments`) and **21/21** in real mode (`projects-status-write`
@@ -406,7 +406,7 @@ v1.1.0 evidence:
   98236657 (Done), clear]` with TODO active. TODO → In Progress painted the card
   in the target lane and `mock-state.writes[0] = {itemId
   PVTI_lAHOAwDbXM4Bocj3zhDFe-U, optionId 47fc9ee4, name "In Progress", ok: true,
-  owner ceasarXuu, number 9}` (mock status `In Progress`); success toast with
+  owner acme, number 9}` (mock status `In Progress`); success toast with
   Undo. Undo re-POSTed the previous TODO option `8fc1d6c9`
   (`writes[1]`, mock status back to `TODO`). The deterministic failure item
   `PVTI_mock_write_failure` got `writes[2] = {itemId PVTI_mock_write_failure,
@@ -424,7 +424,7 @@ Final artifact set (`artifacts/screenshots/`):
 | File | Source | Size |
 |---|---|---|
 | `01-tabs.png` … `09-issue-comments.png` | `run.mjs` authoritative run (09 via `--extra-comments`) | 1280×800 |
-| `10-desktop-tabs.png` | **manual** Desktop-app evidence (Lead), never harness-written | full app window |
+| ~~`10-desktop-tabs.png`~~ | retired: a real Desktop capture carried a real account's data | — |
 | `11-projects-wide.png` | `run.mjs`, `projects-wide` (maximized right-sidebar board) | 2200×1300 |
 | `12-external-open.png` | `run.mjs`, `projects-external-open` (system-browser open) | 1280×800 |
 | `13-issue-subtitle.png` | `run.mjs`, `issue-bind-subtitle` | 1280×800 |
