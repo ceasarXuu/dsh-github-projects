@@ -264,15 +264,15 @@ Request bodies (POST, `content-type: application/json`, ≤ 64 KiB):
 // POST /bind-workspace
 { "sessionId": "session-…", "workspaceId": "uuid", "workspacePath": "/abs/path",
   "project": { "owner": "ceasarXuu", "ownerType": "user", "number": 9,
-               "title": "Astropath-issues", "url": "...", "itemCount": 195, "closed": false,
+               "title": "web-issues", "url": "...", "itemCount": 195, "closed": false,
                "description": null } }
 // -> { "ok": true, "workspace": { "workspaceId": "uuid", "project": Project } }
 
 // POST /bind-issue — two accepted forms
 { "sessionId": "session-…", "workspaceId": "uuid",
-  "issue": { "repo": "ceasarXuu/Astropath", "number": 240, "title": "…", "url": "…", "state": "open" } }
+  "issue": { "repo": "ceasarXuu/web", "number": 240, "title": "…", "url": "…", "state": "open" } }
 { "sessionId": "session-…", "workspaceId": "uuid",
-  "ref": "https://github.com/ceasarXuu/Astropath/issues/240" }   // or "ceasarXuu/Astropath#240"
+  "ref": "https://github.com/ceasarXuu/web/issues/240" }   // or "ceasarXuu/web#240"
 // -> { "ok": true, "session": { "sessionId": "...", "issue": IssueSummary, "workspaceId": "uuid" } }
 ```
 
@@ -403,7 +403,7 @@ directory):
   },
   "sessions": {
     "<sessionId>": {
-      "issue": { "repo": "ceasarXuu/Astropath", "number": 240, "title": "...",
+      "issue": { "repo": "ceasarXuu/web", "number": 240, "title": "...",
                  "url": "...", "state": "open" },
       "workspaceId": "uuid",
       "boundAt": "2026-10-28T04:00:00.000Z"
@@ -942,7 +942,7 @@ Isolated environment, never the user's `~/.dsh` profile or port:
    - `app`, `session` — shell ready, one real turn completes;
    - `tabs` — `["对话","轨迹","projects","issue"]`; `01-tabs.png`;
    - `projects-empty` — unbound state; `02-projects-empty.png`;
-   - `projects-picker` — picker open, binds `Astropath-issues` #9; `03-projects-picker.png`;
+   - `projects-picker` — picker open, binds `web-issues` #9; `03-projects-picker.png`;
    - `projects-board` — board is the default mode: `data-ghp-view-mode="board"`, rendered lane keys
      are a subsequence of `no-status,todo,in-progress,in-review,done` (plus trailing `other:*`),
      `No status` present iff not listed in `[data-ghp-board][data-ghp-hidden-lanes]` and hidden when
@@ -994,7 +994,7 @@ Isolated environment, never the user's `~/.dsh` profile or port:
      move menu; assert the optimistic lane change, the host mutation payload (`itemId`/`optionId`),
      the success toast + Undo (which moves it back), and that an injected failure item rolls the card
      back with the failure toast; screenshot.
-   - `10-desktop-tabs.png` is NOT produced by the harness: it is the manual Desktop-app evidence
+   - `10-desktop-tabs.png` was retired for privacy: it is NOT produced by the harness and was the manual Desktop-app evidence
      captured by the Lead after the final install; `11-projects-wide.png`,
      `12-external-open.png` and `13-issue-subtitle.png` are harness output.
 6. Cleanup: kill the web child and Chrome; print a machine-readable summary (JSON lines) and exit

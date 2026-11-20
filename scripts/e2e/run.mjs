@@ -455,7 +455,7 @@ async function main() {
     if (gated('projects-picker')) {
       const pickerOk = await runStage('projects-picker', async () => {
         assert(await clickButton(resources.cdp, { text: '选择 Project' }), 'could not open the project picker ("选择 Project" button)')
-        await waitForText(resources.cdp, 'Astropath-issues', { timeoutMs: emitTimeout(30_000) })
+        await waitForText(resources.cdp, 'web-issues', { timeoutMs: emitTimeout(30_000) })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-picker-row"]').length >= 1`, 'picker rows rendered')
         await waitForPlugin(`!document.querySelector('[class*="ghp-picker-loading"]')`, 'picker loading finished')
         // v1.0.2: the picker panel is portal'd to document.body (so no ancestor
@@ -506,10 +506,10 @@ async function main() {
     if (gated('projects-board')) {
       const projectsBoardOk = await runStage('projects-board', async () => {
         const boardStarted = Date.now()
-        const clicked = await clickTextRow(resources.cdp, 'Astropath-issues')
-        assert(clicked, 'could not select the "Astropath-issues" row in the picker')
+        const clicked = await clickTextRow(resources.cdp, 'web-issues')
+        assert(clicked, 'could not select the "web-issues" row in the picker')
         // Bound toolbar: project title, item count, view-mode toggle and filter.
-        await waitForText(resources.cdp, 'Astropath-issues', { timeoutMs: emitTimeout(30_000) })
+        await waitForText(resources.cdp, 'web-issues', { timeoutMs: emitTimeout(30_000) })
         await waitForText(resources.cdp, '解绑', { timeoutMs: emitTimeout(20_000) })
         await waitForText(resources.cdp, '刷新', { timeoutMs: emitTimeout(20_000) })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'project board loading finished')
@@ -639,8 +639,8 @@ async function main() {
     if (gated('projects-external-open')) {
       const externalOpenOk = await runStage('projects-external-open', async () => {
         await waitForBoard(resources.cdp, emitTimeout(20_000))
-        const issueRef = 'ceasarXuu/Astropath#240'
-        const expectedUrl = 'https://github.com/ceasarXuu/Astropath/issues/240'
+        const issueRef = 'acme/web#240'
+        const expectedUrl = 'https://github.com/acme/web/issues/240'
         const bindActionPresent = await cardHasAction(resources.cdp, issueRef, 'bind')
         assert(bindActionPresent, `card ${issueRef} has no explicit [data-ghp-card-action="bind"] button`)
         // Stub window.open BEFORE the click; the stub records every invocation.
@@ -927,7 +927,7 @@ async function main() {
         const board = await openProjectBoard(resources.cdp, { expectWorkspaceId: workspaceId })
         assert(board.board, `the bound board is not rendered in the right-sidebar pane before the explicit bind: ${JSON.stringify(board)}`)
         await waitForBoard(resources.cdp, emitTimeout(30_000))
-        const issueRef = 'ceasarXuu/Astropath#240'
+        const issueRef = 'acme/web#240'
         const clicked = await clickCardAction(resources.cdp, issueRef, 'bind')
         assert(clicked, `could not click [data-ghp-card-action="bind"] on card ${issueRef}`)
         await settle(400)
@@ -952,7 +952,7 @@ async function main() {
         assert(subtitle.chipText.replace(/\s+/gu, '') === '#240', `subtitle chip text is ${JSON.stringify(subtitle.chipText)}, expected "#240"`)
         assert(subtitle.titleText.length > 0, 'subtitle title text is empty')
         assert(subtitle.titleAttr.length > 0, 'subtitle title attribute (full text) is empty')
-        assert(subtitle.titleAttr.includes('会话名称丰富化'), `subtitle title attribute does not carry the full issue title: ${JSON.stringify(subtitle.titleAttr.slice(0, 120))}`)
+        assert(subtitle.titleAttr.includes('Tidy label picker'), `subtitle title attribute does not carry the full issue title: ${JSON.stringify(subtitle.titleAttr.slice(0, 120))}`)
         assert(subtitle.inHeader, 'subtitle row is not inside the session header (header[data-window-drag])')
         // v0.4.0 placement: the subtitle must be its own header row ABOVE the
         // conversation view-tab row (regression: it used to land inside the tab
@@ -999,12 +999,12 @@ async function main() {
         }
         await waitForPlugin(`document.querySelector('[class*="ghp-issue-head"]') !== null`, 'issue detail header rendered')
         await waitForText(resources.cdp, '#240', { timeoutMs: emitTimeout(30_000) })
-        await waitForText(resources.cdp, 'ceasarXuu/Astropath', { timeoutMs: emitTimeout(20_000) })
-        await waitForText(resources.cdp, '会话名称丰富化', { timeoutMs: emitTimeout(20_000) })
+        await waitForText(resources.cdp, 'acme/web', { timeoutMs: emitTimeout(20_000) })
+        await waitForText(resources.cdp, 'Tidy label picker', { timeoutMs: emitTimeout(20_000) })
         // Detail-only markers before shooting (never capture the loading skeleton).
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-skeleton"]').length === 0`, 'issue detail loading finished')
         await waitForText(resources.cdp, '条评论', { timeoutMs: emitTimeout(20_000), label: 'issue meta line' })
-        await waitForText(resources.cdp, '需求（用户', { timeoutMs: emitTimeout(20_000), label: 'issue body markdown' })
+        await waitForText(resources.cdp, 'Background', { timeoutMs: emitTimeout(20_000), label: 'issue body markdown' })
         await waitForText(resources.cdp, 'enhancement', { timeoutMs: emitTimeout(20_000), label: 'issue labels' })
         await waitForPlugin(`document.querySelectorAll('[class*="ghp-comment"]:not([class*="ghp-comments"])').length >= 1`, 'issue comments rendered')
         await settle(500)
@@ -1047,7 +1047,7 @@ async function main() {
         assert(sidebar.chipText.replace(/\s+/gu, '') === '#240', `sidebar subtitle chip is ${JSON.stringify(sidebar.chipText)}, expected "#240"`)
         assert(sidebar.titleText.length > 0, 'sidebar subtitle title text is empty')
         assert(
-          sidebar.titleAttr.includes('ceasarXuu/Astropath#240') && sidebar.titleAttr.includes('会话名称丰富化'),
+          sidebar.titleAttr.includes('acme/web#240') && sidebar.titleAttr.includes('Tidy label picker'),
           `sidebar subtitle title attribute does not carry the full repo#N title: ${JSON.stringify(sidebar.titleAttr.slice(0, 160))}`,
         )
         assert(sidebar.rowHeight >= 40, `bound session row is ${sidebar.rowHeight}px high; the two-line row must be ≥ 40px (shipped single line is 32px)`)
@@ -1342,7 +1342,7 @@ async function main() {
           assert(body.reason === 'bound' || body.reason === 'bound-ambiguous',
             `auto-bind did not bind (reason=${JSON.stringify(body.reason)})`)
           assert(body.applied === true, `auto-bind did not apply the binding: ${JSON.stringify(body).slice(0, 300)}`)
-          assert(body.repository === 'ceasarXuu/Astropath',
+          assert(body.repository === 'acme/web',
             `auto-bind read repository ${JSON.stringify(body.repository)}, expected the fixture repo`)
           assert(body.project?.number === 9, `auto-bind bound Project ${JSON.stringify(body.project?.number)}, expected 9`)
 
@@ -1356,7 +1356,7 @@ async function main() {
           const entry = bindings.json?.workspaces?.[refs.workspaceId]
           assert(entry !== undefined, `the auto-bound workspace is absent from /bindings: ${JSON.stringify(bindings.json).slice(0, 300)}`)
           assert(entry.number === 9, `the durable binding has Project ${JSON.stringify(entry.number)}, expected 9`)
-          assert(entry.autoBind?.repository === 'ceasarXuu/Astropath',
+          assert(entry.autoBind?.repository === 'acme/web',
             `the durable binding carries no provenance: ${JSON.stringify(entry).slice(0, 300)}`)
 
           // 4. The sidebar icon lights up without the user picking anything.
@@ -1394,7 +1394,7 @@ async function main() {
           })()`)
           assert(note !== null, 'the auto-filled board shows no [data-ghp-autobind] note explaining the pick')
           assert(note.kind === '1' || note.kind === 'ambiguous', `unexpected data-ghp-autobind=${JSON.stringify(note.kind)}`)
-          assert(note.text.includes('ceasarXuu/Astropath'), `the note does not name the repository: ${JSON.stringify(note.text)}`)
+          assert(note.text.includes('acme/web'), `the note does not name the repository: ${JSON.stringify(note.text)}`)
           assert(typeof note.aria === 'string' && note.aria.length > 0, 'the auto-bind note has no accessible name')
           assert(note.role === 'note', `the auto-bind note should be role="note", got ${JSON.stringify(note.role)}`)
           assert(note.insideToolbar, 'the auto-bind note is rendered outside the board toolbar')
@@ -2638,10 +2638,10 @@ async function unbindCurrentIssue(cdp, timeoutMs = 20_000) {
 
 /** The fixture Project used by the write-path stage (mock host `projects[0]`). */
 const WRITE_PROJECT = Object.freeze({
-  owner: 'ceasarXuu',
+  owner: 'acme',
   number: 9,
-  title: 'Astropath-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  title: 'web-issues',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
 })
 

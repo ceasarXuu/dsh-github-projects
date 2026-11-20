@@ -1,1 +1,105 @@
-{"data":{"repository":{"nameWithOwner":"ceasarXuu/Astropath","hasProjectsEnabled":true,"projectsV2":{"totalCount":2,"nodes":[{"number":9,"title":"Astropath-issues","url":"https://github.com/users/ceasarXuu/projects/9","closed":false,"shortDescription":"Astropath Issue 看板：按版本 milestone 分视图，按 TODO / In Progress / In Review / Done 管理；平台通过 platform:* 标签区分。关闭包含完成、重复和不计划，具体以 Issue 原因及证据为准。","updatedAt":"2026-11-09T16:30:47Z","createdAt":"2026-10-23T19:47:58Z","items":{"totalCount":228},"owner":{"__typename":"User","login":"ceasarXuu"},"workflows":{"nodes":[{"name":"Auto-add sub-issues to project","enabled":true},{"name":"Auto-add to project","enabled":true},{"name":"Auto-close issue","enabled":true},{"name":"Item added to project","enabled":true},{"name":"Item closed","enabled":true},{"name":"Pull request linked to issue","enabled":true},{"name":"Pull request merged","enabled":true}]}},{"number":4,"title":"Astropath-kanban","url":"https://github.com/users/ceasarXuu/projects/4","closed":true,"shortDescription":null,"updatedAt":"2026-10-23T19:45:27Z","createdAt":"2026-10-12T23:15:02Z","items":{"totalCount":0},"owner":{"__typename":"User","login":"ceasarXuu"},"workflows":{"nodes":[{"name":"Auto-add sub-issues to project","enabled":false},{"name":"Auto-close issue","enabled":false},{"name":"Item added to project","enabled":false},{"name":"Item closed","enabled":false},{"name":"Pull request linked to issue","enabled":false},{"name":"Pull request merged","enabled":false}]}}]}}}}
+{
+ "data": {
+  "repository": {
+   "nameWithOwner": "acme/web",
+   "hasProjectsEnabled": true,
+   "projectsV2": {
+    "totalCount": 2,
+    "nodes": [
+     {
+      "number": 9,
+      "title": "web-issues",
+      "url": "https://github.com/users/acme/projects/9",
+      "closed": false,
+      "shortDescription": "Web issue board: grouped by release milestone, tracked through TODO / In Progress / In Review / Done. Platform differences are carried by platform:* labels.",
+      "updatedAt": "2026-11-09T16:30:47Z",
+      "createdAt": "2026-10-23T19:47:58Z",
+      "items": {
+       "totalCount": 228
+      },
+      "owner": {
+       "__typename": "User",
+       "login": "acme"
+      },
+      "workflows": {
+       "nodes": [
+        {
+         "name": "Auto-add sub-issues to project",
+         "enabled": true
+        },
+        {
+         "name": "Auto-add to project",
+         "enabled": true
+        },
+        {
+         "name": "Auto-close issue",
+         "enabled": true
+        },
+        {
+         "name": "Item added to project",
+         "enabled": true
+        },
+        {
+         "name": "Item closed",
+         "enabled": true
+        },
+        {
+         "name": "Pull request linked to issue",
+         "enabled": true
+        },
+        {
+         "name": "Pull request merged",
+         "enabled": true
+        }
+       ]
+      }
+     },
+     {
+      "number": 4,
+      "title": "web-kanban",
+      "url": "https://github.com/users/acme/projects/4",
+      "closed": true,
+      "shortDescription": null,
+      "updatedAt": "2026-10-23T19:45:27Z",
+      "createdAt": "2026-10-12T23:15:02Z",
+      "items": {
+       "totalCount": 0
+      },
+      "owner": {
+       "__typename": "User",
+       "login": "acme"
+      },
+      "workflows": {
+       "nodes": [
+        {
+         "name": "Auto-add sub-issues to project",
+         "enabled": false
+        },
+        {
+         "name": "Auto-close issue",
+         "enabled": false
+        },
+        {
+         "name": "Item added to project",
+         "enabled": false
+        },
+        {
+         "name": "Item closed",
+         "enabled": false
+        },
+        {
+         "name": "Pull request linked to issue",
+         "enabled": false
+        },
+        {
+         "name": "Pull request merged",
+         "enabled": false
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

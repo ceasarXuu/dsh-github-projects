@@ -1,1 +1,1 @@
-orgs: XuyuTech, BeanDoor
+orgs: acme-labs, northwind

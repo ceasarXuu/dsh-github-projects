@@ -11,21 +11,21 @@ import { test } from 'node:test'
 import { createStateStore, STATE_WRITE_FAILED } from '../../state.js'
 
 const PROJECT = {
-  owner: 'ceasarXuu',
+  owner: 'acme',
   ownerType: 'user',
   number: 9,
-  title: 'Astropath-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  title: 'web-issues',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
   closed: false,
   description: null,
 }
 
 const ISSUE = {
-  repo: 'ceasarXuu/Astropath',
+  repo: 'acme/web',
   number: 240,
-  title: '会话名称丰富化',
-  url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+  title: 'Tidy label picker',
+  url: 'https://github.com/acme/web/issues/240',
   state: 'open',
 }
 
@@ -95,7 +95,7 @@ test('read() answers a defensive copy that cannot mutate the store', async () =>
     const snapshot = store.read()
     snapshot.workspaces['w-1'].project.title = 'mutated'
     snapshot.workspaces['w-2'] = { project: PROJECT }
-    assert.equal(store.getWorkspace('w-1').project.title, 'Astropath-issues')
+    assert.equal(store.getWorkspace('w-1').project.title, 'web-issues')
     assert.equal(store.getWorkspace('w-2').project, null)
   } finally {
     cleanup(dir)
@@ -261,16 +261,16 @@ test('an automatic binding records its repository and survives a reload', async 
   t.after(() => cleanup(dir))
   const path = join(dir, 'state.json')
   const store = createStateStore(path)
-  await store.bindWorkspace('w1', PROJECT, { repository: 'ceasarXuu/Astropath', ambiguous: true, considered: 2 })
+  await store.bindWorkspace('w1', PROJECT, { repository: 'acme/web', ambiguous: true, considered: 2 })
 
   const binding = store.getWorkspace('w1')
-  assert.equal(binding.autoBind.repository, 'ceasarXuu/Astropath')
+  assert.equal(binding.autoBind.repository, 'acme/web')
   assert.equal(binding.autoBind.ambiguous, true)
   assert.equal(binding.autoBind.considered, 2)
   assert.equal(typeof binding.autoBind.appliedAt, 'string')
 
   const reopened = createStateStore(path)
-  assert.equal(reopened.getWorkspace('w1').autoBind.repository, 'ceasarXuu/Astropath')
+  assert.equal(reopened.getWorkspace('w1').autoBind.repository, 'acme/web')
 
   // Re-binding by hand clears the claim it was automatic.
   await reopened.bindWorkspace('w1', { ...PROJECT, number: 4 })

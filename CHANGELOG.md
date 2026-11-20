@@ -30,7 +30,7 @@ read-only until `allowWrites` is switched on.
 ### Performance
 
 - Project items are read **100 per page** instead of 50 — the page size `github.js` documents. For
-  Astropath-issues (229 items, cap 200) that is 4 paginated `gh` calls down to 2.
+  web-issues (229 items, cap 200) that is 4 paginated `gh` calls down to 2.
 - The panel **paints the first page** and fills in the remaining pages in the background, instead of
   waiting for every page before showing anything.
 - Opening the panel uses the **SWR cache** rather than forcing a cold read each time; only 刷新 and a
@@ -56,7 +56,7 @@ yourself is never touched.
   the repository's intended board, otherwise the **most recently updated** open Project. A remote
   that is not `github.com` (a local mirror, GitLab, Bitbucket) is never guessed into a GitHub repo.
 - **It explains itself.** An auto-filled board shows one muted line in its toolbar —
-  `已根据仓库 ceasarXuu/Astropath 自动绑定 Project「Astropath-issues」` — and says so explicitly when
+  `已根据仓库 ceasarXuu/web 自动绑定 Project「web-issues」` — and says so explicitly when
   the repository links several Projects and the pick was a choice. The note reads the durable
   binding's provenance, so it survives a reload and a restart, and it disappears the moment you bind
   by hand. `更换` stays the way to overrule it.
@@ -87,7 +87,7 @@ workspace's directory is currently on, right next to the workspace name. It is a
 never `gh`, never the network, no auth — and it is decoration: a read-only chip that never changes a
 branch, a file, or a GitHub object.
 
-- **The chip.** `Astropath  main  ▣` — one muted chip to the right of the workspace title, before the
+- **The chip.** `web  main  ▣` — one muted chip to the right of the workspace title, before the
   board entry icon. It is a plain `span` with no click handler, so clicking it just toggles the
   workspace row like clicking the name does. A **detached HEAD** shows `@<short sha>` in a muted warn
   colour, a **workspace that is not a git repository** shows no chip at all rather than a placeholder,

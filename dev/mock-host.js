@@ -27,6 +27,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 const fixtureDir = join(here, '..', 'test', 'fixtures')
 const readJson = name => JSON.parse(readFileSync(join(fixtureDir, name), 'utf8'))
 
+// v1.4.0: the browser half loads the panel through the plugin's own HTTP route
+// (`client.js` does `import(`${API_BASE}/sidebar-client.js`)`), and only on the
+// sidebar surface. Without these four the import 404s and the panel silently
+// falls back to nothing — the failure was swallowed by a .catch(console.warn).
+const CLIENT_MODULES = new Set(['sidebar-client.js', 'sidebar-view.js', 'sidebar-detail.js', 'sidebar-style.js'])
+
 const projectList = readJson('project-list.json')
 const itemList = readJson('item-list.json')
 const issueFixture = readJson('issue.json')
@@ -85,7 +91,7 @@ function itemOf(raw) {
 
 function issueOf(raw, comments) {
   return {
-    repo: String(raw.html_url ?? '').match(/github\.com\/([^/]+\/[^/]+)\/issues\//u)?.[1] ?? 'ceasarXuu/Astropath',
+    repo: String(raw.html_url ?? '').match(/github\.com\/([^/]+\/[^/]+)\/issues\//u)?.[1] ?? 'acme/web',
     number: raw.number,
     title: raw.title ?? '',
     url: raw.html_url ?? '',
@@ -119,7 +125,7 @@ const MOCK_FAILURE_ITEM = Object.freeze({
   id: 'PVTI_mock_write_failure',
   number: 9005,
   title: '[mock] 写入失败条目（e2e 回滚验证）',
-  repo: 'ceasarXuu/Astropath',
+  repo: 'acme/web',
 })
 
 /**
@@ -128,23 +134,23 @@ const MOCK_FAILURE_ITEM = Object.freeze({
  */
 const syntheticItems = [
   {
-    id: 'mock-item-todo-backlog', type: 'issue', number: 9001, repo: 'ceasarXuu/Astropath',
-    title: '[mock] 待定需求：未分配 milestone 的条目', url: 'https://github.com/ceasarXuu/Astropath/issues/9001',
+    id: 'mock-item-todo-backlog', type: 'issue', number: 9001, repo: 'acme/web',
+    title: '[mock] 待定需求：未分配 milestone 的条目', url: 'https://github.com/acme/web/issues/9001',
     state: 'OPEN', status: 'TODO', labels: ['todo', 'mock'], milestone: null,
   },
   {
-    id: 'mock-item-in-progress', type: 'issue', number: 9002, repo: 'ceasarXuu/Astropath',
-    title: '[mock] 进行中：验收 board 的 In Progress 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9002',
+    id: 'mock-item-in-progress', type: 'issue', number: 9002, repo: 'acme/web',
+    title: '[mock] 进行中：验收 board 的 In Progress 泳道', url: 'https://github.com/acme/web/issues/9002',
     state: 'OPEN', status: 'In Progress', labels: ['enhancement'], milestone: 'v1.2.0',
   },
   {
-    id: 'mock-item-no-status', type: 'issue', number: 9003, repo: 'ceasarXuu/Astropath',
-    title: '[mock] 无状态条目：验证 No status 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9003',
+    id: 'mock-item-no-status', type: 'issue', number: 9003, repo: 'acme/web',
+    title: '[mock] 无状态条目：验证 No status 泳道', url: 'https://github.com/acme/web/issues/9003',
     state: 'OPEN', status: null, labels: ['bug'], milestone: null,
   },
   {
-    id: 'mock-item-done', type: 'issue', number: 9004, repo: 'ceasarXuu/Astropath',
-    title: '[mock] 已完成条目：验证 Done 泳道', url: 'https://github.com/ceasarXuu/Astropath/issues/9004',
+    id: 'mock-item-done', type: 'issue', number: 9004, repo: 'acme/web',
+    title: '[mock] 已完成条目：验证 Done 泳道', url: 'https://github.com/acme/web/issues/9004',
     state: 'CLOSED', status: 'Done', labels: ['done'], milestone: 'v1.2.0',
   },
   {
@@ -228,14 +234,14 @@ function autoBindPayload(workspaceId) {
     return { enabled: true, applied: false, reason: 'already-bound' }
   }
   if (mode === 'no-project') {
-    return { enabled: true, applied: false, reason: 'no-project', repository: 'ceasarXuu/Astropath', project: null, ambiguous: false, considered: 0 }
+    return { enabled: true, applied: false, reason: 'no-project', repository: 'acme/web', project: null, ambiguous: false, considered: 0 }
   }
   const project = projects.find(entry => entry.number === 9) ?? projects[0]
   const ambiguous = mode === 'ambiguous'
   const binding = {
     project,
     autoBind: {
-      repository: 'ceasarXuu/Astropath',
+      repository: 'acme/web',
       ambiguous,
       considered: ambiguous ? 2 : 1,
       appliedAt: new Date().toISOString(),
@@ -247,7 +253,7 @@ function autoBindPayload(workspaceId) {
     workspaceId,
     applied: true,
     reason: ambiguous ? 'bound-ambiguous' : 'bound',
-    repository: 'ceasarXuu/Astropath',
+    repository: 'acme/web',
     project,
     ambiguous,
     considered: ambiguous ? 2 : 1,
@@ -317,7 +323,7 @@ function findProject(owner, number) {
 }
 
 function health() {
-  return { available: true, version: 'gh version 2.96.0 (mock)', account: 'ceasarXuu', error: null }
+  return { available: true, version: 'gh version 2.96.0 (mock)', account: 'acme', error: null }
 }
 
 function configFor(sessionId, workspaceId, allowWrites) {
@@ -391,6 +397,20 @@ async function handle(req, res, allowWrites) {
   const sessionId = query.get('sessionId') ?? ''
   const workspaceId = query.get('workspaceId') ?? ''
 
+  // Off by default: the e2e stages still assert the pre-1.4 board DOM, so serving
+  // the panel here changes what they see. Set DSH_MOCK_SERVE_CLIENT=1 to load the
+  // shipped 1.4 panel against fixture data (the "panel capture" path).
+  if (process.env.DSH_MOCK_SERVE_CLIENT === '1'
+    && req.method === 'GET' && CLIENT_MODULES.has(route.replace(/^\//u, ''))) {
+    const source = readFileSync(join(here, '..', route.replace(/^\//u, '')))
+    res.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-length': source.length,
+    })
+    return res.end(source)
+  }
+
   if (req.method === 'GET' && route === '/health') {
     return send(res, 200, { ok: true, gh: health() })
   }
@@ -421,7 +441,7 @@ async function handle(req, res, allowWrites) {
   if (req.method === 'GET' && route === '/projects') {
     await delay(180)
     return send(res, 200, {
-      owners: [{ login: 'ceasarXuu', type: 'user' }, { login: 'XuyuTech', type: 'organization' }],
+      owners: [{ login: 'acme', type: 'user' }, { login: 'acme-labs', type: 'organization' }],
       projects,
       fetchedAt: new Date().toISOString(),
       stale: false,

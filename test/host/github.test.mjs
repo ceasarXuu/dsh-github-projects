@@ -40,7 +40,7 @@ import {
   PROJECT_META_IDS,
 } from './support.mjs'
 
-const REPO = 'ceasarXuu/Astropath'
+const REPO = 'acme/web'
 const ITEM_240_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs'
 const ITEM_91_ID = 'PVTI_lAHOAwDbXM4Bocj3zhDFgtI'
 
@@ -54,14 +54,14 @@ function tempDir() {
 
 test('parseIssueRef accepts the documented reference forms', () => {
   const cases = [
-    ['https://github.com/ceasarXuu/Astropath/issues/240', { repo: REPO, number: 240 }],
-    ['http://github.com/ceasarXuu/Astropath/issues/240', { repo: REPO, number: 240 }],
-    ['https://www.github.com/ceasarXuu/Astropath/issues/240/', { repo: REPO, number: 240 }],
-    ['https://github.com/ceasarXuu/Astropath/issues/240?foo=1', { repo: REPO, number: 240 }],
-    ['https://github.com/ceasarXuu/Astropath/issues/240#issuecomment-1', { repo: REPO, number: 240 }],
-    ['github.com/ceasarXuu/Astropath/issues/240', { repo: REPO, number: 240 }],
-    ['  ceasarXuu/Astropath#240  ', { repo: REPO, number: 240 }],
-    ['ceasarXuu/Astropath 240', { repo: REPO, number: 240 }],
+    ['https://github.com/acme/web/issues/240', { repo: REPO, number: 240 }],
+    ['http://github.com/acme/web/issues/240', { repo: REPO, number: 240 }],
+    ['https://www.github.com/acme/web/issues/240/', { repo: REPO, number: 240 }],
+    ['https://github.com/acme/web/issues/240?foo=1', { repo: REPO, number: 240 }],
+    ['https://github.com/acme/web/issues/240#issuecomment-1', { repo: REPO, number: 240 }],
+    ['github.com/acme/web/issues/240', { repo: REPO, number: 240 }],
+    ['  acme/web#240  ', { repo: REPO, number: 240 }],
+    ['acme/web 240', { repo: REPO, number: 240 }],
   ]
   for (const [input, expected] of cases) {
     assert.deepEqual(parseIssueRef(input), expected, `input: ${input}`)
@@ -73,16 +73,16 @@ test('parseIssueRef rejects non-Issue or malformed references', () => {
     '',
     '   ',
     'not a reference',
-    'https://github.com/ceasarXuu/Astropath/pull/240',
-    'https://github.com/ceasarXuu/Astropath/issues/abc',
-    'https://github.com/ceasarXuu/Astropath/issues/0',
-    'https://github.com/ceasarXuu/Astropath/issues/240/extra',
-    'https://gitlab.com/ceasarXuu/Astropath/issues/240',
-    'ceasarXuu/Astropath#0',
-    'ceasarXuu/Astropath#12x',
-    'ceasarXuu/Astropath#123/4',
-    'ceasarXuu/Astropath   ',
-    'ceasarXuu/Astropath 0',
+    'https://github.com/acme/web/pull/240',
+    'https://github.com/acme/web/issues/abc',
+    'https://github.com/acme/web/issues/0',
+    'https://github.com/acme/web/issues/240/extra',
+    'https://gitlab.com/acme/web/issues/240',
+    'acme/web#0',
+    'acme/web#12x',
+    'acme/web#123/4',
+    'acme/web   ',
+    'acme/web 0',
     '../etc/passwd#1',
     'owner/repo/issue#1',
     'a'.repeat(600),
@@ -93,15 +93,15 @@ test('parseIssueRef rejects non-Issue or malformed references', () => {
 })
 
 test('repo/owner/number parameter validators reject traversal and junk', () => {
-  assert.deepEqual(parseRepoParam('ceasarXuu/Astropath'), { repo: REPO, owner: 'ceasarXuu', name: 'Astropath' })
-  assert.equal(parseRepoParam('ceasarXuu/../etc'), null)
-  assert.equal(parseRepoParam('../Astropath'), null)
-  assert.equal(parseRepoParam('ceasarXuu/Astropath/extra'), null)
-  assert.equal(parseRepoParam('ceasarXuu/'), null)
-  assert.equal(parseRepoParam('/Astropath'), null)
+  assert.deepEqual(parseRepoParam('acme/web'), { repo: REPO, owner: 'acme', name: 'web' })
+  assert.equal(parseRepoParam('acme/../etc'), null)
+  assert.equal(parseRepoParam('../web'), null)
+  assert.equal(parseRepoParam('acme/web/extra'), null)
+  assert.equal(parseRepoParam('acme/'), null)
+  assert.equal(parseRepoParam('/web'), null)
   assert.equal(parseRepoParam(''), null)
-  assert.equal(parseOwnerParam('ceasarXuu'), 'ceasarXuu')
-  assert.equal(parseOwnerParam('ceasarXuu/Astropath'), null)
+  assert.equal(parseOwnerParam('acme'), 'acme')
+  assert.equal(parseOwnerParam('acme/web'), null)
   assert.equal(parsePositiveInt('240'), 240)
   assert.equal(parsePositiveInt(240), 240)
   assert.equal(parsePositiveInt('0'), null)
@@ -117,18 +117,18 @@ test('normalizeProject maps the captured gh project list payload', () => {
   const [first] = fixture.projects.projects
   const project = normalizeProject(first)
   assert.deepEqual(project, {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     ownerType: 'user',
     number: 9,
-    title: 'Astropath-issues',
-    url: 'https://github.com/users/ceasarXuu/projects/9',
+    title: 'web-issues',
+    url: 'https://github.com/users/acme/projects/9',
     itemCount: 195,
     closed: false,
     description: first.shortDescription,
   })
   assert.ok(project.description.length > 0)
   // Organization owners are lowercased from gh's `Organization`.
-  assert.equal(normalizeProject({ number: 1, owner: { login: 'XuyuTech', type: 'Organization' } }).ownerType, 'organization')
+  assert.equal(normalizeProject({ number: 1, owner: { login: 'acme-labs', type: 'Organization' } }).ownerType, 'organization')
 })
 
 test('normalizeProject truncates shortDescription to 500 characters', () => {
@@ -144,8 +144,8 @@ test('normalizeProjectItem maps the captured item list payload', () => {
     type: 'issue',
     number: 240,
     repo: REPO,
-    title: '[v1.2.0][UI] 会话名称丰富化：双标题 / TUI icon / 路径·repo·branch / 运行·已读状态',
-    url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    title: '[v1.2.0][UI] Tidy label picker (91)',
+    url: 'https://github.com/acme/web/issues/240',
     state: null,
     status: 'In Progress',
     labels: ['enhancement', 'todo'],
@@ -185,22 +185,22 @@ test('normalizeProjectItem maps PRs, drafts, and missing milestones', () => {
 test('normalizeGraphqlProject maps a Projects v2 node; closed ones stay flagged', () => {
   const viewer = fixture.graphqlProjects.data.viewer
   const open = viewer.projectsV2.nodes.find(node => node.number === 9)
-  assert.deepEqual(normalizeGraphqlProject(open, { owner: 'ceasarXuu', ownerType: 'user' }), {
-    owner: 'ceasarXuu',
+  assert.deepEqual(normalizeGraphqlProject(open, { owner: 'acme', ownerType: 'user' }), {
+    owner: 'acme',
     ownerType: 'user',
     number: 9,
-    title: 'Astropath-issues',
-    url: 'https://github.com/users/ceasarXuu/projects/9',
+    title: 'web-issues',
+    url: 'https://github.com/users/acme/projects/9',
     itemCount: 195,
     closed: false,
     description: open.shortDescription,
   })
   const closed = viewer.projectsV2.nodes.find(node => node.number === 4)
-  assert.equal(normalizeGraphqlProject(closed, { owner: 'ceasarXuu', ownerType: 'user' }).closed, true)
+  assert.equal(normalizeGraphqlProject(closed, { owner: 'acme', ownerType: 'user' }).closed, true)
 
   // The items payload does not repeat `number`; the read target supplies it.
   const itemsProject = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2
-  assert.equal(normalizeGraphqlProject(itemsProject, { owner: 'ceasarXuu', ownerType: 'user', number: 9 }).number, 9)
+  assert.equal(normalizeGraphqlProject(itemsProject, { owner: 'acme', ownerType: 'user', number: 9 }).number, 9)
   assert.equal(
     normalizeGraphqlProject({ number: 1, shortDescription: 'x'.repeat(900) }, { owner: 'o' }).description.length,
     500,
@@ -208,8 +208,8 @@ test('normalizeGraphqlProject maps a Projects v2 node; closed ones stay flagged'
 })
 
 test('ownerTypeFromProjectUrl distinguishes user and organization Projects', () => {
-  assert.equal(ownerTypeFromProjectUrl('https://github.com/users/ceasarXuu/projects/9'), 'user')
-  assert.equal(ownerTypeFromProjectUrl('https://github.com/orgs/XuyuTech/projects/2'), 'organization')
+  assert.equal(ownerTypeFromProjectUrl('https://github.com/users/acme/projects/9'), 'user')
+  assert.equal(ownerTypeFromProjectUrl('https://github.com/orgs/acme-labs/projects/2'), 'organization')
   assert.equal(ownerTypeFromProjectUrl(null), 'user')
   assert.equal(ownerTypeFromProjectUrl('https://example.com/x'), 'user')
 })
@@ -220,9 +220,9 @@ test('normalizeGraphqlItem maps Issue / PullRequest / DraftIssue nodes', () => {
     id: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs',
     type: 'issue',
     number: 240,
-    repo: 'ceasarXuu/Astropath',
-    title: '[v1.2.0][UI] 会话名称丰富化：双标题 / TUI icon / 路径·repo·branch / 运行·已读状态',
-    url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    repo: 'acme/web',
+    title: '[v1.2.0][UI] Tidy label picker (91)',
+    url: 'https://github.com/acme/web/issues/240',
     state: 'OPEN',
     status: 'In Progress',
     labels: ['enhancement', 'todo'],
@@ -274,12 +274,12 @@ test('normalizeGraphqlItem maps Issue / PullRequest / DraftIssue nodes', () => {
 
 test('normalizeProjectMeta maps the captured Project status-field payload', () => {
   const node = fixture.graphqlProjectMeta.data.repositoryOwner.projectV2
-  assert.deepEqual(normalizeProjectMeta(node, { owner: 'ceasarXuu', number: 9 }), {
+  assert.deepEqual(normalizeProjectMeta(node, { owner: 'acme', number: 9 }), {
     project: {
       id: PROJECT_META_IDS.projectId,
-      owner: 'ceasarXuu',
+      owner: 'acme',
       number: 9,
-      title: 'Astropath-issues',
+      title: 'web-issues',
     },
     statusField: {
       id: PROJECT_META_IDS.statusFieldId,
@@ -310,10 +310,10 @@ test('normalizeIssue maps the captured REST issue + comments payload', () => {
   assert.equal(issue.repo, REPO)
   assert.equal(issue.number, 240)
   assert.equal(issue.state, 'open')
-  assert.equal(issue.author, 'ceasarXuu')
+  assert.equal(issue.author, 'acme')
   assert.equal(issue.createdAt, '2026-10-14T21:25:15Z')
   assert.equal(issue.updatedAt, '2026-10-26T11:26:01Z')
-  assert.equal(issue.url, 'https://github.com/ceasarXuu/Astropath/issues/240')
+  assert.equal(issue.url, 'https://github.com/acme/web/issues/240')
   assert.deepEqual(issue.labels, ['enhancement', 'todo'])
   assert.deepEqual(issue.assignees, [])
   assert.equal(issue.body.length, fixture.issue.body.length)
@@ -321,7 +321,7 @@ test('normalizeIssue maps the captured REST issue + comments payload', () => {
   assert.equal(issue.commentCount, 5)
   assert.equal(issue.comments.length, 5)
   assert.equal(issue.commentsTruncated, false)
-  assert.deepEqual(issue.comments.map(comment => comment.author), Array(5).fill('ceasarXuu'))
+  assert.deepEqual(issue.comments.map(comment => comment.author), Array(5).fill('acme'))
   assert.equal(issue.comments[0].id, String(fixture.comments[0].id))
   assert.equal(issue.comments[0].url, fixture.comments[0].html_url)
   for (let index = 1; index < issue.comments.length; index += 1) {
@@ -331,7 +331,7 @@ test('normalizeIssue maps the captured REST issue + comments payload', () => {
     repo: REPO,
     number: 240,
     title: fixture.issue.title,
-    url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    url: 'https://github.com/acme/web/issues/240',
     state: 'open',
   })
 })
@@ -373,7 +373,7 @@ test('health reports version + account from the fixture runner', async () => {
   assert.deepEqual(await gh.health(), {
     available: true,
     version: 'gh version 2.96.0 (2026-07-02)',
-    account: 'ceasarXuu',
+    account: 'acme',
     error: null,
   })
 })
@@ -383,9 +383,9 @@ test('listProjects makes ONE GraphQL call and drops closed Projects', async () =
   const gh = createGh({ run: runner })
   const result = await gh.listProjects()
   assert.deepEqual(result.owners, [
-    { login: 'ceasarXuu', type: 'user' },
-    { login: 'XuyuTech', type: 'organization' },
-    { login: 'BeanDoor', type: 'organization' },
+    { login: 'acme', type: 'user' },
+    { login: 'acme-labs', type: 'organization' },
+    { login: 'northwind', type: 'organization' },
   ])
   assert.deepEqual(result.projects.map(project => project.number), [9, 8, 6, 5])
   assert.deepEqual(result.errors, [])
@@ -400,7 +400,7 @@ test('listProjects preserves partial GraphQL errors as per-owner entries', async
     if (args[0] === 'api' && args[1] === 'graphql') {
       const payload = JSON.parse(JSON.stringify(fixture.graphqlProjects))
       payload.errors = [{
-        message: 'Could not resolve to an Organization with the login of XuyuTech.',
+        message: 'Could not resolve to an Organization with the login of acme-labs.',
         path: ['viewer', 'organizations', 'nodes', 0, 'projectsV2'],
       }]
       return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
@@ -409,7 +409,7 @@ test('listProjects preserves partial GraphQL errors as per-owner entries', async
   })
   const result = await createGh({ run: runner }).listProjects()
   assert.equal(result.projects.length, 4)
-  assert.deepEqual(result.errors.map(error => error.owner), ['XuyuTech'])
+  assert.deepEqual(result.errors.map(error => error.owner), ['acme-labs'])
   assert.equal(result.errors[0].code, 'gh-failed')
   assert.match(result.errors[0].message, /Could not resolve/u)
 })
@@ -424,11 +424,11 @@ test('listProjects fails gh-failed when the GraphQL payload has no viewer', asyn
 
 test('projectItems merges GraphQL pages and derives the Project summary', async () => {
   const runner = fixtureRunner()
-  const result = await createGh({ run: runner }).projectItems('ceasarXuu', 9)
-  assert.equal(result.project.owner, 'ceasarXuu')
+  const result = await createGh({ run: runner }).projectItems('acme', 9)
+  assert.equal(result.project.owner, 'acme')
   assert.equal(result.project.ownerType, 'user')
   assert.equal(result.project.number, 9)
-  assert.equal(result.project.title, 'Astropath-issues')
+  assert.equal(result.project.title, 'web-issues')
   assert.equal(result.project.itemCount, 195)
   assert.equal(result.project.closed, false)
   assert.equal(result.items.length, 195)
@@ -452,30 +452,30 @@ test('projectItems uses the GraphQL owner __typename or the Project URL for owne
       const payload = JSON.parse(JSON.stringify(fixture.graphqlItemsPage1))
       const owner = payload.data.repositoryOwner
       owner.__typename = 'Organization'
-      owner.projectV2.url = 'https://github.com/orgs/XuyuTech/projects/9'
+      owner.projectV2.url = 'https://github.com/orgs/acme-labs/projects/9'
       return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
     }
     return fixtureRun(args)
   })
-  const organization = await createGh({ run: asOrganization }).projectItems('XuyuTech', 9)
+  const organization = await createGh({ run: asOrganization }).projectItems('acme-labs', 9)
   assert.equal(organization.project.ownerType, 'organization')
 
   // No __typename in the payload: the /orgs/ URL still tells the truth.
   const urlOnly = createRunner(async (args) => {
     if (args[0] === 'api' && args[1] === 'graphql') {
       const payload = JSON.parse(JSON.stringify(fixture.graphqlItemsPage1))
-      payload.data.repositoryOwner.projectV2.url = 'https://github.com/orgs/XuyuTech/projects/9'
+      payload.data.repositoryOwner.projectV2.url = 'https://github.com/orgs/acme-labs/projects/9'
       return { stdout: `${JSON.stringify(payload)}\n`, stderr: '' }
     }
     return fixtureRun(args)
   })
-  const fallback = await createGh({ run: urlOnly }).projectItems('XuyuTech', 9)
+  const fallback = await createGh({ run: urlOnly }).projectItems('acme-labs', 9)
   assert.equal(fallback.project.ownerType, 'organization')
 })
 
 test('projectItems caps at maxProjectItems and flags truncated', async () => {
   const capped = createGh({ run: fixtureRunner(), maxProjectItems: 50 })
-  const result = await capped.projectItems('ceasarXuu', 9)
+  const result = await capped.projectItems('acme', 9)
   assert.equal(result.items.length, 50)
   assert.equal(result.truncated, true)
   assert.equal(result.project.itemCount, 195)
@@ -485,7 +485,7 @@ test('projectItems maps a GraphQL-null Project to project-not-found', async () =
   // Real `gh api graphql` answers 200 with `projectV2: null` for a missing or
   // unauthorized Project; the adapter classifies that as a 404-domain error.
   const gh = createGh({ run: fixtureRunner() })
-  await assert.rejects(gh.projectItems('ceasarXuu', 99999), { code: 'project-not-found' })
+  await assert.rejects(gh.projectItems('acme', 99999), { code: 'project-not-found' })
 })
 
 test('getIssue returns a contract IssueDetail and issues the REST commands', async () => {
@@ -520,7 +520,7 @@ test('adapter validates owner/repo/number parameters before spawning', async () 
   const runner = createRunner(async () => { throw new Error('must not be called') })
   const gh = createGh({ run: runner })
   await assert.rejects(gh.projectItems('bad/owner', 1), { code: 'bad-request' })
-  await assert.rejects(gh.projectItems('ceasarXuu', 0), { code: 'bad-request' })
+  await assert.rejects(gh.projectItems('acme', 0), { code: 'bad-request' })
   await assert.rejects(gh.getIssue('not-a-repo', 1), { code: 'bad-request' })
   await assert.rejects(gh.getIssue(REPO, -1), { code: 'bad-request' })
   assert.deepEqual(runner.calls, [])
@@ -529,7 +529,7 @@ test('adapter validates owner/repo/number parameters before spawning', async () 
 test('resolveIssueRef resolves valid refs and returns null for invalid ones', async () => {
   const gh = createGh({ run: fixtureRunner() })
   assert.equal(await gh.resolveIssueRef('nonsense'), null)
-  const resolved = await gh.resolveIssueRef('https://github.com/ceasarXuu/Astropath/issues/240')
+  const resolved = await gh.resolveIssueRef('https://github.com/acme/web/issues/240')
   assert.deepEqual(resolved.ref, { repo: REPO, number: 240 })
   assert.equal(resolved.summary.repo, REPO)
   assert.equal(resolved.summary.number, 240)
@@ -543,18 +543,18 @@ test('resolveIssueRef resolves valid refs and returns null for invalid ones', as
 test('getProjectMeta makes ONE GraphQL read and maps a missing Project to project-not-found', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
-  const meta = await gh.getProjectMeta('ceasarXuu', 9)
+  const meta = await gh.getProjectMeta('acme', 9)
   assert.equal(meta.project.id, PROJECT_META_IDS.projectId)
-  assert.equal(meta.project.owner, 'ceasarXuu')
+  assert.equal(meta.project.owner, 'acme')
   assert.equal(meta.project.number, 9)
   assert.equal(meta.statusField.id, PROJECT_META_IDS.statusFieldId)
   assert.equal(meta.statusField.options.length, 4)
   assert.equal(runner.calls.length, 1, 'one gh api graphql read')
   assert.match(runner.calls[0].join(' '), /field\(name:"Status"\)/u)
 
-  await assert.rejects(gh.getProjectMeta('ceasarXuu', 99999), { code: 'project-not-found' })
+  await assert.rejects(gh.getProjectMeta('acme', 99999), { code: 'project-not-found' })
   await assert.rejects(gh.getProjectMeta('bad/owner', 9), { code: 'bad-request' })
-  await assert.rejects(gh.getProjectMeta('ceasarXuu', 0), { code: 'bad-request' })
+  await assert.rejects(gh.getProjectMeta('acme', 0), { code: 'bad-request' })
 })
 
 test('getProjectMeta raises gh-failed when the Project has no Status single-select field', async () => {
@@ -562,40 +562,40 @@ test('getProjectMeta raises gh-failed when the Project has no Status single-sele
     stdout: `${JSON.stringify({ data: { repositoryOwner: { projectV2: { id: 'PVT_x', title: 't', field: null } } } })}\n`,
     stderr: '',
   }))
-  await assert.rejects(createGh({ run: runner }).getProjectMeta('ceasarXuu', 9), { code: 'gh-failed' })
+  await assert.rejects(createGh({ run: runner }).getProjectMeta('acme', 9), { code: 'gh-failed' })
 })
 
 test('findProjectItem resolves content references by paging the items read', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
-  const item = await gh.findProjectItem('ceasarXuu', 9, REPO, 240)
+  const item = await gh.findProjectItem('acme', 9, REPO, 240)
   assert.equal(item.id, ITEM_240_ID)
   assert.equal(item.number, 240)
   assert.equal(item.status, 'In Progress')
   // GitHub repo names are case-insensitive; the comparison is too.
-  const second = await gh.findProjectItem('ceasarXuu', 9, 'CEASARXUU/Astropath', 91)
+  const second = await gh.findProjectItem('acme', 9, 'ACME/web', 91)
   assert.equal(second.id, ITEM_91_ID)
   // Page 1 already contains #240/#91, but a later page is reachable for the miss.
-  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, REPO, 999999), { code: 'item-not-found' })
-  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, 'not-a-repo', 240), { code: 'bad-request' })
-  await assert.rejects(gh.findProjectItem('ceasarXuu', 9, REPO, 0), { code: 'bad-request' })
+  await assert.rejects(gh.findProjectItem('acme', 9, REPO, 999999), { code: 'item-not-found' })
+  await assert.rejects(gh.findProjectItem('acme', 9, 'not-a-repo', 240), { code: 'bad-request' })
+  await assert.rejects(gh.findProjectItem('acme', 9, REPO, 0), { code: 'bad-request' })
   assert.ok(!runner.calls.some(args => args.some(arg => typeof arg === 'string' && /ItemFieldValue/u.test(arg))))
 })
 
 test('findProjectItemById requires a PVTI_ node id and resolves from the items read', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
-  const item = await gh.findProjectItemById('ceasarXuu', 9, ITEM_91_ID)
+  const item = await gh.findProjectItemById('acme', 9, ITEM_91_ID)
   assert.equal(item.number, 91)
-  await assert.rejects(gh.findProjectItemById('ceasarXuu', 9, 'PVTI_missing'), { code: 'item-not-found' })
-  await assert.rejects(gh.findProjectItemById('ceasarXuu', 9, 'not-a-node'), { code: 'bad-request' })
+  await assert.rejects(gh.findProjectItemById('acme', 9, 'PVTI_missing'), { code: 'item-not-found' })
+  await assert.rejects(gh.findProjectItemById('acme', 9, 'not-a-node'), { code: 'bad-request' })
 })
 
 test('updateItemStatus writes the Status field with the real project/field ids', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
   const result = await gh.updateItemStatus({
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options['In Review'],
@@ -625,7 +625,7 @@ test('updateItemStatus accepts the real all-digit Done option id', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
   const result = await gh.updateItemStatus({
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options.Done,
@@ -638,7 +638,7 @@ test('updateItemStatus accepts the real all-digit Done option id', async () => {
 test('updateItemStatus clears with clearProjectV2ItemFieldValue and no optionId', async () => {
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
-  const result = await gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null })
+  const result = await gh.updateItemStatus({ owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: null })
   assert.deepEqual(result, {
     item: { id: ITEM_240_ID },
     status: { optionId: null, name: null },
@@ -654,11 +654,11 @@ test('updateItemStatus rejects bad item/option ids before mutating', async () =>
   const runner = fixtureRunner()
   const gh = createGh({ run: runner })
   await assert.rejects(
-    gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: 'not-a-node-id', optionId: null }),
+    gh.updateItemStatus({ owner: 'acme', number: 9, itemId: 'not-a-node-id', optionId: null }),
     { code: 'bad-request' },
   )
   await assert.rejects(
-    gh.updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: 'f0000000' }),
+    gh.updateItemStatus({ owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: 'f0000000' }),
     { code: 'bad-request' },
   )
   const mutations = runner.calls.filter(args => args.some(arg => typeof arg === 'string' && /ItemFieldValue/u.test(arg)))
@@ -674,7 +674,7 @@ test('updateItemStatus maps GraphQL NOT_FOUND / scope / auth failures to contrac
   })
   await assert.rejects(
     createGh({ run: notFound }).updateItemStatus({
-      owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
+      owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
     }),
     (error) => {
       assert.equal(error.code, 'item-not-found')
@@ -691,7 +691,7 @@ test('updateItemStatus maps GraphQL NOT_FOUND / scope / auth failures to contrac
   })
   await assert.rejects(
     createGh({ run: scope }).updateItemStatus({
-      owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
+      owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: PROJECT_META_IDS.options.Done,
     }),
     (error) => {
       assert.equal(error.code, 'gh-auth')
@@ -707,7 +707,7 @@ test('updateItemStatus maps GraphQL NOT_FOUND / scope / auth failures to contrac
     return fixtureRun(args)
   })
   await assert.rejects(
-    createGh({ run: auth }).updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }),
+    createGh({ run: auth }).updateItemStatus({ owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: null }),
     (error) => {
       assert.equal(error.code, 'gh-auth')
       assert.match(error.message, /gh auth refresh -s project/u)
@@ -727,7 +727,7 @@ test('updateItemStatus maps a GraphQL errors payload to the write error code', a
     return fixtureRun(args)
   })
   await assert.rejects(
-    createGh({ run: runner }).updateItemStatus({ owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }),
+    createGh({ run: runner }).updateItemStatus({ owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: null }),
     { code: 'item-not-found' },
   )
 })
@@ -803,5 +803,5 @@ test('default runner classifies a timeout as timeout', async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const script = writeScript(dir, 'slow-gh', 'sleep 2\nexit 0')
   const gh = createGh({ ghCommand: script, timeoutMs: 100 })
-  await assert.rejects(gh.projectItems('ceasarXuu', 9), { code: 'timeout' })
+  await assert.rejects(gh.projectItems('acme', 9), { code: 'timeout' })
 })

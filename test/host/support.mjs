@@ -38,11 +38,11 @@ export const fixture = {
   graphqlProjectMeta: loadFixture('graphql-project-meta.json'),
   graphqlUpdateItemStatus: loadFixture('graphql-update-item-status.json'),
   graphqlClearItemStatus: loadFixture('graphql-clear-item-status.json'),
-  // v1.3.0 auto-bind: Projects linked to ceasarXuu/Astropath (captured live).
+  // v1.3.0 auto-bind: Projects linked to acme/web (captured live).
   graphqlRepoProjects: loadFixture('graphql-repo-projects.json'),
 }
 
-/** Real GraphQL ids captured 2026-10-29 (`gh` 2.96.0, Project `Astropath-issues`). */
+/** Real GraphQL ids captured 2026-10-29 (`gh` 2.96.0, Project `web-issues`). */
 const metaNode = fixture.graphqlProjectMeta.data.repositoryOwner.projectV2
 export const PROJECT_META_IDS = Object.freeze({
   projectId: metaNode.id,
@@ -93,7 +93,7 @@ export function ghProjectNotFound(number) {
   return ghError(`GraphQL: Could not resolve to a ProjectV2 with the number ${String(number)}. (user.projectV2)`)
 }
 
-const PROJECT_OWNER = 'ceasarXuu'
+const PROJECT_OWNER = 'acme'
 const PR_NUMBER = 283
 
 /**
@@ -106,7 +106,7 @@ export async function fixtureRun(args) {
     return { stdout: 'gh version 2.96.0 (2026-07-02)\nhttps://github.com/cli/cli/releases/tag/v2.96.0\n', stderr: '' }
   }
   if (command === 'api user --jq .login') return { stdout: `${PROJECT_OWNER}\n`, stderr: '' }
-  if (command === 'api user/orgs --jq [.[].login]') return { stdout: '["XuyuTech","BeanDoor"]\n', stderr: '' }
+  if (command === 'api user/orgs --jq [.[].login]') return { stdout: '["acme-labs","northwind"]\n', stderr: '' }
 
   if (args[0] === 'api' && args[1] === 'graphql') {
     const queryArg = args.find(arg => typeof arg === 'string' && arg.startsWith('query='))
@@ -126,7 +126,7 @@ export async function fixtureRun(args) {
     if (/projectsV2\(first:50\)/u.test(query) || /repository\(owner:\$owner,name:\$repo\)/u.test(query)) {
       const owner = variables.owner
       const repo = variables.repo
-      if (owner !== 'ceasarXuu' || repo !== 'Astropath') {
+      if (owner !== 'acme' || repo !== 'web') {
         return { stdout: `${JSON.stringify({ data: { repository: null }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }] })}\n`, stderr: '' }
       }
       return { stdout: `${JSON.stringify(fixture.graphqlRepoProjects)}\n`, stderr: '' }
@@ -160,14 +160,14 @@ export async function fixtureRun(args) {
 
   if (args[0] === 'api') {
     const resource = args[1] ?? ''
-    if (resource === `repos/${PROJECT_OWNER}/Astropath/issues/240`) {
+    if (resource === `repos/${PROJECT_OWNER}/web/issues/240`) {
       return { stdout: `${JSON.stringify(fixture.issue)}\n`, stderr: '' }
     }
-    if (resource === `repos/${PROJECT_OWNER}/Astropath/issues/${String(PR_NUMBER)}`) {
-      const pullRequest = { ...fixture.issue, number: PR_NUMBER, pull_request: { url: 'https://api.github.com/repos/ceasarXuu/Astropath/pulls/283' } }
+    if (resource === `repos/${PROJECT_OWNER}/web/issues/${String(PR_NUMBER)}`) {
+      const pullRequest = { ...fixture.issue, number: PR_NUMBER, pull_request: { url: 'https://api.github.com/repos/acme/web/pulls/283' } }
       return { stdout: `${JSON.stringify(pullRequest)}\n`, stderr: '' }
     }
-    if (resource.startsWith(`repos/${PROJECT_OWNER}/Astropath/issues/240/comments?per_page=`)) {
+    if (resource.startsWith(`repos/${PROJECT_OWNER}/web/issues/240/comments?per_page=`)) {
       return { stdout: `${JSON.stringify(fixture.comments)}\n`, stderr: '' }
     }
   }

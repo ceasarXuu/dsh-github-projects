@@ -27,16 +27,16 @@ import { normalizeRepoProject, selectRepoProject } from '../../github.js'
 
 test('parseGitHubRemote accepts every shape git config can return', () => {
   const cases = [
-    ['git@github.com:ceasarXuu/Astropath.git', 'ceasarXuu/Astropath'],
-    ['git@github.com:ceasarXuu/Astropath', 'ceasarXuu/Astropath'],
-    ['https://github.com/ceasarXuu/Astropath.git', 'ceasarXuu/Astropath'],
-    ['https://github.com/ceasarXuu/Astropath', 'ceasarXuu/Astropath'],
-    ['https://github.com/ceasarXuu/Astropath/', 'ceasarXuu/Astropath'],
-    ['ssh://git@github.com/ceasarXuu/Astropath.git', 'ceasarXuu/Astropath'],
-    ['ssh://git@github.com:22/ceasarXuu/Astropath.git', 'ceasarXuu/Astropath'],
-    ['git://github.com/ceasarXuu/Astropath', 'ceasarXuu/Astropath'],
-    ['https://user:token@github.com/ceasarXuu/Astropath.git', 'ceasarXuu/Astropath'],
-    ['https://GitHub.com/CeasarXuu/Astropath.git', 'CeasarXuu/Astropath'],
+    ['git@github.com:acme/web.git', 'acme/web'],
+    ['git@github.com:acme/web', 'acme/web'],
+    ['https://github.com/acme/web.git', 'acme/web'],
+    ['https://github.com/acme/web', 'acme/web'],
+    ['https://github.com/acme/web/', 'acme/web'],
+    ['ssh://git@github.com/acme/web.git', 'acme/web'],
+    ['ssh://git@github.com:22/acme/web.git', 'acme/web'],
+    ['git://github.com/acme/web', 'acme/web'],
+    ['https://user:token@github.com/acme/web.git', 'acme/web'],
+    ['https://GitHub.com/CeasarXuu/web.git', 'CeasarXuu/web'],
     ['  git@github.com:owner/repo.git  ', 'owner/repo'],
   ]
   for (const [input, expected] of cases) {
@@ -86,12 +86,12 @@ test('readRemoteState reads and normalizes a real origin remote', async (t) => {
   const repo = join(root, 'repo')
   mkdirSync(repo, { recursive: true })
   git(repo, ['init', '-q'])
-  git(repo, ['remote', 'add', 'origin', 'git@github.com:ceasarXuu/Astropath.git'])
+  git(repo, ['remote', 'add', 'origin', 'git@github.com:acme/web.git'])
 
   const state = await readRemoteState(repo)
   assert.equal(state.github, true)
-  assert.equal(state.repository, 'ceasarXuu/Astropath')
-  assert.equal(state.remoteUrl, 'git@github.com:ceasarXuu/Astropath.git')
+  assert.equal(state.repository, 'acme/web')
+  assert.equal(state.remoteUrl, 'git@github.com:acme/web.git')
   assert.equal(typeof state.readAt, 'string')
 })
 
@@ -100,14 +100,14 @@ test('readRemoteState reads the remote from a subdirectory of a checkout', async
   const repo = join(root, 'repo')
   mkdirSync(repo, { recursive: true })
   git(repo, ['init', '-q'])
-  git(repo, ['remote', 'add', 'origin', 'https://github.com/ceasarXuu/Astropath.git'])
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/web.git'])
   const nested = join(repo, 'packages', 'app')
   mkdirSync(nested, { recursive: true })
 
   // `git config` walks up to the enclosing repository: a workspace pointing at
   // a subdirectory must still report the checkout's repository.
   const state = await readRemoteState(nested)
-  assert.equal(state.repository, 'ceasarXuu/Astropath')
+  assert.equal(state.repository, 'acme/web')
 })
 
 test('readRemoteState answers non-GitHub and non-repository directories plainly', async (t) => {
@@ -138,7 +138,7 @@ test('readRemoteState answers non-GitHub and non-repository directories plainly'
 /* ------------------------------------------------------------------ */
 
 /** Shaped like `Repository.projectsV2.nodes[]` in the real GraphQL answer. */
-function node({ number, title, login = 'ceasarXuu', type = 'User', closed = false, autoAdd = false, updatedAt }) {
+function node({ number, title, login = 'acme', type = 'User', closed = false, autoAdd = false, updatedAt }) {
   return {
     number,
     title,
@@ -160,25 +160,25 @@ function node({ number, title, login = 'ceasarXuu', type = 'User', closed = fals
 
 test('normalizeRepoProject maps one linked Project', () => {
   const candidate = normalizeRepoProject(node({
-    number: 9, title: 'Astropath-issues', autoAdd: true, updatedAt: '2026-11-09T16:30:47Z',
-  }), { nameWithOwner: 'ceasarXuu/Astropath' })
-  assert.equal(candidate.owner, 'ceasarXuu')
+    number: 9, title: 'web-issues', autoAdd: true, updatedAt: '2026-11-09T16:30:47Z',
+  }), { nameWithOwner: 'acme/web' })
+  assert.equal(candidate.owner, 'acme')
   assert.equal(candidate.ownerType, 'user')
   assert.equal(candidate.number, 9)
-  assert.equal(candidate.title, 'Astropath-issues')
+  assert.equal(candidate.title, 'web-issues')
   assert.equal(candidate.closed, false)
   assert.equal(candidate.autoAdd, true)
-  assert.equal(candidate.repository, 'ceasarXuu/Astropath')
+  assert.equal(candidate.repository, 'acme/web')
   assert.equal(candidate.itemCount, 12)
   assert.equal(normalizeRepoProject({}, {}), null)
 })
 
 test('normalizeRepoProject reads an organization-owned Project', () => {
   const candidate = normalizeRepoProject(node({
-    number: 3, title: 'Org board', login: 'XuyuTech', type: 'Organization', updatedAt: '2026-11-01T00:00:00Z',
-  }), { nameWithOwner: 'XuyuTech/app' })
+    number: 3, title: 'Org board', login: 'acme-labs', type: 'Organization', updatedAt: '2026-11-01T00:00:00Z',
+  }), { nameWithOwner: 'acme-labs/app' })
   assert.equal(candidate.ownerType, 'organization')
-  assert.equal(candidate.owner, 'XuyuTech')
+  assert.equal(candidate.owner, 'acme-labs')
 })
 
 test('selectRepoProject prefers the Auto-add workflow, then the newest', () => {
@@ -249,19 +249,19 @@ function fakeGh(handler) {
   }
 }
 
-/** The real ceasarXuu/Astropath#9 answer, as the binder would store it. */
+/** The real acme/web#9 answer, as the binder would store it. */
 const USER_PROJECT = normalizeRepoProject(node({
-  number: 9, title: 'Astropath-issues', autoAdd: true, updatedAt: '2026-11-09T16:30:47Z',
+  number: 9, title: 'web-issues', autoAdd: true, updatedAt: '2026-11-09T16:30:47Z',
 }))
 
 function binder(overrides = {}) {
   return createWorkspaceAutoBinder({
     store: overrides.store ?? fakeStore(),
-    gh: overrides.gh ?? fakeGh(() => ({ repository: 'ceasarXuu/Astropath', hasProjectsEnabled: true, projects: [USER_PROJECT] })),
+    gh: overrides.gh ?? fakeGh(() => ({ repository: 'acme/web', hasProjectsEnabled: true, projects: [USER_PROJECT] })),
     enabled: overrides.enabled !== false,
     ttlMs: overrides.ttlMs ?? 60_000,
     readRemote: overrides.readRemote ?? (async (directory) => ({
-      dir: directory, repository: 'ceasarXuu/Astropath', github: true, remoteUrl: 'git@github.com:ceasarXuu/Astropath.git', readAt: null,
+      dir: directory, repository: 'acme/web', github: true, remoteUrl: 'git@github.com:acme/web.git', readAt: null,
     })),
     logFault: overrides.logFault ?? (() => {}),
   })
@@ -269,25 +269,25 @@ function binder(overrides = {}) {
 
 test('auto-bind fills an unbound workspace from its git remote', async () => {
   const store = fakeStore()
-  const gh = fakeGh(() => ({ repository: 'ceasarXuu/Astropath', hasProjectsEnabled: true, projects: [USER_PROJECT] }))
+  const gh = fakeGh(() => ({ repository: 'acme/web', hasProjectsEnabled: true, projects: [USER_PROJECT] }))
   const bind = binder({ store, gh })
 
   const result = await bind.ensure('wa', '/ws/a')
   assert.equal(result.applied, true)
   assert.equal(result.reason, 'bound')
-  assert.equal(result.repository, 'ceasarXuu/Astropath')
+  assert.equal(result.repository, 'acme/web')
   assert.equal(result.project.number, 9)
-  assert.deepEqual(gh.calls, ['ceasarXuu/Astropath'])
+  assert.deepEqual(gh.calls, ['acme/web'])
   assert.equal(store.bindings.get('wa').number, 9)
-  assert.equal(store.bindings.get('wa').owner, 'ceasarXuu')
+  assert.equal(store.bindings.get('wa').owner, 'acme')
   // The provenance travels with the binding, so the board can explain the pick.
   assert.deepEqual(store.provenance.get('wa'), {
-    repository: 'ceasarXuu/Astropath', ambiguous: false, considered: 1,
+    repository: 'acme/web', ambiguous: false, considered: 1,
   })
 })
 
 test("auto-bind never replaces a binding the user made", async () => {
-  const mine = { owner: 'XuyuTech', ownerType: 'organization', number: 2, title: 'my choice', url: null, itemCount: 3, closed: false, description: null }
+  const mine = { owner: 'acme-labs', ownerType: 'organization', number: 2, title: 'my choice', url: null, itemCount: 3, closed: false, description: null }
   const store = fakeStore({ wa: mine })
   const gh = fakeGh(() => { throw new Error('must not be called') })
   const bind = binder({ store, gh })
@@ -301,7 +301,7 @@ test("auto-bind never replaces a binding the user made", async () => {
 
 test('auto-bind reports why it did not bind, and remembers the answer', async () => {
   const store = fakeStore()
-  const gh = fakeGh(() => ({ repository: 'ceasarXuu/Astropath', hasProjectsEnabled: true, projects: [] }))
+  const gh = fakeGh(() => ({ repository: 'acme/web', hasProjectsEnabled: true, projects: [] }))
   const bind = binder({ store, gh })
 
   assert.equal((await bind.ensure('wa', '/ws/a')).reason, 'no-project')
@@ -325,7 +325,7 @@ test('auto-bind does not remember a gh failure, so a retry can succeed', async (
   const gh = fakeGh(() => {
     attempt += 1
     if (attempt === 1) throw new Error('gh blew up')
-    return { repository: 'ceasarXuu/Astropath', hasProjectsEnabled: true, projects: [USER_PROJECT] }
+    return { repository: 'acme/web', hasProjectsEnabled: true, projects: [USER_PROJECT] }
   })
   const faults = []
   const bind = binder({ store, gh, logFault: (error) => faults.push(String(error)) })
@@ -345,10 +345,10 @@ test('auto-bind shares one resolution per workspace and honours the TTL', async 
     ttlMs: 5,
     // A repository with no usable Project: the remembered answer is negative,
     // so the store stays empty and re-resolution is observable.
-    gh: fakeGh(() => ({ repository: 'ceasarXuu/Astropath', hasProjectsEnabled: true, projects: [] })),
+    gh: fakeGh(() => ({ repository: 'acme/web', hasProjectsEnabled: true, projects: [] })),
     readRemote: async (directory) => {
       resolutions += 1
-      return { dir: directory, repository: 'ceasarXuu/Astropath', github: true, remoteUrl: 'x', readAt: null }
+      return { dir: directory, repository: 'acme/web', github: true, remoteUrl: 'x', readAt: null }
     },
   })
 
@@ -372,7 +372,7 @@ test('a bound workspace answers already-bound without re-reading git', async () 
     ttlMs: 5,
     readRemote: async (directory) => {
       resolutions += 1
-      return { dir: directory, repository: 'ceasarXuu/Astropath', github: true, remoteUrl: 'x', readAt: null }
+      return { dir: directory, repository: 'acme/web', github: true, remoteUrl: 'x', readAt: null }
     },
   })
 
@@ -403,7 +403,7 @@ test('ensureAll binds every eligible workspace and counts the rest', async () =>
       resolutions += 1
       return directory.includes('norepo')
         ? { dir: directory, repository: null, github: false, remoteUrl: null }
-        : { dir: directory, repository: 'ceasarXuu/Astropath', github: true, remoteUrl: 'x', readAt: null }
+        : { dir: directory, repository: 'acme/web', github: true, remoteUrl: 'x', readAt: null }
     },
   })
 

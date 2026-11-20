@@ -73,12 +73,12 @@ test('mock /config mirrors writes.allowed from the overlay allowWrites flag', as
 
 test('mock /project-meta serves the captured Project node/Status field ids', async (t) => {
   const mock = await startMock(t)
-  const body = (await mock.request('/project-meta?owner=ceasarXuu&number=9')).body
+  const body = (await mock.request('/project-meta?owner=acme&number=9')).body
   assert.deepEqual(body.project, {
     id: 'PVT_kwHOAwDbXM4Bocj3',
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
-    title: 'Astropath-issues',
+    title: 'web-issues',
   })
   assert.equal(body.statusField.id, 'PVTSSF_lAHOAwDbXM4Bocj3zhm8pxg')
   assert.equal(body.statusField.name, 'Status')
@@ -89,13 +89,13 @@ test('mock /project-meta serves the captured Project node/Status field ids', asy
     { id: '98236657', name: 'Done' },
   ])
   assert.equal(body.stale, false)
-  assert.equal((await mock.request('/project-meta?owner=ceasarXuu&number=99999')).status, 404)
+  assert.equal((await mock.request('/project-meta?owner=acme&number=99999')).status, 404)
 })
 
 test('mock POST /item-status is 403 writes-disabled unless allowWrites is true', async (t) => {
   const mock = await startMock(t)
   const response = await mock.postJson('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs',
     optionId: null,
@@ -109,7 +109,7 @@ test('mock POST /item-status updates the in-memory status and logs the write', a
   const itemId = 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs' // fixture item #240, In Progress
 
   const moved = await mock.postJson('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId,
     optionId: IN_REVIEW_ID,
@@ -119,24 +119,24 @@ test('mock POST /item-status updates the in-memory status and logs the write', a
   assert.deepEqual(moved.body.status, { optionId: IN_REVIEW_ID, name: 'In Review' })
 
   // GET /items reflects the in-memory move (the e2e reload assertion).
-  const items = (await mock.request('/items?owner=ceasarXuu&number=9')).body.items
+  const items = (await mock.request('/items?owner=acme&number=9')).body.items
   assert.equal(items.find(item => item.id === itemId).status, 'In Review')
 
   const cleared = await mock.postJson('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId,
     optionId: null,
   })
   assert.deepEqual(cleared.body.status, { optionId: null, name: null })
-  assert.equal((await mock.request('/items?owner=ceasarXuu&number=9')).body.items.find(item => item.id === itemId).status, null)
+  assert.equal((await mock.request('/items?owner=acme&number=9')).body.items.find(item => item.id === itemId).status, null)
 
   const state = (await mock.request('/mock-state')).body
   assert.equal(state.allowWrites, true)
   assert.equal(state.writes.length, 2)
   assert.deepEqual(state.writes[0], {
     at: state.writes[0].at,
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId,
     optionId: IN_REVIEW_ID,
@@ -148,12 +148,12 @@ test('mock POST /item-status updates the in-memory status and logs the write', a
 
 test('mock POST /item-status validates option/item/project ids', async (t) => {
   const mock = await startMock(t, { allowWrites: true })
-  const valid = { owner: 'ceasarXuu', number: 9, itemId: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs', optionId: null }
+  const valid = { owner: 'acme', number: 9, itemId: 'PVTI_lAHOAwDbXM4Bocj3zhDFfBs', optionId: null }
   assert.equal((await mock.postJson('/item-status', { ...valid, optionId: 'f0000000' })).status, 400)
   assert.equal((await mock.postJson('/item-status', { ...valid, itemId: 'PVTI_missing' })).status, 404)
   assert.equal((await mock.postJson('/item-status', { ...valid, number: 99999 })).status, 404)
   assert.equal((await mock.postJson('/item-status', { ...valid, itemId: '' })).status, 400)
-  const missingOption = await mock.postJson('/item-status', { owner: 'ceasarXuu', number: 9, itemId: valid.itemId })
+  const missingOption = await mock.postJson('/item-status', { owner: 'acme', number: 9, itemId: valid.itemId })
   assert.equal(missingOption.status, 400)
 })
 
@@ -166,14 +166,14 @@ test('mock failure item always answers 502 and is visible to the e2e harness', a
     number: 9005,
   })
 
-  const items = (await mock.request('/items?owner=ceasarXuu&number=9')).body.items
+  const items = (await mock.request('/items?owner=acme&number=9')).body.items
   const failureItem = items.find(item => item.id === 'PVTI_mock_write_failure')
   assert.ok(failureItem, 'the failure item must be on the board')
   assert.equal(failureItem.title, state.failureItem.title)
   assert.equal(failureItem.status, 'TODO')
 
   const response = await mock.postJson('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: 'PVTI_mock_write_failure',
     optionId: IN_PROGRESS_ID,
@@ -185,7 +185,7 @@ test('mock failure item always answers 502 and is visible to the e2e harness', a
   assert.equal(after.writes.at(-1).ok, false)
   assert.equal(after.writes.at(-1).code, 'gh-failed')
   // The failed write must not change the item's status.
-  assert.equal((await mock.request('/items?owner=ceasarXuu&number=9')).body.items.find(item => item.id === 'PVTI_mock_write_failure').status, 'TODO')
+  assert.equal((await mock.request('/items?owner=acme&number=9')).body.items.find(item => item.id === 'PVTI_mock_write_failure').status, 'TODO')
 })
 
 /* ------------------------------------------------------------------ */
@@ -195,7 +195,7 @@ test('mock failure item always answers 502 and is visible to the e2e harness', a
 test('mock /branches answers one entry per bound workspace, cycling presentations', async (t) => {
   const mock = await startMock(t)
   // The mock has no workspace registry: entries follow the workspace bindings.
-  const project = { owner: 'ceasarXuu', ownerType: 'user', number: 9, title: 'Astropath-issues', url: null, itemCount: 195, closed: false, description: null }
+  const project = { owner: 'acme', ownerType: 'user', number: 9, title: 'web-issues', url: null, itemCount: 195, closed: false, description: null }
   for (const workspaceId of ['ws-alpha', 'ws-beta', 'ws-gamma']) {
     const response = await mock.postJson('/bind-workspace', { workspaceId, project })
     assert.equal(response.status, 200)
@@ -253,7 +253,7 @@ test('mock /branches honors MOCK_BRANCHES overrides, including a non-repository'
       await request('/bind-workspace', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId, project: { owner: 'ceasarXuu', number: 9, title: 'Astropath-issues' } }),
+        body: JSON.stringify({ workspaceId, project: { owner: 'acme', number: 9, title: 'web-issues' } }),
       })
     }
     const body = (await request('/branches')).body
@@ -276,14 +276,14 @@ test('mock /auto-bind binds the fixture Project and reports its provenance', asy
   assert.equal(body.enabled, true)
   assert.equal(body.applied, true)
   assert.equal(body.reason, 'bound')
-  assert.equal(body.repository, 'ceasarXuu/Astropath')
+  assert.equal(body.repository, 'acme/web')
   assert.equal(body.project.number, 9)
   assert.equal(body.ambiguous, false)
 
   // The binding is visible in /bindings with the provenance beside it.
   const bindings = (await mock.request('/bindings')).body
   assert.equal(bindings.workspaces['ws-auto'].number, 9)
-  assert.equal(bindings.workspaces['ws-auto'].autoBind.repository, 'ceasarXuu/Astropath')
+  assert.equal(bindings.workspaces['ws-auto'].autoBind.repository, 'acme/web')
   assert.equal(bindings.workspaces['ws-auto'].autoBind.ambiguous, false)
 })
 

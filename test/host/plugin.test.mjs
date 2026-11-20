@@ -30,29 +30,29 @@ import {
 } from './support.mjs'
 
 const PROJECT = {
-  owner: 'ceasarXuu',
+  owner: 'acme',
   ownerType: 'user',
   number: 9,
-  title: 'Astropath-issues',
-  url: 'https://github.com/users/ceasarXuu/projects/9',
+  title: 'web-issues',
+  url: 'https://github.com/users/acme/projects/9',
   itemCount: 195,
   closed: false,
   description: null,
 }
 
 const ISSUE_SUMMARY = {
-  repo: 'ceasarXuu/Astropath',
+  repo: 'acme/web',
   number: 240,
-  title: '会话名称丰富化',
-  url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+  title: 'Tidy label picker',
+  url: 'https://github.com/acme/web/issues/240',
   state: 'open',
 }
 
 const SECOND_ISSUE_SUMMARY = {
-  repo: 'ceasarXuu/Astropath',
+  repo: 'acme/web',
   number: 91,
-  title: 'Relay 数据流量统计（账户级）',
-  url: 'https://github.com/ceasarXuu/Astropath/issues/91',
+  title: 'Refactor export format',
+  url: 'https://github.com/acme/web/issues/91',
   state: 'closed',
 }
 
@@ -129,7 +129,7 @@ test('GET /health answers the GhHealth contract', async (t) => {
   assert.deepEqual(body.gh, {
     available: true,
     version: 'gh version 2.96.0 (2026-07-02)',
-    account: 'ceasarXuu',
+    account: 'acme',
     error: null,
   })
 })
@@ -153,7 +153,7 @@ test('GET /config reads bindings only and never waits for gh', async (t) => {
   await sleep(25)
   const warm = expectJson(await app.get('/config?sessionId=session-abc&workspaceId=ws-123'))
   assert.equal(warm.gh.available, true)
-  assert.equal(warm.gh.account, 'ceasarXuu')
+  assert.equal(warm.gh.account, 'acme')
 
   const empty = expectJson(await app.get('/config'))
   assert.deepEqual(empty.workspace, { workspaceId: '', project: null })
@@ -255,7 +255,7 @@ test('GET /bindings returns every bound session with exact IssueSummary fields',
 
 test('GET /bindings includes workspace → Project bindings with exact stored fields', async (t) => {
   const app = useApp(t)
-  const secondProject = { ...PROJECT, number: 8, title: 'LongMan-issues', url: 'https://github.com/users/ceasarXuu/projects/8', itemCount: 9 }
+  const secondProject = { ...PROJECT, number: 8, title: 'api-issues', url: 'https://github.com/users/acme/projects/8', itemCount: 9 }
 
   await app.post('/bind-workspace', { workspaceId: 'ws-1', project: PROJECT })
   await app.post('/bind-workspace', { workspaceId: 'ws-2', project: secondProject })
@@ -392,9 +392,9 @@ test('GET /projects returns owners, normalized Projects, fetchedAt, stale, error
   const body = expectJson(await app.get('/projects'))
   assert.deepEqual(Object.keys(body).sort(), ['errors', 'fetchedAt', 'owners', 'projects', 'stale'])
   assert.deepEqual(body.owners, [
-    { login: 'ceasarXuu', type: 'user' },
-    { login: 'XuyuTech', type: 'organization' },
-    { login: 'BeanDoor', type: 'organization' },
+    { login: 'acme', type: 'user' },
+    { login: 'acme-labs', type: 'organization' },
+    { login: 'northwind', type: 'organization' },
   ])
   // The 4 closed Projects in the GraphQL fixture are filtered out.
   assert.equal(body.projects.length, 4)
@@ -545,12 +545,12 @@ test('SWR: diskCache:false writes no cache file', async (t) => {
 
 test('GET /items returns the Project summary plus 195 normalized GraphQL items', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
+  const body = expectJson(await app.get('/items?owner=acme&number=9'))
   assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'items', 'project', 'stale', 'truncated'])
-  assert.equal(body.project.owner, 'ceasarXuu')
+  assert.equal(body.project.owner, 'acme')
   assert.equal(body.project.ownerType, 'user')
   assert.equal(body.project.number, 9)
-  assert.equal(body.project.title, 'Astropath-issues')
+  assert.equal(body.project.title, 'web-issues')
   assert.equal(body.project.itemCount, 195)
   assert.equal(body.project.closed, false)
   assert.equal(body.items.length, 195)
@@ -558,7 +558,7 @@ test('GET /items returns the Project summary plus 195 normalized GraphQL items',
   assert.equal(body.stale, false)
   assert.equal(body.items[0].type, 'issue')
   assert.equal(body.items[0].number, 240)
-  assert.equal(body.items[0].repo, 'ceasarXuu/Astropath')
+  assert.equal(body.items[0].repo, 'acme/web')
   assert.equal(body.items[0].status, 'In Progress')
   assert.equal(body.items[0].state, 'OPEN')
   assert.deepEqual(body.items[0].labels, ['enhancement', 'todo'])
@@ -572,7 +572,7 @@ test('GET /items returns the Project summary plus 195 normalized GraphQL items',
 
 test('GET /items paginates at 100/page using the page cursor', async (t) => {
   const app = useApp(t)
-  expectJson(await app.get('/items?owner=ceasarXuu&number=9'))
+  expectJson(await app.get('/items?owner=acme&number=9'))
   const itemQueries = app.calls.filter(args => (
     args[0] === 'api'
     && args[1] === 'graphql'
@@ -588,7 +588,7 @@ test('GET /items paginates at 100/page using the page cursor', async (t) => {
 
 test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
   const capped = useApp(t, { config: { maxProjectItems: 50 } })
-  const body = expectJson(await capped.get('/items?owner=ceasarXuu&number=9'))
+  const body = expectJson(await capped.get('/items?owner=acme&number=9'))
   assert.equal(body.items.length, 50)
   assert.equal(body.truncated, true)
   const queries = capped.commands().filter(command => command.includes('projectV2(number'))
@@ -596,7 +596,7 @@ test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
   assert.ok(queries[0].includes('-F limit=50'))
 
   const partial = useApp(t, { config: { maxProjectItems: 150 } })
-  const partialBody = expectJson(await partial.get('/items?owner=ceasarXuu&number=9'))
+  const partialBody = expectJson(await partial.get('/items?owner=acme&number=9'))
   assert.equal(partialBody.items.length, 150)
   assert.equal(partialBody.truncated, true)
   const partialQueries = partial.calls.filter(args => (
@@ -609,10 +609,10 @@ test('GET /items caps at maxProjectItems and flags truncated', async (t) => {
 
 test('GET /items maps a missing Project to 404 and bad params to 400', async (t) => {
   const app = useApp(t)
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=99999'), 404, 'project-not-found')
+  expectErrorJson(await app.get('/items?owner=acme&number=99999'), 404, 'project-not-found')
   expectErrorJson(await app.get('/items?owner=bad/owner&number=9'), 400, 'bad-request')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=abc'), 400, 'bad-request')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu'), 400, 'bad-request')
+  expectErrorJson(await app.get('/items?owner=acme&number=abc'), 400, 'bad-request')
+  expectErrorJson(await app.get('/items?owner=acme'), 400, 'bad-request')
 })
 
 /* ------------------------------------------------------------------ */
@@ -649,13 +649,13 @@ test('GET /config reports writes.allowed from the opt-in allowWrites config', as
 
 test('GET /project-meta returns the Project node id and Status field options', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  const body = expectJson(await app.get('/project-meta?owner=acme&number=9'))
   assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'project', 'stale', 'statusField'])
   assert.deepEqual(body.project, {
     id: PROJECT_META_IDS.projectId,
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
-    title: 'Astropath-issues',
+    title: 'web-issues',
   })
   assert.equal(body.statusField.id, PROJECT_META_IDS.statusFieldId)
   assert.equal(body.statusField.name, 'Status')
@@ -670,25 +670,25 @@ test('GET /project-meta returns the Project node id and Status field options', a
 
   // One GraphQL read, then the SWR cache; `refresh=1` forces a fresh read.
   assert.equal(metaCalls(app).length, 1)
-  const cached = expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9'))
+  const cached = expectJson(await app.get('/project-meta?owner=acme&number=9'))
   assert.equal(cached.fetchedAt, body.fetchedAt)
   assert.equal(metaCalls(app).length, 1)
-  expectJson(await app.get('/project-meta?owner=ceasarXuu&number=9&refresh=1'))
+  expectJson(await app.get('/project-meta?owner=acme&number=9&refresh=1'))
   assert.equal(metaCalls(app).length, 2)
 })
 
 test('GET /project-meta maps a missing Project to 404 and bad params to 400', async (t) => {
   const app = useApp(t)
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=99999'), 404, 'project-not-found')
+  expectErrorJson(await app.get('/project-meta?owner=acme&number=99999'), 404, 'project-not-found')
   expectErrorJson(await app.get('/project-meta?owner=bad/owner&number=9'), 400, 'bad-request')
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu&number=abc'), 400, 'bad-request')
-  expectErrorJson(await app.get('/project-meta?owner=ceasarXuu'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=acme&number=abc'), 400, 'bad-request')
+  expectErrorJson(await app.get('/project-meta?owner=acme'), 400, 'bad-request')
 })
 
 test('POST /item-status is refused with 403 writes-disabled when allowWrites is false', async (t) => {
   const app = useApp(t)
   const payload = {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options['In Review'],
@@ -705,7 +705,7 @@ test('POST /item-status is refused with 403 writes-disabled when allowWrites is 
 test('POST /item-status moves an item and returns the applied Status', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options['In Review'],
@@ -737,7 +737,7 @@ test('POST /item-status handles the real all-digit Done option id', async (t) =>
   assert.match(PROJECT_META_IDS.options['In Review'], /^[a-z0-9]+$/u)
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options.Done,
@@ -751,7 +751,7 @@ test('POST /item-status handles the real all-digit Done option id', async (t) =>
 test('POST /item-status with optionId:null clears the Status field', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const body = expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -770,7 +770,7 @@ test('POST /item-status with optionId:null clears the Status field', async (t) =
 test('POST /item-status rejects an unknown option id with 400 and writes nothing', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: 'f0000000',
@@ -781,14 +781,14 @@ test('POST /item-status rejects an unknown option id with 400 and writes nothing
 
 test('POST /item-status validates the ItemStatusRequest body', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
-  const valid = { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID, optionId: null }
+  const valid = { owner: 'acme', number: 9, itemId: ITEM_240_ID, optionId: null }
   expectErrorJson(await app.post('/item-status', { ...valid, owner: 'bad/owner' }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, number: 0 }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, itemId: 'not-a-node-id' }), 400, 'bad-request')
   expectErrorJson(await app.post('/item-status', { ...valid, itemId: undefined }), 400, 'bad-request')
   // optionId is required: an omitted field is not an implicit clear.
   expectErrorJson(
-    await app.post('/item-status', { owner: 'ceasarXuu', number: 9, itemId: ITEM_240_ID }),
+    await app.post('/item-status', { owner: 'acme', number: 9, itemId: ITEM_240_ID }),
     400,
     'bad-request',
   )
@@ -810,7 +810,7 @@ test('POST /item-status maps a GraphQL NOT_FOUND write error to 404 item-not-fou
   })
   const app = useApp(t, { runner, config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: 'PVTI_stale',
     optionId: PROJECT_META_IDS.options.Done,
@@ -830,7 +830,7 @@ test('POST /item-status maps a missing project scope to 503 gh-auth with the ref
   })
   const app = useApp(t, { runner, config: { allowWrites: true } })
   const error = expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -841,7 +841,7 @@ test('POST /item-status maps a missing project scope to 503 gh-auth with the ref
 test('POST /item-status maps a missing Project to 404 project-not-found', async (t) => {
   const app = useApp(t, { config: { allowWrites: true } })
   expectErrorJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 99999,
     itemId: ITEM_240_ID,
     optionId: null,
@@ -850,7 +850,7 @@ test('POST /item-status maps a missing Project to 404 project-not-found', async 
 
 test('POST /item-status invalidates the items SWR entry so the next /items re-reads', async (t) => {
   const app = useApp(t, { config: { allowWrites: true, cacheTtlMs: 60_000 } })
-  const itemsUrl = '/items?owner=ceasarXuu&number=9'
+  const itemsUrl = '/items?owner=acme&number=9'
   expectJson(await app.get(itemsUrl))
   assert.equal(itemPageCalls(app).length, 2, '195 items are two GraphQL pages')
   // Warm cache: a second /items read must not touch gh.
@@ -858,7 +858,7 @@ test('POST /item-status invalidates the items SWR entry so the next /items re-re
   assert.equal(itemPageCalls(app).length, 2)
 
   expectJson(await app.post('/item-status', {
-    owner: 'ceasarXuu',
+    owner: 'acme',
     number: 9,
     itemId: ITEM_240_ID,
     optionId: PROJECT_META_IDS.options.Done,
@@ -874,16 +874,16 @@ test('POST /item-status invalidates the items SWR entry so the next /items re-re
 
 test('GET /issue returns a contract IssueDetail with comments', async (t) => {
   const app = useApp(t)
-  const body = expectJson(await app.get('/issue?repo=ceasarXuu/Astropath&number=240'))
+  const body = expectJson(await app.get('/issue?repo=acme/web&number=240'))
   assert.deepEqual(Object.keys(body).sort(), ['fetchedAt', 'issue', 'stale'])
   assert.equal(body.stale, false)
   const issue = body.issue
-  assert.equal(issue.repo, 'ceasarXuu/Astropath')
+  assert.equal(issue.repo, 'acme/web')
   assert.equal(issue.number, 240)
   assert.equal(issue.title, fixture.issue.title)
-  assert.equal(issue.url, 'https://github.com/ceasarXuu/Astropath/issues/240')
+  assert.equal(issue.url, 'https://github.com/acme/web/issues/240')
   assert.equal(issue.state, 'open')
-  assert.equal(issue.author, 'ceasarXuu')
+  assert.equal(issue.author, 'acme')
   assert.deepEqual(issue.labels, ['enhancement', 'todo'])
   assert.deepEqual(issue.assignees, [])
   assert.equal(issue.body.length, fixture.issue.body.length)
@@ -896,17 +896,17 @@ test('GET /issue returns a contract IssueDetail with comments', async (t) => {
 
 test('GET /issue rejects Pull Requests and bad parameters', async (t) => {
   const app = useApp(t)
-  const pr = expectErrorJson(await app.get('/issue?repo=ceasarXuu/Astropath&number=283'), 404, 'issue-not-found')
+  const pr = expectErrorJson(await app.get('/issue?repo=acme/web&number=283'), 404, 'issue-not-found')
   assert.equal(pr.message, '这是 Pull Request')
   expectErrorJson(await app.get('/issue?repo=not-a-repo&number=1'), 400, 'bad-request')
-  expectErrorJson(await app.get('/issue?repo=ceasarXuu/Astropath&number=0'), 400, 'bad-request')
-  expectErrorJson(await app.get('/issue?repo=ceasarXuu/Astropath'), 400, 'bad-request')
+  expectErrorJson(await app.get('/issue?repo=acme/web&number=0'), 400, 'bad-request')
+  expectErrorJson(await app.get('/issue?repo=acme/web'), 400, 'bad-request')
 })
 
 test('GET /issue caches per repo#number and shares one in-flight read', async (t) => {
   let issueReads = 0
   const runner = createRunner(async (args) => {
-    if (args[0] === 'api' && args[1] === 'repos/ceasarXuu/Astropath/issues/240') {
+    if (args[0] === 'api' && args[1] === 'repos/acme/web/issues/240') {
       issueReads += 1
       await sleep(30)
       return { stdout: `${JSON.stringify(fixture.issue)}\n`, stderr: '' }
@@ -914,7 +914,7 @@ test('GET /issue caches per repo#number and shares one in-flight read', async (t
     return fixtureRun(args)
   })
   const app = useApp(t, { runner, config: { cacheTtlMs: 60_000 } })
-  const url = '/issue?repo=ceasarXuu/Astropath&number=240'
+  const url = '/issue?repo=acme/web&number=240'
 
   const [first, second] = await Promise.all([app.get(url), app.get(url)])
   expectJson(first)
@@ -955,19 +955,19 @@ test('POST /bind-issue resolves an Issue URL / short ref through gh', async (t) 
   const app = useApp(t)
   const fromUrl = expectJson(await app.post('/bind-issue', {
     sessionId: 's-url',
-    ref: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    ref: 'https://github.com/acme/web/issues/240',
   }))
   assert.deepEqual(fromUrl.session.issue, {
-    repo: 'ceasarXuu/Astropath',
+    repo: 'acme/web',
     number: 240,
     title: fixture.issue.title,
-    url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+    url: 'https://github.com/acme/web/issues/240',
     state: 'open',
   })
 
   const fromShort = expectJson(await app.post('/bind-issue', {
     sessionId: 's-short',
-    ref: 'ceasarXuu/Astropath#240',
+    ref: 'acme/web#240',
   }))
   assert.equal(fromShort.session.issue.number, 240)
 })
@@ -977,10 +977,10 @@ test('POST /bind-issue completes a partial summary from one gh read', async (t) 
   const body = expectJson(await app.post('/bind-issue', {
     sessionId: 's-partial',
     workspaceId: 'w1',
-    issue: { repo: 'ceasarXuu/Astropath', number: 240 },
+    issue: { repo: 'acme/web', number: 240 },
   }))
   assert.equal(body.session.issue.title, fixture.issue.title)
-  assert.equal(body.session.issue.url, 'https://github.com/ceasarXuu/Astropath/issues/240')
+  assert.equal(body.session.issue.url, 'https://github.com/acme/web/issues/240')
   assert.equal(body.session.issue.state, 'open')
 })
 
@@ -988,15 +988,15 @@ test('POST /bind-issue maps bad refs to 400 and missing Issues to 404', async (t
   const app = useApp(t)
   expectErrorJson(await app.post('/bind-issue', { sessionId: 's', ref: 'not a ref' }), 400, 'bad-request')
   expectErrorJson(await app.post('/bind-issue', { sessionId: 's' }), 400, 'bad-request')
-  expectErrorJson(await app.post('/bind-issue', { ref: 'ceasarXuu/Astropath#240' }), 400, 'bad-request')
+  expectErrorJson(await app.post('/bind-issue', { ref: 'acme/web#240' }), 400, 'bad-request')
   expectErrorJson(await app.post('/bind-issue', { sessionId: 's', issue: { repo: 'bad', number: 1 } }), 400, 'bad-request')
 
   const runner = createRunner(async (args) => {
-    if (args[0] === 'api' && args[1] === 'repos/ceasarXuu/Astropath/issues/123') throw ghNotFound()
+    if (args[0] === 'api' && args[1] === 'repos/acme/web/issues/123') throw ghNotFound()
     return fixtureRun(args)
   })
   const app404 = useApp(t, { runner })
-  expectErrorJson(await app404.post('/bind-issue', { sessionId: 's', ref: 'ceasarXuu/Astropath#123' }), 404, 'issue-not-found')
+  expectErrorJson(await app404.post('/bind-issue', { sessionId: 's', ref: 'acme/web#123' }), 404, 'issue-not-found')
 })
 
 test('POST /unbind-issue clears the session binding', async (t) => {
@@ -1023,34 +1023,34 @@ function toolOf(app, name) {
 }
 
 const EXPECTED_TOOL_ISSUE = {
-  repo: 'ceasarXuu/Astropath',
+  repo: 'acme/web',
   number: 240,
   title: fixture.issue.title,
-  url: 'https://github.com/ceasarXuu/Astropath/issues/240',
+  url: 'https://github.com/acme/web/issues/240',
   state: 'open',
 }
 
 test('tool github_issue_bind binds the current session and renders text', async (t) => {
   const app = useApp(t)
   const tool = toolOf(app, 'github_issue_bind')
-  const value = await tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  const value = await tool.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
   assert.deepEqual(value, { bound: true, issue: EXPECTED_TOOL_ISSUE, previous: null })
 
   const config = expectJson(await app.get('/config?sessionId=sess-tool-1'))
   assert.deepEqual(config.session.issue, EXPECTED_TOOL_ISSUE)
   assert.equal(app.readState().sessions['sess-tool-1'].issue.number, 240)
 
-  const rendered = tool.output.render({ ref: 'ceasarXuu/Astropath#240' }, value)
-  assert.deepEqual(rendered, [{ type: 'text', text: `已绑定 #240 ${fixture.issue.title}（ceasarXuu/Astropath）` }])
+  const rendered = tool.output.render({ ref: 'acme/web#240' }, value)
+  assert.deepEqual(rendered, [{ type: 'text', text: `已绑定 #240 ${fixture.issue.title}（acme/web）` }])
 })
 
 test('tool github_issue_bind refuses when the session is already bound', async (t) => {
   const app = useApp(t)
   const tool = toolOf(app, 'github_issue_bind')
-  await tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
-  await assert.rejects(tool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC), (error) => {
+  await tool.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
+  await assert.rejects(tool.execute({ ref: 'acme/web#240' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'bad-request')
-    assert.match(error.message, /already bound: ceasarXuu\/Astropath#240/u)
+    assert.match(error.message, /already bound: acme\/web#240/u)
     return true
   })
 })
@@ -1060,14 +1060,14 @@ test('tool github_issue_switch replaces the binding and reports the previous iss
   const bind = toolOf(app, 'github_issue_bind')
   const switchTool = toolOf(app, 'github_issue_switch')
 
-  await assert.rejects(switchTool.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC), (error) => {
+  await assert.rejects(switchTool.execute({ ref: 'acme/web#240' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'bad-request')
     assert.match(error.message, /not bound/u)
     return true
   })
 
-  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
-  const value = await switchTool.execute({ ref: 'https://github.com/ceasarXuu/Astropath/issues/240' }, TOOL_EXEC)
+  await bind.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
+  const value = await switchTool.execute({ ref: 'https://github.com/acme/web/issues/240' }, TOOL_EXEC)
   assert.deepEqual(value, { switched: true, issue: EXPECTED_TOOL_ISSUE, previous: EXPECTED_TOOL_ISSUE })
   const rendered = switchTool.output.render({}, value)
   assert.match(rendered[0].text, /已切换到 #240/u)
@@ -1084,7 +1084,7 @@ test('tool github_issue_unbind clears the binding and is idempotent', async (t) 
     { type: 'text', text: '当前会话未绑定 Issue' },
   ])
 
-  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  await bind.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
   const value = await unbind.execute({}, TOOL_EXEC)
   assert.deepEqual(value, { unbound: true, previous: EXPECTED_TOOL_ISSUE })
   assert.match(unbind.output.render({}, value)[0].text, /已解绑 #240/u)
@@ -1096,7 +1096,7 @@ test('agent tools validate the calling session and the ref argument', async (t) 
   const app = useApp(t)
   const bind = toolOf(app, 'github_issue_bind')
   for (const exec of [undefined, {}, { agent: {} }, { agent: { session: {} } }, { agent: { session: { id: '  ' } } }]) {
-    await assert.rejects(bind.execute({ ref: 'ceasarXuu/Astropath#240' }, exec), (error) => {
+    await assert.rejects(bind.execute({ ref: 'acme/web#240' }, exec), (error) => {
       assert.match(error.message, /no current session/u)
       return true
     })
@@ -1117,23 +1117,23 @@ test('agent tools validate the calling session and the ref argument', async (t) 
 
 test('agent tools surface gh failures with the contract code and never touch other sessions', async (t) => {
   const runner = createRunner(async (args) => {
-    if (args[0] === 'api' && args[1] === 'repos/ceasarXuu/Astropath/issues/123') throw ghNotFound()
+    if (args[0] === 'api' && args[1] === 'repos/acme/web/issues/123') throw ghNotFound()
     return fixtureRun(args)
   })
   const app = useApp(t, { runner })
   const bind = toolOf(app, 'github_issue_bind')
 
-  await assert.rejects(bind.execute({ ref: 'ceasarXuu/Astropath#123' }, TOOL_EXEC), (error) => {
+  await assert.rejects(bind.execute({ ref: 'acme/web#123' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'issue-not-found')
     assert.match(error.message, /^issue-not-found: /u)
     return true
   })
 
-  await bind.execute({ ref: 'ceasarXuu/Astropath#240' }, TOOL_EXEC)
+  await bind.execute({ ref: 'acme/web#240' }, TOOL_EXEC)
   // Session 2 is untouched, and its own tools address only its own id.
   assert.equal(expectJson(await app.get('/config?sessionId=sess-tool-2')).session.issue, null)
   const switchTool = toolOf(app, 'github_issue_switch')
-  await assert.rejects(switchTool.execute({ ref: 'ceasarXuu/Astropath#240' }, OTHER_TOOL_EXEC), /not bound/u)
+  await assert.rejects(switchTool.execute({ ref: 'acme/web#240' }, OTHER_TOOL_EXEC), /not bound/u)
 })
 
 /* ------------------------------------------------------------------ */
@@ -1186,12 +1186,12 @@ test('tool github_project_item_status moves an item resolved from a content refe
   const tool = toolOf(app, ITEM_STATUS_TOOL)
   const expectedTitle = fixture.graphqlItemsPage1.data.repositoryOwner.projectV2.items.nodes[0].content.title
 
-  const value = await tool.execute({ repo: 'ceasarXuu/Astropath', number: 240, status: 'in review' }, TOOL_EXEC)
+  const value = await tool.execute({ repo: 'acme/web', number: 240, status: 'in review' }, TOOL_EXEC)
   assert.deepEqual(value, {
     moved: true,
     item: {
       id: ITEM_240_ID,
-      repo: 'ceasarXuu/Astropath',
+      repo: 'acme/web',
       number: 240,
       title: expectedTitle,
     },
@@ -1236,7 +1236,7 @@ test('tool github_project_item_status rejects an unknown status and lists the va
   const app = writableApp(t)
   await bindToolSession(app)
   const tool = toolOf(app, ITEM_STATUS_TOOL)
-  await assert.rejects(tool.execute({ repo: 'ceasarXuu/Astropath', number: 240, status: 'Blocked' }, TOOL_EXEC), (error) => {
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 240, status: 'Blocked' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'bad-request')
     assert.match(error.message, /^bad-request: /u)
     assert.match(error.message, /unknown status/u)
@@ -1254,12 +1254,12 @@ test('tool github_project_item_status requires exactly one item locator', async 
   const tool = toolOf(app, ITEM_STATUS_TOOL)
   const cases = [
     { status: 'TODO' },
-    { itemId: ITEM_240_ID, repo: 'ceasarXuu/Astropath', number: 240, status: 'TODO' },
-    { repo: 'ceasarXuu/Astropath', status: 'TODO' },
+    { itemId: ITEM_240_ID, repo: 'acme/web', number: 240, status: 'TODO' },
+    { repo: 'acme/web', status: 'TODO' },
     { number: 240, status: 'TODO' },
-    { repo: 'ceasarXuu/Astropath', number: 240 },
+    { repo: 'acme/web', number: 240 },
     { repo: 'bad repo', number: 240, status: 'TODO' },
-    { repo: 'ceasarXuu/Astropath', number: 0, status: 'TODO' },
+    { repo: 'acme/web', number: 0, status: 'TODO' },
     { itemId: ITEM_240_ID, status: '  ' },
     { itemId: ITEM_240_ID },
     null,
@@ -1280,7 +1280,7 @@ test('tool github_project_item_status requires the session workspace-bound Proje
   const tool = toolOf(app, ITEM_STATUS_TOOL)
 
   // The calling session has no binding at all.
-  await assert.rejects(tool.execute({ repo: 'ceasarXuu/Astropath', number: 240, status: 'TODO' }, TOOL_EXEC), (error) => {
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 240, status: 'TODO' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'project-not-found')
     assert.match(error.message, /bind a Project first/u)
     return true
@@ -1312,7 +1312,7 @@ test('tool github_project_item_status maps a missing content reference to item-n
   const app = writableApp(t)
   await bindToolSession(app)
   const tool = toolOf(app, ITEM_STATUS_TOOL)
-  await assert.rejects(tool.execute({ repo: 'ceasarXuu/Astropath', number: 999999, status: 'Done' }, TOOL_EXEC), (error) => {
+  await assert.rejects(tool.execute({ repo: 'acme/web', number: 999999, status: 'Done' }, TOOL_EXEC), (error) => {
     assert.equal(error.code, 'item-not-found')
     assert.match(error.message, /^item-not-found: /u)
     return true
@@ -1410,8 +1410,8 @@ test('without gh: /health and /config still work, GitHub reads answer 503 gh-mis
   assert.equal(config.gh.available, false)
 
   expectErrorJson(await app.get('/projects'), 503, 'gh-missing')
-  expectErrorJson(await app.get('/items?owner=ceasarXuu&number=9'), 503, 'gh-missing')
-  expectErrorJson(await app.get('/issue?repo=ceasarXuu/Astropath&number=240'), 503, 'gh-missing')
+  expectErrorJson(await app.get('/items?owner=acme&number=9'), 503, 'gh-missing')
+  expectErrorJson(await app.get('/issue?repo=acme/web&number=240'), 503, 'gh-missing')
 })
 
 test('bad credentials answer 503 gh-auth for GitHub reads', async (t) => {
@@ -1522,16 +1522,16 @@ test('a user prompt refreshes only that workspace, and revises only on change', 
 /* ------------------------------------------------------------------ */
 
 test('/auto-bind fills an unbound workspace from the repository it checks out', async (t) => {
-  const app = useApp(t, { remote: { '/ws/a': 'ceasarXuu/Astropath' } })
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' } })
 
   const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
   assert.equal(body.enabled, true)
   assert.equal(body.applied, true)
   assert.equal(body.reason, 'bound')
-  assert.equal(body.repository, 'ceasarXuu/Astropath')
+  assert.equal(body.repository, 'acme/web')
   assert.equal(body.project.number, 9)
-  assert.equal(body.project.owner, 'ceasarXuu')
-  assert.equal(body.project.title, 'Astropath-issues')
+  assert.equal(body.project.owner, 'acme')
+  assert.equal(body.project.title, 'web-issues')
   // The durable store now carries it, so the sidebar icon lights up.
   const bindings = expectJson(await app.get('/bindings'))
   assert.equal(bindings.workspaces.wa.number, 9)
@@ -1542,16 +1542,16 @@ test('/auto-bind never overwrites a Project the user bound', async (t) => {
   // Bind a different Project by hand, exactly as the picker does.
   expectJson(await app.post('/bind-workspace', {
     workspaceId: 'wa',
-    project: { owner: 'XuyuTech', ownerType: 'organization', number: 2, title: '我的看板', url: null, itemCount: 3, closed: false, description: null },
+    project: { owner: 'acme-labs', ownerType: 'organization', number: 2, title: 'Web roadmap', url: null, itemCount: 3, closed: false, description: null },
   }))
-  app.remote['/ws/a'] = 'ceasarXuu/Astropath'
+  app.remote['/ws/a'] = 'acme/web'
 
   const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
   assert.equal(body.applied, false)
   assert.equal(body.reason, 'already-bound')
   const bindings = expectJson(await app.get('/bindings'))
   assert.equal(bindings.workspaces.wa.number, 2, 'the user binding must survive auto-bind')
-  assert.equal(bindings.workspaces.wa.owner, 'XuyuTech')
+  assert.equal(bindings.workspaces.wa.owner, 'acme-labs')
 })
 
 test('/auto-bind reports each reason it will not bind', async (t) => {
@@ -1559,7 +1559,7 @@ test('/auto-bind reports each reason it will not bind', async (t) => {
 
   assert.equal(expectJson(await app.get('/auto-bind?workspaceId=a&path=%2Fws%2Fplain')).reason, 'no-remote')
   // A repository the token cannot see (the fixture runner answers 404-style).
-  app.remote['/ws/other'] = 'ceasarXuu/NotVisible'
+  app.remote['/ws/other'] = 'acme/NotVisible'
   assert.equal(expectJson(await app.get('/auto-bind?workspaceId=b&path=%2Fws%2Fother')).reason, 'no-project')
   // Missing inputs never throw.
   assert.equal(expectJson(await app.get('/auto-bind')).reason, 'no-workspace')
@@ -1567,14 +1567,14 @@ test('/auto-bind reports each reason it will not bind', async (t) => {
 })
 
 test('/auto-bind is inert when the config flag is off', async (t) => {
-  const app = useApp(t, { remote: { '/ws/a': 'ceasarXuu/Astropath' }, config: { autoBind: false } })
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' }, config: { autoBind: false } })
   const body = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
   assert.deepEqual(body, { enabled: false, applied: false, reason: 'disabled' })
   assert.deepEqual(expectJson(await app.get('/bindings')).workspaces, {})
 })
 
 test('an auto-filled binding carries its provenance through /bindings', async (t) => {
-  const app = useApp(t, { remote: { '/ws/a': 'ceasarXuu/Astropath' } })
+  const app = useApp(t, { remote: { '/ws/a': 'acme/web' } })
   const filled = expectJson(await app.get('/auto-bind?workspaceId=wa&path=%2Fws%2Fa'))
   assert.equal(filled.applied, true)
   assert.equal(filled.ambiguous, false, 'only one open Project is linked, so the pick is unambiguous')
@@ -1582,15 +1582,15 @@ test('an auto-filled binding carries its provenance through /bindings', async (t
   const bindings = expectJson(await app.get('/bindings'))
   // The Project fields stay flat on the entry, with the provenance beside them.
   assert.equal(bindings.workspaces.wa.number, 9)
-  assert.equal(bindings.workspaces.wa.title, 'Astropath-issues')
-  assert.deepEqual(bindings.workspaces.wa.autoBind.repository, 'ceasarXuu/Astropath')
+  assert.equal(bindings.workspaces.wa.title, 'web-issues')
+  assert.deepEqual(bindings.workspaces.wa.autoBind.repository, 'acme/web')
   assert.equal(bindings.workspaces.wa.autoBind.ambiguous, false)
   assert.equal(typeof bindings.workspaces.wa.autoBind.appliedAt, 'string')
 
   // A manual re-bind drops the provenance: the board stops claiming it chose.
   expectJson(await app.post('/bind-workspace', {
     workspaceId: 'wa',
-    project: { owner: 'ceasarXuu', ownerType: 'user', number: 4, title: 'Astropath-kanban', url: null, itemCount: 0, closed: false, description: null },
+    project: { owner: 'acme', ownerType: 'user', number: 4, title: 'web-kanban', url: null, itemCount: 0, closed: false, description: null },
   }))
   const after = expectJson(await app.get('/bindings'))
   assert.equal(after.workspaces.wa.number, 4)
