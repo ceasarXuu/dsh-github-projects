@@ -1,12 +1,11 @@
 # dsh-github-projects
 
-> 开发分支的右侧栏支持 GitHub 已保存视图、看板、表格和条目详情。通过 `allowWrites: true` 可编辑字段和 Issue、发表评论并添加条目。以下安装说明和截图对应已发布的 1.3.0。
-
-**把 GitHub Projects v2 带进 DeepSeek Harness。** 给每个工作区绑定一个 Project、给每个会话绑定一个
-Issue，让看板、分支和任务贴在对话旁边，而不是藏在另一个标签页里。
+**把 GitHub Projects v2 带进 DeepSeek Harness。** 绑定到工作区的 Project 在右侧栏里带着它自己的已保存
+视图——看板或表格；绑定到会话的 Issue 贴在对话旁边。打开一个开关后，也可以直接在那里改：字段、Issue
+正文、评论、新条目。
 
 所有读取都经过你**本地的 `gh` CLI**——插件不保存 token、不发遥测、也从不直接调用 GitHub。
-**默认只读**：唯一存在的写操作是可选的 Project `Status` 更新。
+**默认只读**：所有写操作都在同一个可选开关后面。
 
 ```
 会话头部： [ 对话 ] [ 轨迹 ] [ issue ] [ … ]
@@ -18,10 +17,26 @@ Issue，让看板、分支和任务贴在对话旁边，而不是藏在另一个
 > 第三方插件，非 DeepSeek / DeepSeek Harness 官方组件。
 > 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
+> **这份 README 描述的是哪个版本？** 下面的右侧栏项目管理——已保存视图、表格布局、条目详情、编辑、
+> 评论、添加条目——在**当前检出**里，**尚未进入 npm 发布版**；npm 上仍是 1.3.0 的能力集。也正因如此，
+> 这份 README 没有新面板的截图。已发布版本的行为记录在 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 你能得到什么
 
-- **右侧栏里的看板。** 绑定到当前工作区的 Project，以状态泳道看板呈现，可切换列表、支持 milestone
-  过滤——它贴在对话旁边，不占会话头部的位置。
+**右侧栏里，绑定到当前工作区的 Project**——从该工作区行的看板图标打开：
+
+- **GitHub 上的已保存视图，按它自己的顺序排列。** 每个视图保留自己的布局、筛选和字段，一个 Project
+  可以有多个看板或表格。
+- **看板与表格两种布局。** 列来自该视图自己的字段和选项；表格是一行一个条目、一列一个字段。把卡片
+  拖到另一列即修改该字段，也可以用卡片的「移动到」菜单（键盘可达）；表格单元格就地编辑。
+- **条目详情不用离开右侧栏。** 标题和正文就地编辑，评论渲染在评论框下方，字段区包含负责人、标签、
+  milestone 和项目字段。`Esc` 或「返回项目」回到你离开时的视图、筛选、滚动位置和焦点。
+- **从列底部或表格最后一行添加条目。** 输入标题创建草稿，或附加已有条目，或创建 Issue——沿用你发起
+  时所在分组的字段值。
+- **用 GitHub 的筛选语法**筛选：仓库、标签、负责人、项目字段。
+
+**工作区与会话层面：**
+
 - **绑定到会话的 Issue。** `issue` 页显示**这个会话**的 Issue；其标题还会作为一行副标题出现在会话标题
   下，**同时**出现在左侧栏的会话行下。
 - **每个工作区的 git 分支标签。** 每个工作区行显示该 checkout 当前所在的分支。
@@ -34,7 +49,7 @@ Issue，让看板、分支和任务贴在对话旁边，而不是藏在另一个
 ```sh
 # 1. 需要已认证、且带 project scope 的 gh CLI
 gh auth status || gh auth login
-gh auth refresh -s project        # 只有需要用可选的 Status 写回时才要
+gh auth refresh -s project        # 只在要打开写操作时需要
 
 # 2. 装进你应用实际使用的 profile（desktop / web / headless）
 dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
@@ -47,21 +62,22 @@ dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
 想手动绑定 Project：点看板图标 → 选一个 Project。想绑定 Issue：打开 `issue` 页粘贴链接，或在任意
 卡片上点**绑定**。
 
-## 唯一的写操作
+## 写操作只有一个开关
 
 | | |
 |---|---|
-| 默认（`allowWrites: false`） | **完全不写 GitHub**——不改状态、不评论、不建 Issue、不改任何字段 |
-| 可选（`allowWrites: true`） | 拖动卡片**只**改该 Project item 的 `Status` single-select，别的什么都不改 |
-| 权限范围 | 仍是同一个 `project` scope；插件不会多要 |
+| 默认（`allowWrites: false`） | **完全不写 GitHub。** 视图、条目、详情照常读取；所有写路由返回 403 `writes-disabled`，编辑入口不渲染 |
+| 可选（`allowWrites: true`） | 移动条目的字段、编辑 Issue 的标题 / 正文 / 状态 / 负责人 / 标签 / milestone、发表评论、添加已有条目、创建 Issue 或草稿、归档、保存视图的可见字段 |
+| 权限范围 | 用你已有的 `gh` 登录，插件不会多要 scope。GitHub 仍会按其 Project 与仓库权限拦截，越权写入会带着 GitHub 自己的原因失败 |
+| 并发 | 字段写入会带上它被编辑前的值。如果 GitHub 那边已经变了，写入会以冲突被拒：你看到最新值，草稿保留 |
 
 ## 安装前请读这一段
 
-这个插件向宿主 DOM 注入了两条副标题和一个图标，依赖已认证的 `gh`，绑定按 profile 保存而非跟着仓库走，
-并且没有搜索、没有轮询、没有跨 Project 视图。完整清单——30 多条，包含每一处宿主 DOM 依赖和每一处
-布局上限——见 **[已知限制](#已知限制)**。
+这个插件向宿主 DOM 注入了两条副标题和一个图标，绑定按 profile 保存而非跟着仓库走。右侧栏读取 Project
+条目是一次有上界的读取，所以极大的 Project 会被截断而不是分页。Roadmap 布局、列内手动排序、批量操作、
+恢复已归档条目、更完整的 PR 详情都不在这个版本里；Insights、工作流和项目级权限则完全没有覆盖。完整
+清单——包含每一处宿主 DOM 依赖和每一处布局上限——见 **[已知限制](#已知限制)**。
 
-## 界面
 
 `01`–`09`、`12`–`14` 由隔离 e2e 在 **real 模式**下对真实 `gh` 采集，1280×800；`11` 为同一 harness
 在 **2200×1300** 下最大化右侧栏采集；`16`–`18` 为 fixture 栈截图；`10` 为真实 Desktop 手动截图；
@@ -114,9 +130,9 @@ harness 产出）。`15-published-install.png` 在发布后由干净 profile rel
 追加的：停用插件后界面完全恢复原样。
 
 所有 GitHub 读取都通过你本机已登录的 [`gh` CLI](https://cli.github.com/) 完成。插件不保存 token、
-不上报遥测、也不直接访问 GitHub。**读取始终可用；唯一的写操作是可选的 Project 条目 `Status` 更新**
-（`POST /item-status`，由 `allowWrites: true` 开启，v1.1.0）——插件从不接触 token，也不存在其它
-GitHub 写操作。
+不上报遥测、也不直接访问 GitHub。**读取始终可用；所有写操作都在 `allowWrites` 后面**，它默认关闭
+——关闭时写路由一律返回 403 `writes-disabled`，编辑入口不渲染，`github_project_item_status` agent
+工具也不注册。
 
 ## 前置条件
 
@@ -197,14 +213,31 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
    acme/web#240」「解除当前会话的 Issue 绑定」（agent 工具）。
 7. 之后随时点会话标题下的副标题，可在系统浏览器重新打开该 Issue；侧栏副标题不可交互，点会话行
    只会打开该会话。
-8. **在 Status 泳道之间移动条目（可选，v1.1.0）。** 若已开启 `allowWrites`，把卡片拖到另一个 Status
-   泳道，或打开卡片的「移动到」菜单。卡片会立即移动，toast 确认并提供「撤销」；失败的移动会回滚并
-   显示错误。只会修改 Project 条目的 `Status` 字段；默认 `allowWrites: false` 时看板只读，并显示
-   `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。` 提示。
+8. **在列之间移动条目（可选）。** 若已开启 `allowWrites`，把卡片拖到另一个列，或打开卡片的
+   「移动到」菜单。卡片会立即移动，toast 确认并提供「撤销」；失败的移动会回滚并显示错误。只会修改
+   该条目在那一列的字段；默认 `allowWrites: false` 时看板只读，并显示提示。
 
 点「刷新」强制新鲜读取（缓存过期后最多 10 分钟内可能先显示旧数据再后台刷新）；「更换」切换工作区
 绑定的 Project；「解绑」（需确认）清除绑定。解绑 Project 不会影响已绑定的 Issue。
 按钮文案以英文界面为准；中文界面本地化为 绑定 / 刷新 / 更换 / 解绑 / 移动到，视图切换为 泳道 / 列表。
+
+## 在右侧栏管理项目
+
+同一个「项目」页签是一个可用的 GitHub Projects 界面，而不只是看板。它读取 Project 真实的已保存视图，
+并且只在 GitHub 公开接口允许的范围内写入——绝不做接口之外的事。
+
+| GitHub 上的入口 | 右侧栏里的行为 |
+|---|---|
+| 项目名称 → 已保存视图 | 每个已保存视图一个页签，按 GitHub 的顺序。各自保留布局、筛选和字段，所以一个 Project 可以有多个看板和表格 |
+| 筛选栏 → 「视图」菜单 | 使用 GitHub 的筛选语法（仓库、标签、负责人、项目字段）。菜单提供布局、列字段、分组、排序和可见字段。临时调整只留在这个视图；显式保存才会写入共享视图 |
+| 看板列 → 卡片 | 列来自该视图自己的字段和选项。点标题打开详情，跨列拖动即改该字段，卡片菜单提供键盘可达的「移动到」和「归档」。已排序的看板仍允许跨列移动——列内顺序由排序规则决定 |
+| 表格 → 字段单元格 | 一行一个条目、一列一个字段。点标题打开详情；Status、Priority 这类单元格就地编辑，焦点回到被编辑的单元格 |
+| 卡片或行标题 → 条目详情 | 详情在同一个页签里打开：标题和正文就地编辑，讨论和评论框在正文下方，字段区包含负责人、标签、milestone 和项目字段。`Esc` 或「返回项目」恢复视图、筛选、滚动位置和焦点 |
+| 列底部或表格最后一行 → 添加 | 输入标题创建草稿，或添加已有条目，或创建 Issue——沿用你发起时所在分组的字段值 |
+
+创建 Issue 和加入 Project 分别报告：如果 Issue 创建成功但加入失败，面板会显示已创建的 Issue，重试只
+执行加入。正文或评论发送失败会保留草稿。字段在 GitHub 那边已被改动时，会以冲突形式返回 GitHub 的当前
+值，你的草稿仍然保留。
 
 ## 配置
 
@@ -224,7 +257,7 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 | `healthCacheTtlMs` | `5000` | `gh` 健康快照 TTL（`/config`、`/health` 共享） |
 | `healthFirstReadTimeoutMs` | `3000` | **legacy，已不再使用**（0.4.0 起 `/config` 永不等待探测）；仅为兼容旧配置保留 |
 | `statePath` | `null` | 绑定存储文件；`null` 解析为 `$DSH_HOME/plugin-data/github-projects/state.json` |
-| `allowWrites` | `false` | **可选的 GitHub 写操作（v1.1.0）。** `true` 开启看板拖拽 / 「移动到」菜单、`POST /item-status` 与 `github_project_item_status` agent 工具（只写 Status 单选字段）。需要 `project` scope。为 `false`（默认）时写操作被 403 `writes-disabled` 拒绝，工具不注册，看板只读并显示提示 |
+| `allowWrites` | `false` | **可选的 GitHub 写操作。** `true` 开启右侧栏的编辑面：拖卡片改字段、就地编辑表格单元格、编辑条目的标题 / 正文 / 状态 / 负责人 / 标签 / milestone、发表评论、添加已有条目、创建 Issue 或草稿、归档、保存视图的可见字段，以及 `github_project_item_status` agent 工具。为 `false`（默认）时所有写路由返回 403 `writes-disabled`，编辑入口不渲染，工具不注册 |
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
@@ -258,9 +291,9 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 - **无遥测**、无统计、不加载外部图片/头像。Issue 正文按安全 Markdown 子集渲染（不执行 HTML、不加载远程图片）。
 - **本地状态很小：** `state.json` 只存 Project/Issue 的标题、链接、编号、状态摘要和绑定时间；
   删除该文件即重置全部绑定。
-- **默认只读；只有一个可选写操作。** 除非设置 `allowWrites: true`，所有 GitHub 调用都是读取。开启后
-  唯一的写操作是 `POST /item-status`——修改一个 Project 条目的 `Status` 单选字段；插件没有任何其它
-  写端点（不编辑 Issue、评论、标签或其它 Project 字段）。
+- **默认只读。** 除非设置 `allowWrites: true`，所有 GitHub 调用都是读取。开启后，写入范围限于右侧栏
+  能做的事：Project 条目的字段、Issue 的标题 / 正文 / 状态 / 负责人 / 标签 / milestone、评论、添加或
+  创建条目、归档、以及视图的可见字段。删除 Project、以及任何工作流、Insights 或权限变更都没有路由。
 
 ## 常见问题
 
@@ -325,10 +358,15 @@ node scripts/e2e/run.mjs --mode=real              # 同上，但使用真实 gh 
 | `POST /unbind-workspace` | 清除工作区绑定 |
 | `POST /bind-issue` | 绑定 Issue 到会话 |
 | `POST /unbind-issue` | 清除会话绑定 |
-| `POST /item-status` | **唯一写操作**：把一个 Project 条目移动到某个 Status 选项（`optionId: null` 清除）；`allowWrites` 非 true 时 403 `writes-disabled` |
+| `GET /project-layout` | 一个 Project 的已保存视图、字段，以及其条目可来自的仓库 |
+| `GET /project-view-items?filter=…` | 某个已保存视图的条目；筛选串交给 GitHub 自己解析 |
+| `GET /project-item?…` | 一个条目的正文、最近评论和调用方权限 |
+| `GET /project-choices?…` | 该条目所在仓库的负责人、标签与 milestone |
+| `POST /project-operation` | **右侧栏的全部写操作**（改字段、编辑条目、评论、添加 / 创建、归档、保存视图）；`allowWrites` 非 true 时 403 `writes-disabled` |
+| `POST /item-status` | 把一个 Project 条目移动到某个 Status 选项（`optionId: null` 清除）——看板仍在用的旧路由，同一道门禁 |
 
-只有插件自己的浏览器半使用它；POST 有 Origin/Content-Type/大小门禁。唯一的 GitHub 写是
-`/item-status`（由 `allowWrites` 门禁），其余全部只读。
+只有插件自己的浏览器半使用它；POST 有 Origin/Content-Type/大小门禁。所有 GitHub 写都走
+`/project-operation` 或 `/item-status`，两者都由 `allowWrites` 门禁，其余全部只读。
 
 e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会碰你正在使用的 profile 和窗口。
 更多设计细节见 [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md)，冻结接口见 [`docs/CONTRACT.md`](docs/CONTRACT.md)。
@@ -337,14 +375,14 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | **1.3.0** —— 按仓库 `origin` remote 自动绑定 Project（v1.3.0）、每个工作区的 git 分支标签（v1.2.0）、可选 Status 写（v1.1.0）；默认只读 |
+| 插件版本 | 当前检出新增右侧栏项目管理（已保存视图、表格布局、条目详情、编辑、评论、添加条目）。已发布的 npm 版本是 **1.3.0**——按仓库 `origin` remote 自动绑定 Project、每个工作区的 git 分支标签、可选 Status 写；默认只读 |
 | 宿主引擎 | `engines.dsh`：`>=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |
 | 实测系统 | macOS（e2e 使用 headless Chrome 156） |
 | Node（宿主半） | ≥ 22 |
 | 运行时依赖 | 无（浏览器半使用宿主提供的 `react` / `react-dom`） |
-| 写操作 | **可选**（`allowWrites: true`，默认 `false`）；只写 Status 单选字段；需要 `project` scope；无其它 GitHub 写 |
+| 写操作 | **可选**（`allowWrites: true`，默认 `false`）；Project 字段、条目编辑、评论、添加与创建条目、归档、保存视图；需要 `project` scope 以及 GitHub 自身的 Project/仓库权限；不删除，也不写工作流、Insights 或权限 |
 | 验收 | 各版本的测试与 e2e 证据记录在[验收证据](docs/DESIGN.zh.md#8-验收与验证证据)。在当前代码上复现：`node --test test/host/*.test.mjs` 与 `node scripts/e2e/run.mjs --mode fixture`。 |
 
 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0`（只在 DSH 0.2.1-rc.3 上验证过）。超出该范围、或改动了

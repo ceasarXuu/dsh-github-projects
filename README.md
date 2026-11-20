@@ -1,24 +1,42 @@
 # dsh-github-projects
 
-> The development branch opens saved GitHub views, boards, tables, and item details in the right sidebar. With `allowWrites: true`, it can edit fields and issues, post comments, and add items. The installation instructions and screenshots below cover the published 1.3.0 release.
-
-**GitHub Projects v2 inside DeepSeek Harness.** Bind a Project to each workspace and an Issue to each
-session, so the board, the branch and the task sit next to the conversation instead of in another tab.
+**GitHub Projects v2 inside DeepSeek Harness.** Your Project sits in the right sidebar with its own
+saved views — board or table — and the Issue bound to this session sits beside the conversation. With
+one switch on, you work them there too: fields, the issue body, comments, new items.
 
 Reads go through your **local `gh` CLI** — the plugin stores no token, sends no telemetry, and never
-calls GitHub directly. **Read-only by default**: the only write that exists is an opt-in Project
-`Status` update.
+calls GitHub directly. **Read-only by default**: every write sits behind a single opt-in switch.
 
 <p align="center"><em>Open a workspace and the board binds itself from the checkout's <code>origin</code> remote.</em></p>
 
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
 > Release notes live in [CHANGELOG.md](CHANGELOG.md).
 
+> **Which version does this README describe?** The sidebar project management below — saved views, the
+> table layout, item details, editing, comments, adding items — is in **this checkout** and is **not in
+> the published npm release yet**; npm still serves the 1.3.0 feature set. That is why this README has
+> no screenshots of the newer panel. The released behaviour is recorded in
+> [CHANGELOG.md](CHANGELOG.md).
+
 ## What you get
 
-- **A board in the right sidebar.** The Project bound to this workspace as a status swimlane board,
-  with a list view and a milestone filter — it stays visible next to the conversation instead of
-  taking a header slot.
+**In the right sidebar, the Project bound to this workspace** — opened from the board icon in its
+workspace row:
+
+- **Its saved views, in GitHub's own order.** Each view keeps its layout, filter and fields, and one
+  Project can hold several boards and tables.
+- **Board and table layouts.** Columns come from that view's own field and options; the table is one
+  item per row and one field per column. Drag a card across columns to change that field, or use its
+  移动到 menu (keyboard-reachable); edit table cells in place.
+- **Item details without leaving the sidebar.** Title and body edit in place, comments render below a
+  comment box, and the field area holds assignees, labels, milestone and project fields. `Esc` or
+  返回项目 returns to the view, filter, scroll position and focus you left.
+- **Add items from a column or the table's last row.** Type a title to create a draft, attach an
+  existing item, or create an Issue — inheriting the field values of the group you started from.
+- **Filter with GitHub's syntax** — repository, label, assignee, project fields.
+
+**Across the workspace and the session:**
+
 - **An Issue bound to the session.** The `issue` tab shows *this* session's Issue; its title also
   appears as a one-line subtitle under the session title in the header **and** under the session row
   in the left sidebar.
@@ -32,7 +50,7 @@ calls GitHub directly. **Read-only by default**: the only write that exists is a
 ```sh
 # 1. An authenticated gh CLI with the project scope
 gh auth status || gh auth login
-gh auth refresh -s project        # only needed for the opt-in Status write
+gh auth refresh -s project        # only needed once writes are switched on
 
 # 2. Install into the profile your app runs (desktop / web / headless)
 dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects
@@ -45,22 +63,24 @@ If the workspace's repository is linked to a Project, the board opens already bo
 `已根据仓库 … 自动绑定`. Bind by hand instead: board icon → pick a Project. Bind an Issue: open the
 `issue` tab and paste a link, or click **Bind** on any card.
 
-## The only write
+## Writes are one switch
 
 | | |
 |---|---|
-| Default (`allowWrites: false`) | **No GitHub write at all** — no status changes, comments, issue creation, or field edits |
-| Opt-in (`allowWrites: true`) | Moving a card changes **only** that Project item's `Status` single-select. Nothing else |
-| Scope | The same `project` scope; the plugin never asks for more |
+| Default (`allowWrites: false`) | **No GitHub write at all.** Views, items and details still read; every write route answers 403 `writes-disabled` and the edit affordances are not rendered |
+| Opt-in (`allowWrites: true`) | Move an item across a field, edit an issue's title / body / state / assignees / labels / milestone, comment, add an existing item, create an Issue or draft, archive, save a view's visible fields |
+| Scope | Your existing `gh` login; the plugin never asks for a broader scope. GitHub enforces Project and repository permissions, so a write you are not entitled to make fails with GitHub's own reason |
+| Concurrency | A field write carries the value it was edited from. If GitHub has moved on meanwhile the write is refused as a conflict: you see the current value and keep your draft |
 
 ## Read this before installing
 
-This plugin injects two subtitles and one icon into the host's DOM, depends on an authenticated `gh`,
-keeps bindings per profile rather than per repository, and has no search, no polling and no
-cross-Project view. The complete list — 30+ items, including every host-DOM dependency and every
-layout cap — is in **[Known limitations](#known-limitations)**.
+This plugin injects two subtitles and one icon into the host's DOM, and keeps bindings per profile
+rather than per repository. The sidebar reads a Project's items in one bounded read, so a very large
+Project is capped rather than paged. Roadmap layout, manual ordering within a column, bulk actions,
+restoring an archived item and a full PR detail view are not in this version; Insights, workflows and
+project-level permissions are not covered at all. The complete list — including every host-DOM
+dependency and every layout cap — is in **[Known limitations](#known-limitations)**.
 
-## Screens
 
 `01`–`09` and `12`–`14` come from the isolated e2e harness in **real-host mode** against live `gh` at
 1280×800; `11` is the same harness at **2200×1300** with the right sidebar maximized; `16`–`18` are
@@ -121,8 +141,9 @@ the shipped views: remove the plugin and the interface returns to normal.
 
 All GitHub reads go through your locally authenticated [`gh` CLI](https://cli.github.com/). The
 plugin stores no token, sends no telemetry, and never calls GitHub directly. **Reads are always on;
-the only write is the opt-in Project item `Status` update** (`POST /item-status`, enabled by
-`allowWrites: true`, v1.1.0) — the plugin never touches tokens, and no other GitHub write exists.
+every write sits behind `allowWrites`**, which defaults to off — with it off the write routes answer
+403 `writes-disabled`, the edit affordances are not rendered, and the
+`github_project_item_status` agent tool is not registered.
 
 ## Requirements
 
@@ -147,9 +168,11 @@ the only write is the opt-in Project item `Status` update** (`POST /item-status`
   Don't have `gh`? `brew install gh` on macOS, or see <https://cli.github.com/>. A standalone binary
   works too — put its absolute path in `ghCommand` if DSH can't see your shell `PATH`.
 
-- **Writing (opt-in, v1.1.0):** Status writes use the same `project` scope — no additional or broader
-  scope is requested. If moves fail with a `gh-auth`/scope message, run `gh auth refresh -s project`
-  and reload the host (see [how to enable writes](#configuration)).
+- **Writing (opt-in):** writes use the same `project` scope — no additional or broader scope is
+  requested. GitHub still enforces each Project's own permissions and those of the repository an Item
+  lives in, so a write you are not entitled to make fails with GitHub's own reason. If a write fails
+  with a `gh-auth`/scope message, run `gh auth refresh -s project` and reload the host (see
+  [how to enable writes](#configuration)).
 
 ## Install
 
@@ -212,17 +235,35 @@ installed users should use the npm package above.
 7. The conversation-header issue subtitle can be clicked any time to reopen the Issue in the system
    browser. The sidebar subtitle is non-interactive: clicking anywhere on a session row opens that
    session.
-8. **Moving items between Status lanes (opt-in, v1.1.0).** If you enabled `allowWrites`, drag a card
-   onto another Status lane or open the card's **移动到** menu. The card moves immediately, a toast
-   confirms it with **Undo**, and a failed move is rolled back with an error. Only the Project item's
-   `Status` field changes; with the default `allowWrites: false` the board is read-only and shows the
-   hint `只读看板：开启 allowWrites 后才能拖动卡片调整卡片 Status。`.
+8. **Moving items between columns (opt-in).** If you enabled `allowWrites`, drag a card onto another
+   column or open the card's **移动到** menu. The card moves immediately, a toast confirms it with
+   **Undo**, and a failed move is rolled back with an error. Only the column's own field on that item
+   changes; with the default `allowWrites: false` the board is read-only and shows a hint.
 
 Use **Refresh** to force a fresh read (cached data may be served stale for up to `staleTtlMs` while
 it revalidates), **Change** to switch the workspace's Project, and **Unbind** (with confirmation) to
 clear a binding. Unbinding a Project does not unbind session Issues.
 Button labels above are the English UI copy; the Chinese UI localizes the same actions as
 绑定 / 刷新 / 更换 / 解绑 / 移动到, and the view toggle as 泳道 / 列表.
+
+## Managing a Project in the sidebar
+
+The same 项目 tab is a working GitHub Projects surface, not only a board. It reads the Project's real
+saved views, and writes through GitHub's public API only where that API allows — never around it.
+
+| GitHub gesture | In the sidebar |
+|---|---|
+| Project name → saved views | A tab per saved view, in GitHub's order. Each keeps its own layout, filter and fields, so one Project can hold several boards and tables |
+| Filter bar → 视图 menu | GitHub's filter syntax (repository, label, assignee, project fields). The menu holds layout, column field, grouping, sorting and visible fields. A temporary change stays in this view; only an explicit save writes the shared view |
+| Board column → card | Columns come from that view's field and options. The title opens the detail, dragging across columns changes that field, and the card menu offers keyboard-reachable 移动到 and 归档. A sorted board still allows cross-column moves — the order inside a column follows the sort |
+| Table → field cell | One item per row, one field per column. The title opens the detail; Status, Priority and similar cells edit in place and focus returns to the edited cell |
+| Card or row title → item detail | The detail opens in the same tab: title and body edit in place, the discussion and a comment box sit under the body, and the field area holds assignees, labels, milestone and project fields. 返回项目 or `Esc` restores the view, filter, scroll position and focus |
+| Column header or table last row → add | Type a title to create a draft, add an existing item, or create an Issue — inheriting the field values of the group you started from |
+
+Creating an Issue and adding it to the Project are reported separately: if the Issue was created but
+the add failed, the panel shows the created Issue and a retry performs only the add. A failed body or
+comment send keeps your draft. A field that changed on GitHub meanwhile comes back as a conflict with
+GitHub's current value, and your draft survives.
 
 ## Configuration
 
@@ -243,7 +284,7 @@ so restate every key you need.
 | `healthCacheTtlMs` | `5000` | TTL of the cached `gh` health snapshot shared by `/config` and `/health` |
 | `healthFirstReadTimeoutMs` | `3000` | **Legacy, no longer used** (since 0.4.0 `/config` never waits for a probe); accepted only for older configs |
 | `statePath` | `null` | Binding file; `null` resolves to `$DSH_HOME/plugin-data/github-projects/state.json` |
-| `allowWrites` | `false` | **Opt-in GitHub writes (v1.1.0).** `true` enables the board drag / 移动到 menu, `POST /item-status`, and the `github_project_item_status` agent tool (status single-select field only). Requires the `project` scope. When `false` (default) writes are refused with 403 `writes-disabled`, the tool is not registered, and the board is read-only with a hint |
+| `allowWrites` | `false` | **Opt-in GitHub writes.** `true` enables the sidebar's editing surface — drag a card across a field, edit a table cell, edit an Item's title / body / state / assignees / labels / milestone, comment, add an existing item, create an Issue or draft, archive, save a view's visible fields — plus the `github_project_item_status` agent tool. When `false` (default) every write route answers 403 `writes-disabled`, the edit affordances are not rendered and the tool is not registered |
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml
@@ -261,7 +302,7 @@ so restate every key you need.
     healthCacheTtlMs: 5000
     healthFirstReadTimeoutMs: 3000
     statePath: null
-    allowWrites: false   # set true (and gh auth refresh -s project) to enable Status writes
+    allowWrites: false   # set true (and gh auth refresh -s project) to enable writes
 ```
 
 To enable writes, set `allowWrites: true`, run `gh auth refresh -s project`, and reload the host —
@@ -277,10 +318,11 @@ the row **replaces the whole `config`**, so restate every key you need (see [Con
   Markdown subset (no HTML, no remote images).
 - **Local state is tiny:** `state.json` only holds Project/Issue titles, URLs, numbers and state
   summaries, plus binding timestamps. Delete it to reset all bindings.
-- **Read-only by default; one opt-in write.** Every GitHub call is a read unless you set
-  `allowWrites: true`. With it on, the only mutation is `POST /item-status` — one Project item's
-  `Status` single-select field. There is no endpoint that edits Issues, comments, labels or any other
-  Project field.
+- **Read-only by default.** Every GitHub call is a read unless you set `allowWrites: true`. With it
+  on, writes are confined to what the sidebar offers: a Project item's fields, an Issue's title, body,
+  state, assignees, labels and milestone, a comment, an added or created item, an archive, and a
+  view's visible fields. Deleting a Project, and any workflow, Insights or permission change, has no
+  route at all.
 
 ## Troubleshooting
 
@@ -346,10 +388,16 @@ The browser half talks to the plugin over a loopback-only JSON API (prefix
 | `POST /unbind-workspace` | clear a workspace binding |
 | `POST /bind-issue` | bind an Issue to a session |
 | `POST /unbind-issue` | clear a session binding |
-| `POST /item-status` | **the only write**: move one Project item to a Status option (`optionId: null` clears it); 403 `writes-disabled` unless `allowWrites` is true |
+| `GET /project-layout` | a Project's saved views, its fields, and the repositories its items may come from |
+| `GET /project-view-items?filter=…` | one saved view's items; the filter string is resolved by GitHub itself |
+| `GET /project-item?…` | one item's body, its recent comments and the caller's permissions |
+| `GET /project-choices?…` | assignees, labels and milestones for the Item's repository |
+| `POST /project-operation` | **every sidebar write** (move a field, edit an Item, comment, add / create, archive, save a view); 403 `writes-disabled` unless `allowWrites` is true |
+| `POST /item-status` | move one Project item to a Status option (`optionId: null` clears it) — the pre-sidebar route the board still uses; same gate |
 
-Only the plugin's own browser half consumes it; POSTs are origin/content-type/size gated. The only
-GitHub write is `/item-status`, gated by `allowWrites`; everything else is read-only.
+Only the plugin's own browser half consumes it; POSTs are origin/content-type/size gated. Every
+GitHub write goes through `/project-operation` or `/item-status`, both gated by `allowWrites`;
+everything else is read-only.
 
 The e2e harness runs in an isolated temp `DSH_HOME` and workspace on its own port — it never touches
 your running profile or the window you're using. See [`docs/DESIGN.zh.md`](docs/DESIGN.zh.md) for the
@@ -359,14 +407,14 @@ Chinese design document and [`docs/CONTRACT.md`](docs/CONTRACT.md) for the froze
 
 | | |
 |---|---|
-| Plugin version | **1.3.0** — automatic Project binding from the checkout's `origin` remote (v1.3.0), per-workspace git branch chip (v1.2.0), opt-in Status writes (v1.1.0); read-only by default |
+| Plugin version | This checkout adds the sidebar project management (saved views, table layout, Item details, editing, comments, adding items). The published npm release is **1.3.0** — automatic Project binding from the checkout's `origin` remote, per-workspace git branch chip, opt-in Status writes; read-only by default |
 | Host engine | `engines.dsh`: `>=0.2.1-rc.3 <0.3.0`; Node ≥ 22 |
 | Verified DSH | 0.2.1-rc.3 (Desktop + `dsh web`) |
 | Verified `gh` | 2.96.0 (2026-07-02) |
 | Verified OS | macOS (headless Chrome 156 for e2e) |
 | Node (host half) | ≥ 22 |
 | Runtime dependencies | none (browser half uses host-provided `react` / `react-dom`) |
-| Writing | **opt-in** (`allowWrites: true`, default `false`); single-select `Status` field only; requires the `project` scope; no other GitHub write |
+| Writing | **opt-in** (`allowWrites: true`, default `false`); Project fields, Item edits, comments, adding and creating items, archive, saving a view; needs the `project` scope and GitHub's own Project/repository permissions; no delete, and no workflow, Insights or permission write |
 | Acceptance | Per-release test and e2e evidence is recorded in [the evidence chapter](docs/DESIGN.zh.md#8-验收与验证证据). To reproduce on this tree: `node --test test/host/*.test.mjs` and `node scripts/e2e/run.mjs --mode fixture`. |
 
 `engines.dsh` is `>=0.2.1-rc.3 <0.3.0` (verified on DSH 0.2.1-rc.3 only). A DSH upgrade outside that
@@ -378,16 +426,19 @@ may require a plugin update.
 
 - **Read-only by default.** With `allowWrites` off (the default) no GitHub write happens at all: no
   status changes, comments, issue creation, label or field edits.
-- **The only write is one Status field (opt-in).** With `allowWrites: true`, moving a card changes
-  only that Project item's `Status` single-select. There is no card ordering, no drag between list
-  sections, no comment/Issue editing and no other Project field write.
+- **What the sidebar can and cannot write.** With `allowWrites: true` it changes a Project item's
+  fields, an Item's title / body / state / assignees / labels / milestone, posts a comment, adds an
+  existing item, creates an Issue or draft, archives an item, and saves a view's visible fields. It
+  cannot delete a Project, reorder items manually within a column, run bulk actions, restore an
+  archived item, or touch a Project's workflows, Insights or permissions.
 - **Writing needs the `project` scope.** The token must carry `project` (`gh auth refresh -s
   project`); the plugin never requests a broader scope. A missing scope fails the move with
   `gh-auth` and an inline scope hint.
 - **Unknown custom statuses stay read-only:** `other:*` lanes are never drop targets and never appear
   in the 移动到 menu — only the canonical Status options (plus clearing to `No status`) can be applied.
-- **Concurrent changes win:** if the item's Status changed on GitHub meanwhile, the host's answer is
-  authoritative and replaces the optimistic state; a rejected move rolls the card back.
+- **Concurrent changes win:** a field write carries the value it was edited from. If GitHub has moved
+  on meanwhile the write is refused as a conflict — you see GitHub's current value, keep your draft,
+  and the card rolls back.
 - **Undo covers the last move only** while its toast is visible; older moves must be reversed
   manually. The undo itself is a normal `POST /item-status` and can fail (rolled back with an error
   toast).
