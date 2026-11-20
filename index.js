@@ -468,6 +468,16 @@ function createSwrCache({ cacheTtlMs, staleTtlMs, disk }) {
       return { value: loaded.value, fetchedAt: loaded.fetchedAt, stale: false }
     },
     /**
+     * Look at a cached read without loading it. The sidebar's first paint uses
+     * this to prefer a complete set a background read has already filled in,
+     * and to decide whether it still has to ask for the rest.
+     */
+    peek(key) {
+      const record = entries.get(key)
+      if (record === undefined) return null
+      return { value: record.value, fetchedAt: record.fetchedAt, stale: freshness(record) !== 'fresh' }
+    },
+    /**
      * Drop one cached read (v1.1.0: after a successful Status write, so the
      * next `/items` re-reads from GitHub — contract §3.1). Best-effort disk
      * snapshot update so a restart does not resurrect the stale value.

@@ -125,7 +125,22 @@ export function createSidebarApi({ github, store, cache }) {
       return { ...value, stale }
     }
     const filter = text(query.get('filter') ?? '', 1500)
-    const { value, stale } = await cache.get(`sidebar-items:${target.key}:${filter}`, refresh, () => github.items(target, filter))
+    const maxItems = Number.isSafeInteger(github.maxItems) && github.maxItems > 0 ? github.maxItems : 200
+    const asked = Number.parseInt(query.get('limit') ?? '', 10)
+    const cap = Number.isInteger(asked) && asked > 0 ? Math.min(asked, maxItems) : maxItems
+    const fullKey = `sidebar-items:${target.key}:${filter}:${maxItems}`
+    // A complete set that a previous open already filled in wins: it costs nothing
+    // and stops the caller rendering a first page it would replace a second later.
+    if (cap < maxItems && refresh !== true && typeof cache.peek === 'function') {
+      const complete = cache.peek(fullKey)
+      if (complete !== null && complete.stale === false) return { ...complete.value, stale: false }
+    }
+    const key = `sidebar-items:${target.key}:${filter}:${cap}`
+    const { value, stale } = await cache.get(key, refresh, () => github.items(target, filter, { cap }))
+    // Warm the complete set without making this response wait for it.
+    if (value?.partial === true) {
+      cache.get(fullKey, false, () => github.items(target, filter)).catch(() => { /* the next read retries */ })
+    }
     return { ...value, stale }
   }
 
