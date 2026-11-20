@@ -126,21 +126,52 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
     const target = useMemo(() => ({ workspaceId, owner: project.owner, number: project.number }), [workspaceId, project.owner, project.number])
     const targetKey = `${workspaceId}:${project.owner}/${project.number}`
     const url = useCallback((path, params = {}) => `${path}?${new URLSearchParams({ ...target, ...params })}`, [target])
-    const refresh = useCallback(() => setRevision(current => current + 1), [])
+    // Soft refresh: bump the revision and let the host serve its cache while it
+    // revalidates. A hard refresh is only what the user asks for by button, so an
+    // ordinary open stops paying for a cold read of every page.
+    const [force, setForce] = useState(false)
+    const refresh = useCallback(() => {
+      setForce(false)
+      setRevision(current => current + 1)
+    }, [])
+    const hardRefresh = useCallback(() => {
+      setForce(true)
+      setRevision(current => current + 1)
+    }, [])
     useRefreshWhenVisible(root, useCallback(() => {
       if (activeWrite.current || Date.now() - refreshedAt.current < 1000) return
       refreshedAt.current = Date.now()
       refresh()
     }, [refresh]))
 
-    const meta = useResource(url('/project-layout', { refresh: 1 }), revision)
+    const meta = useResource(url('/project-layout', force ? { refresh: 1 } : {}), revision)
     const fields = meta.value?.fields ?? EMPTY
     const views = meta.value?.views?.length ? meta.value.views : localViews
     const saved = views.find(view => view.id === requestedView) ?? views[0]
     const draft = drafts[saved.id] ?? {}
     const view = { ...saved, ...draft }
     const items = useResource(meta.value && view.layout !== 'ROADMAP_LAYOUT'
-      ? url('/project-view-items', { filter: view.filter, refresh: 1 }) : null, revision)
+      ? url('/project-view-items', { filter: view.filter, ...(force ? { refresh: 1 } : { limit: 100 }) }) : null, revision)
+    // The first page is on screen; the host is filling the complete set in the
+    // background. Ask for it a few times at most, then leave the capped view alone.
+    const partialTries = useRef(0)
+    const [partialGaveUp, setPartialGaveUp] = useState(false)
+    useEffect(() => {
+      if (items.value?.partial !== true) {
+        partialTries.current = 0
+        setPartialGaveUp(false)
+        return undefined
+      }
+      if (partialTries.current >= 4) {
+        // Stop asking. Leaving "Loading…" up for ever would be worse than an
+        // honest capped view, so fall back to the truncation notice.
+        setPartialGaveUp(true)
+        return undefined
+      }
+      const timer = window.setTimeout(() => { partialTries.current += 1; refresh() }, 1200)
+      return () => window.clearTimeout(timer)
+    }, [items.value, revision, refresh])
+
     const detail = useResource(selected ? url('/project-item', { itemId: selected.id }) : null, revision)
     const { Board, Table, FieldControl, AddForm } = useMemo(() => createSidebarViews({ React, Button, t }), [t])
     const Detail = useMemo(() => createSidebarDetail({ React, Button, Markdown, FieldControl, t }), [FieldControl, t])
@@ -268,7 +299,7 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
         h('header', { key: 'header', className: 'ghp-m-row ghp-m-spread' }, [
           h('h2', { key: 'title' }, meta.value?.project?.title ?? project.title),
           h('div', { key: 'actions', className: 'ghp-m-row' }, [
-            h(Button, { key: 'refresh', onClick: refresh, disabled: pending, size: 'sm' }, t('common.refresh')),
+            h(Button, { key: 'refresh', onClick: hardRefresh, disabled: pending, size: 'sm' }, t('common.refresh')),
             h(Button, { key: 'change', onClick: onChangeProject, disabled: pending, size: 'sm' }, t('projects.change')),
             h(ConfirmAction, { key: 'unbind', t, label: t('common.unbind'), confirmLabel: t('common.confirmUnbind'), onConfirm: onUnbind, busy: unbinding, disabled: pending }),
           ]),
@@ -287,14 +318,14 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
           layoutUnsupported ? h('p', { key: 'unsupported', className: 'ghp-m-notice' }, [t('sidebar.roadmapUnsupported'), ' ',
             h('a', { key: 'origin', href: `${meta.value.project.url}/views/${saved.number}`, target: '_blank', rel: 'noopener noreferrer' }, t('common.openGithub'))]) : null,
           !layoutUnsupported && unsupportedLayout(view, fields) ? h('p', { key: 'rules', className: 'ghp-m-notice' }, t('sidebar.rulesUnsupported')) : null,
-          meta.value.truncated || items.value?.truncated ? h('p', { key: 'truncated', className: 'ghp-m-notice' }, t('sidebar.truncated')) : null,
+          meta.value.truncated || items.value?.truncated || partialGaveUp ? h('p', { key: 'truncated', className: 'ghp-m-notice' }, t('sidebar.truncated')) : null,
           items.value ? h('p', { key: 'count', className: 'ghp-m-muted' }, t('common.items', { count: items.value.total })) : null,
           items.value ? h(view.layout === 'BOARD_LAYOUT' ? Board : Table, { key: 'list', ...listProps }) : null,
         ]) : null,
-        meta.loading || items.loading ? h('p', { key: 'loading', role: 'status' }, t('sidebar.loading')) : null,
+        meta.loading || items.loading || (items.value?.partial === true && !partialGaveUp) ? h('p', { key: 'loading', role: 'status' }, t('sidebar.loading')) : null,
       ]),
       selected ? h(Detail, { key: selected.id, selected, item: detail.value?.item, loading: detail.loading, error: detail.error,
-        onBack: back, onRetry: refresh, onWrite: write, onUpdate: update, fields, loadChoices, writesAllowed: allowWrites, projectWritable, pending }) : null,
+        onBack: back, onRetry: hardRefresh, onWrite: write, onUpdate: update, fields, loadChoices, writesAllowed: allowWrites, projectWritable, pending }) : null,
       add ? h(AddForm, { key: 'add', ...add, repositories: meta.value?.repositories ?? EMPTY, onBack: back, onWrite: write, pending }) : null,
     ])
   }

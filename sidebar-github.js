@@ -116,20 +116,34 @@ export function createSidebarGithub({ graphql, rest, GhError, parseRepo, normali
     }
   }
 
-  async function items({ owner, number }, filter) {
+  async function items({ owner, number }, filter, options = {}) {
+    // One ProjectV2ItemConnection accepts at most 100 nodes per page, and that is
+    // the page size github.js documents. A 50-node page doubled the number of
+    // serial `gh` processes a cold open spawned: 229 items took 5 pages, and each
+    // `gh api graphql` costs 0.7-1.4 s here (spawn + auth + round trip).
+    const pageSize = 100
+    const cap = Number.isSafeInteger(options.cap) && options.cap > 0
+      ? Math.min(options.cap, maxItems) : maxItems
     let cursor = null
     let total = 0
     const rows = []
     do {
-      const limit = Math.min(50, maxItems - rows.length)
+      const limit = Math.min(pageSize, cap - rows.length)
       const data = await graphql(ITEMS, { owner, number, filter, limit, cursor })
       const page = projectOf(data).items
       total = page.totalCount
       rows.push(...nodes(page).map(normalize))
       const next = page.pageInfo?.endCursor
       cursor = page.pageInfo?.hasNextPage && next && next !== cursor ? next : null
-    } while (cursor && rows.length < maxItems)
-    return { items: rows, total, truncated: Boolean(cursor) || total > rows.length }
+    } while (cursor && rows.length < cap)
+    return {
+      items: rows,
+      total,
+      // hit the configured cap: the view is incomplete by design
+      truncated: total > rows.length && cap === maxItems,
+      // stopped early because the caller asked for a smaller first page
+      partial: total > rows.length && cap < maxItems,
+    }
   }
 
   async function item({ owner, number }, id, withComments = false) {
@@ -169,5 +183,5 @@ export function createSidebarGithub({ graphql, rest, GhError, parseRepo, normali
     return result[action]
   }
 
-  return { layout, items, item, detail: (target, id) => item(target, id, true), choices, mutation, rest }
+  return { layout, items, item, detail: (target, id) => item(target, id, true), choices, mutation, rest, maxItems }
 }
