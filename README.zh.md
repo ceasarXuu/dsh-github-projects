@@ -15,7 +15,7 @@
 <p align="center"><em>打开一个工作区，看板会按该 checkout 的 <code>origin</code> remote 自动绑定。</em></p>
 
 > 第三方插件，非 DeepSeek / DeepSeek Harness 官方组件。
-> 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+> 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。带截图的单页站点：<https://ceasarxuu.github.io/dsh-github-projects/>。
 
 > 下面描述的右侧栏项目管理随 **1.4.0** 发布；变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 

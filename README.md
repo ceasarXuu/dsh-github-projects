@@ -10,7 +10,7 @@ calls GitHub directly. **Read-only by default**: every write sits behind a singl
 <p align="center"><em>Open a workspace and the board binds itself from the checkout's <code>origin</code> remote.</em></p>
 
 > Third-party plugin, not an official DeepSeek / DeepSeek Harness component.
-> Release notes live in [CHANGELOG.md](CHANGELOG.md).
+> Release notes live in [CHANGELOG.md](CHANGELOG.md). One-page site with the screens: <https://ceasarxuu.github.io/dsh-github-projects/>.
 
 > The panel management described below shipped in **1.4.0**; see [CHANGELOG.md](CHANGELOG.md).
 
