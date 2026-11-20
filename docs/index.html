@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en" data-mode="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub Projects in the DeepSeek Harness sidebar — dsh-github-projects</title>
+<meta name="description" content="A DeepSeek Harness plugin that puts GitHub Projects v2 in the right sidebar: real saved views, board and table, item detail, comments. Read-only until one switch unlocks every write, reading GitHub only through your local gh CLI.">
+<link rel="preconnect" href="https://api.fontshare.com">
+<link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip" href="#panel">Skip to the panel</a>
+
+<header class="mast">
+  <span class="mark">dsh-github-projects</span>
+  <nav class="nav" aria-label="Sections">
+    <a href="#panel">Panel</a>
+    <a href="#switch">Switch</a>
+    <a href="#project">Project</a>
+    <a href="#install">Install</a>
+    <a class="nav-out" href="https://github.com/ceasarXuu/dsh-github-projects">Source</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============================ hero ============================ -->
+  <section class="hero" id="hero" aria-labelledby="h1">
+    <h1 id="h1">GitHub Projects,<br>inside the sidebar.</h1>
+    <p class="lead">A DeepSeek Harness plugin: your Project's saved views, boards, tables and item
+      details in the right sidebar &mdash; every write behind one switch you control.</p>
+
+    <div class="doors">
+      <div class="door" data-state="off">
+        <div class="plate" aria-hidden="true">
+          <div class="ui">
+            <div class="ui-tabs"><span class="tab on">All items</span><span class="tab">This sprint</span><span class="tab">Table</span></div>
+            <div class="ui-filter">assignee:@me status:"In Progress"</div>
+            <div class="ui-cols">
+              <div class="col">
+                <p class="colhead">In progress <i>2</i></p>
+                <article class="card"><p class="t">Session cost in the composer</p><p class="m">web #240</p><p class="lb">enhancement</p></article>
+                <article class="card"><p class="t">Workspace branch chip</p><p class="m">web #246</p><p class="lb">enhancement</p></article>
+              </div>
+            </div>
+            <div class="ui-foot off">只读看板</div>
+          </div>
+        </div>
+        <p class="doorname">Read-only</p>
+        <p class="doordesc">The default. Views, items and details, read through your own <code>gh</code>.</p>
+      </div>
+
+      <div class="door" data-state="on">
+        <div class="plate" aria-hidden="true">
+          <div class="ui">
+            <div class="ui-tabs"><span class="tab on">All items</span><span class="tab">This sprint</span><span class="tab">Table</span></div>
+            <div class="ui-filter">assignee:@me status:"In Progress"</div>
+            <div class="ui-cols">
+              <div class="col">
+                <p class="colhead">In progress <i>2</i></p>
+                <article class="card"><p class="t">Session cost in the composer</p><p class="m">web #240</p><p class="lb">enhancement</p><p class="move">移动到</p></article>
+                <article class="card drag"><p class="t">Workspace branch chip</p><p class="m">web #246</p><p class="lb">enhancement</p><p class="move">移动到</p></article>
+              </div>
+            </div>
+            <div class="ui-foot on">添加条目</div>
+          </div>
+        </div>
+        <p class="doorname">Writes on</p>
+        <p class="doordesc"><code>allowWrites: true</code>. Fields, issues, comments, new items.</p>
+      </div>
+    </div>
+
+    <div class="hero-act">
+      <a class="btn" href="#install">Install</a>
+      <a class="quiet" href="https://github.com/ceasarXuu/dsh-github-projects">The source, and its changelog</a>
+    </div>
+  </section>
+
+  <!-- ============================ 1 · panel ============================ -->
+  <section id="panel" class="sect" aria-labelledby="h-panel">
+    <h2 id="h-panel">The panel, whole.</h2>
+    <p class="sub">The right sidebar, with a Project's saved views and one item open.</p>
+
+    <div class="plate-row">
+      <aside class="notes notes-l">
+        <p>GitHub's own view names, in GitHub's order. Each keeps its layout, filter and fields, so one
+          Project can hold several boards and tables.</p>
+        <p>Columns are the view's own field. Dragging a card changes that field &mdash; when writes are on.</p>
+      </aside>
+
+      <div class="ui panel demo" data-ui aria-label="The right-sidebar panel, shown as a working fragment">
+        <div class="ui-tabs"><span class="tab on">All items</span><span class="tab">This sprint</span><span class="tab">Table</span><span class="tab-dots">···</span></div>
+        <div class="ui-filter">assignee:@me status:"In Progress"</div>
+        <div class="ui-cols">
+          <div class="col">
+            <p class="colhead">In progress <i>2</i></p>
+            <article class="card"><p class="t">Session cost in the composer</p><p class="m">web #240</p><p class="lb">enhancement</p><p class="move">移动到</p></article>
+            <article class="card"><p class="t">Workspace branch chip</p><p class="m">web #246</p><p class="lb">enhancement</p><p class="move">移动到</p></article>
+          </div>
+          <div class="col">
+            <p class="colhead">In review <i>1</i></p>
+            <article class="card"><p class="t">Auto-bind from origin</p><p class="m">web #289</p><p class="lb">enhancement</p><p class="move">移动到</p></article>
+          </div>
+        </div>
+        <div class="ui-detail">
+          <p class="dt">Milestone filter on the board</p>
+          <p class="dbody">Narrow a view to one milestone without changing the shared view on GitHub.</p>
+          <p class="dmeta">ceasarXuu · 3 comments · milestone v1.3.0</p>
+          <p class="dcomment"><b>ceasarXuu</b> A temporary filter stays local until it is saved.</p>
+          <p class="dbox w">Write a comment…</p>
+        </div>
+        <div class="ui-foot">
+          <span class="off">只读看板：开启 allowWrites 后才能编辑</span>
+          <span class="on">添加条目</span>
+        </div>
+      </div>
+
+      <aside class="notes notes-r">
+        <p>Table cells edit in place and focus returns to the cell you changed.</p>
+        <p>An item opens in the same panel: body, comments, assignees, labels, milestone. <kbd>Esc</kbd> goes back to where you were.</p>
+      </aside>
+    </div>
+
+    <div class="real">
+      <figure>
+        <img src="assets/board.png" width="1280" height="800" loading="lazy"
+             alt="The shipped board in the right sidebar of DeepSeek Harness, with status colour and a read-only hint">
+        <figcaption>The shipped board: status columns, a milestone filter, and the read-only hint.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/branch.png" width="1280" height="800" loading="lazy"
+             alt="A workspace row showing its git branch chip, and a session row and header showing the bound Issue subtitle">
+        <figcaption>The workspace's git branch, the session's Issue, and the same title in two places.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================ 2 · switch ============================ -->
+  <section id="switch" class="sect" aria-labelledby="h-switch">
+    <h2 id="h-switch">Off, and on.</h2>
+    <p class="sub">One setting decides every write to GitHub. It ships off.</p>
+
+    <div class="toggle-row">
+      <label class="toggle">
+        <input type="checkbox" id="writes" role="switch">
+        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+        <span class="tlabel">Writes</span>
+      </label>
+      <span class="tstate" id="tstate" aria-live="polite">allowWrites: false</span>
+    </div>
+
+    <table class="cmp">
+      <caption class="sr">What the plugin may do with writes off, and with writes on.</caption>
+      <thead>
+        <tr><th scope="col">What it can do</th><th scope="col">Off</th><th scope="col">On</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Read views, items and item details</th><td>Yes</td><td>Yes</td></tr>
+        <tr><th scope="row">Move an item across a field</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Edit a table cell</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Edit an issue's title, body or state</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Set assignees, labels or a milestone</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Post a comment</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Add an existing item, or create an Issue</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Archive an item or save a view</th><td>No</td><td>Yes</td></tr>
+        <tr><th scope="row">Store your own GitHub token</th><td>Never</td><td>Never</td></tr>
+        <tr><th scope="row">Delete a Project, or change its permissions</th><td>No</td><td>No</td></tr>
+      </tbody>
+    </table>
+
+    <p class="after">With writes off, every write route answers <code>403 writes-disabled</code> and the
+      edit affordances are not drawn at all. GitHub enforces its own Project and repository permissions
+      on top, so a write you are not entitled to make fails with GitHub's reason.</p>
+  </section>
+
+  <!-- ============================ 3 · project ============================ -->
+  <section id="project" class="sect" aria-labelledby="h-project">
+    <h2 id="h-project">How it finds your Project.</h2>
+    <p class="sub">Projects v2 has no field for a repository's default project.</p>
+
+    <ol class="exchanges">
+      <li>
+        <p class="call-lead">First, the checkout answers locally.</p>
+        <div class="call"><pre><code>git config --get remote.origin.url</code></pre></div>
+        <div class="resp">
+          <p>Comes back as <code>git@github.com:acme/web.git</code>. Local git: no network,
+            no authentication, no API quota. Every URL shape git accepts is parsed, including
+            <code>.git</code> suffixes, ports and SSH aliases.</p>
+        </div>
+      </li>
+      <li>
+        <p class="call-lead">Then one GraphQL read finds the candidates.</p>
+        <div class="call"><pre><code>Repository.projectsV2 { … }</code></pre></div>
+        <div class="resp">
+          <p>Returns the Projects this repository links. A closed Project is never a candidate, and an
+            enabled <b>Auto-add to project</b> workflow wins the ranking.</p>
+        </div>
+      </li>
+      <li class="wide">
+        <p class="call-lead">Then it only fills a gap.</p>
+        <div class="call"><pre><code>binding: already set by hand? leave it alone</code></pre></div>
+        <div class="resp">
+          <p class="cap">The board opens already bound and says where the binding came from, so you can
+            tell guessed from chosen.</p>
+          <video class="shot loop" autoplay muted loop playsinline
+                 poster="assets/autobind.png"
+                 aria-label="The right sidebar board already bound to a Project, with the note 已根据仓库 acme/web 自动绑定">
+            <source src="assets/panel-loop.mp4" type="video/mp4">
+          </video>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============================ 4 · questions ============================ -->
+  <section id="questions" class="sect" aria-labelledby="h-q">
+    <h2 id="h-q">Questions.</h2>
+    <p class="sub">The ones that decide whether you install it.</p>
+
+    <dl class="qa">
+      <dt>Does it hold my GitHub token?</dt>
+      <dd>No. It never reads <code>GITHUB_TOKEN</code> or <code>GH_TOKEN</code>, never stores one and
+        never logs one. Every call goes through the <code>gh</code> you already signed in with, at
+        loopback. There is no telemetry and no remote image.</dd>
+
+      <dt>What if I don't have <code>gh</code>?</dt>
+      <dd>Bound titles and summaries still come from local state, but lists and details need it. Install
+        with <code>brew install gh</code>, then <code>gh auth login</code> and
+        <code>gh auth refresh -s project</code>.</dd>
+
+      <dt>What happens on a very large Project?</dt>
+      <dd>The panel reads items in one bounded read &mdash; <code>maxProjectItems</code>, 200 by default
+        &mdash; and caps comments at <code>maxComments</code>, 30. It does not page, and it says so on
+        screen rather than pretending.</dd>
+
+      <dt>What if someone changes the same field first?</dt>
+      <dd>A field write carries the value it was edited from. If GitHub has moved on, the write comes
+        back as a conflict: you see GitHub's current value, your draft survives, and the card rolls
+        back.</dd>
+
+      <dt>Which DeepSeek Harness does it need?</dt>
+      <dd><code>engines.dsh</code> is <code>&gt;=0.2.1-rc.3 &lt;0.3.0</code>, tested on 0.2.1-rc.3. It
+        draws two subtitles and one icon into the host's sidebar, so a DSH upgrade that renames those
+        nodes makes them hide &mdash; not break.</dd>
+    </dl>
+  </section>
+
+  <!-- ============================ 5 · install ============================ -->
+  <section id="install" class="sect cta" aria-labelledby="h-install">
+    <h2 id="h-install">Install it.</h2>
+    <div class="call big">
+      <pre><code id="cmd">dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects</code></pre>
+      <button class="copy" type="button" data-copy="cmd">Copy</button>
+    </div>
+    <p>Needs an authenticated <code>gh</code> with the <code>project</code> scope, and one restart of
+      DSH. Then open a workspace that is a git checkout: the board icon is in that workspace's row.</p>
+    <p class="fine">The published npm release, 1.3.0, has the board, the session binding, the subtitles
+      and the branch chip. The panel management on this page is on the repository's main branch, and
+      ships in the next release. <a href="https://github.com/ceasarXuu/dsh-github-projects/blob/main/CHANGELOG.md">The changelog says which is which</a>.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>dsh-github-projects &middot; MIT &middot; a third-party plugin, not an official DeepSeek or DeepSeek
+    Harness component</p>
+</footer>
+
+<script src="page.js" defer></script>
+</body>
+</html>
