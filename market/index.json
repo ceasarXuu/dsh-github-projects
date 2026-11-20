@@ -16,8 +16,8 @@
         "zh": "GitHub 项目与议题"
       },
       "description": {
-        "en": "Bind a GitHub Project to each workspace and an Issue to each session: swimlane board in the right sidebar, issue detail tab, header/sidebar issue subtitles, system-browser links, and agent bind tools.",
-        "zh": "给工作区绑定 GitHub Project、给会话绑定 Issue：右侧栏泳道看板、Issue 详情页、会话头部/左侧栏副标题、系统浏览器跳转与 Agent 绑定工具。"
+        "en": "GitHub Projects v2 in the right sidebar: the Project's saved views, board and table, item details, editing, comments and adding items — read-only until one opt-in switch, reading through your local gh CLI with no token stored.",
+        "zh": "右侧栏里的 GitHub Projects v2：Project 自己的已保存视图、看板与表格、条目详情、编辑、评论与添加条目——默认只读，一个可选开关放行写入，全程走本地 gh CLI，不保存 token。"
       },
       "icon": "icons/github-projects.svg",
       "author": "ceasarXuu",
@@ -35,8 +35,8 @@
       },
       "versions": [
         {
-          "version": "1.0.2",
-          "publishTimestamp": 1793226974,
+          "version": "1.4.0",
+          "publishTimestamp": 1795200763,
           "source": {
             "type": "npm"
           },
