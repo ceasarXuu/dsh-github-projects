@@ -6238,6 +6238,24 @@ a.ghp-board-card { text-decoration: none; }
   background: transparent;
   color: var(--dsw-alias-label-tertiary, #8a8a8a);
   cursor: pointer;
+  /* The entry stays in the layout (so the row never shifts) but only shows while
+     the row is pointed at, keyboard-focused, or the button itself has focus. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+[data-row-key^="workspace:"]:hover .ghp-workspace-entry,
+[data-row-key^="workspace:"]:focus-within .ghp-workspace-entry,
+.ghp-workspace-entry:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* A touch device has no hover: hiding it there would make the board unreachable. */
+@media (hover: none) {
+  .ghp-workspace-entry { opacity: 1; pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ghp-workspace-entry { transition: none; }
 }
 .ghp-workspace-entry:hover {
   color: var(--dsw-alias-label-secondary, #a3a3a3);
