@@ -457,19 +457,15 @@ html[data-mode="on"] .demo .ui-foot .off { display: none; }
   margin-top: 10px; font-size: var(--step-small);
   color: var(--muted); max-width: 42ch; line-height: 1.5;
 }
-/* the moving picture: a fixture capture drifting slowly inside its own frame */
-.shot.drift {
-  width: 100%; height: auto; margin-top: 16px;
-  background: var(--surface);
-  animation: drift 26s ease-in-out infinite alternate;
-  transform-origin: 62% 40%;
-}
-@keyframes drift {
-  from { transform: scale(1); }
-  to   { transform: scale(1.055); }
+/* the moving picture: a short silent loop cut from the promo film's board scene.
+   The poster is the same frame, so a reduced-motion or slow-network visitor sees the
+   board at rest instead of a blank box. */
+.shot.loop {
+  width: 100%; height: auto; margin-top: 16px; display: block;
+  background: var(--surface); object-fit: cover;
 }
 @media (prefers-reduced-motion: reduce) {
-  .shot.drift { animation: none; }
+  .shot.loop { /* the poster frame carries the same information */ }
 }
 
 /* ---------------------------------------------------------------- motion */
