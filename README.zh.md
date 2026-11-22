@@ -161,7 +161,7 @@ release-smoke 重新生成。看板/选择器截图（`02`–`06`、`12`）为�
 
 ## 安装
 
-插件**已发布到 npm**：`@ceasarxuu/dsh-github-projects`。当前版本是 **v1.4.0**。请装到你实际运行的
+插件**已发布到 npm**：`@ceasarxuu/dsh-github-projects`。当前版本是 **v1.4.1**。请装到你实际运行的
 DSH profile（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `headless` 就用对应名字）。
 安装需要对 profile 目录的写权限。
 
@@ -171,8 +171,8 @@ DSH profile（默认 Desktop 安装的 profile 名为 `desktop`；跑 `web` / `h
 **命令行：**
 
 ```sh
-# 安装发布版本到 desktop profile（显式 pin @1.4.0）
-dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.4.0
+# 安装发布版本到 desktop profile（显式 pin @1.4.1）
+dsh plugin --profile desktop add @ceasarxuu/dsh-github-projects@1.4.1
 
 # 确认已安装到该 profile
 dsh plugin --profile desktop why @ceasarxuu/dsh-github-projects
@@ -193,7 +193,7 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 
 这会记录为 `link:` 依赖（`link:` 前缀可省略）。仅用于开发；普通用户请使用上面的 npm 包。
 
-> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.4.0`，这样永远不会
+> registry 里还列有一个内部 staging 版本（`0.0.0-stage`）；安装请显式带 `@1.4.1`，这样永远不会
 > 装到 staging 标签。
 
 ## 使用
@@ -376,7 +376,7 @@ e2e 在独立的临时 `DSH_HOME` 和工作区、独立端口上运行，不会�
 
 | | |
 |---|---|
-| 插件版本 | **1.4.0** —— 右侧栏项目管理（已保存视图、看板与表格、条目详情、编辑、评论、添加条目），叠加在此前的按仓库 `origin` remote 自动绑定 Project（1.3.0）、工作区 git 分支标签（1.2.0）与可选 Status 写（1.1.0）之上；默认只读 |
+| 插件版本 | **1.4.1** —— 右侧栏项目管理（已保存视图、看板与表格、条目详情、编辑、评论、添加条目），叠加在此前的按仓库 `origin` remote 自动绑定 Project（1.3.0）、工作区 git 分支标签（1.2.0）与可选 Status 写（1.1.0）之上；默认只读 |
 | 宿主引擎 | `engines.dsh`：`>=0.2.1-rc.3 <0.3.0`；Node ≥ 22 |
 | 实测 DSH | 0.2.1-rc.3（Desktop + `dsh web`） |
 | 实测 `gh` | 2.96.0（2026-07-02） |

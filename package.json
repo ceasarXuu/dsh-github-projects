@@ -1,6 +1,6 @@
 {
   "name": "@ceasarxuu/dsh-github-projects",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "GitHub Projects board, session-bound Issues, header/sidebar issue subtitles, per-workspace git branch chips, automatic Project binding from each workspace's git remote, and agent bind/unbind/switch tools inside DeepSeek Harness.",
   "type": "module",
   "license": "MIT",
@@ -60,8 +60,7 @@
     "README.zh.md",
     "LICENSE",
     "CHANGELOG.md",
-    "locale/*.json",
-    "docs/DESIGN.zh.md"
+    "locale/*.json"
   ],
   "scripts": {
     "test": "node --test test/host/*.test.mjs",

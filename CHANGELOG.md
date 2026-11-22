@@ -3,6 +3,17 @@
 All notable user-facing changes of this plugin. Versions before the first public
 release are listed as internal history.
 
+## 1.4.1 — 2026-11-22
+
+Documentation and packaging only; the plugin code is identical to 1.4.0.
+
+- **Privacy**: the repository's fixtures and screenshots were captured from a real GitHub
+  account. Every visible string in `test/fixtures` is now generated demo content, the screenshots
+  are re-captured against that fixture host, and the captured images are no longer carried in the
+  repository's history at all. `docs/DESIGN.zh.md` is no longer shipped in the npm tarball, because
+  it is an internal engineering record rather than something an installer needs.
+- No API, configuration, UI or behaviour change. Upgrading from 1.4.0 is a no-op at runtime.
+
 ## 1.4.0 — 2026-11-21
 
 **The right sidebar becomes a working GitHub Projects surface.** A Project's own saved views, a board
