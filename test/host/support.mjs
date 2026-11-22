@@ -348,7 +348,11 @@ export function startApp(options = {}) {
       for (const dispose of disposers) {
         try { if (typeof dispose === 'function') dispose() } catch { /* idempotent */ }
       }
-      rmSync(dir, { recursive: true, force: true })
+      // A background SWR refresh can still be writing here (the refresh is
+      // deliberately un-awaited), so removal may race it: on Linux that surfaces
+      // as ENOTEMPTY and fails the *test*, not the code under test. rmSync only
+      // retries for EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM, which is exactly this.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     },
   }
 }
