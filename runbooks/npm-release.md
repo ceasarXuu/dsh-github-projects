@@ -75,6 +75,31 @@ npm login --auth-type=web      # opens a browser approval URL
 npm unpublish @ceasarxuu/dsh-github-projects@<version>
 ```
 
+Two details that cost real time doing this for 1.4.0:
+
+- **A web-login token does not satisfy the per-operation OTP.** `unpublish` still fails with `EOTP`,
+  and npm then prints a *second* browser URL (`/auth/cli/<id>`) whose id is masked in normal output
+  and in the debug log. Run it under a pseudo-TTY so the URL is visible and the `Press ENTER` prompt
+  can be answered while the CLI polls for the browser approval:
+
+  ```bash
+  expect <<'EXP'
+  set timeout 900
+  spawn npm unpublish @ceasarxuu/dsh-github-projects@1.4.0
+  expect "Press ENTER" { send "\r" }
+  expect { "Successfully" { exit 0 } "unpublished" { exit 0 } timeout { exit 4 } }
+  EXP
+  ```
+
+  The URL appears in the output *before* the ENTER prompt; open it, approve with the security key,
+  and the waiting CLI finishes the unpublish on its own.
+- Write a small expect script to a file rather than nesting it in one command; a malformed `-re`
+  action aborts the whole run silently.
+
+Note that this is a one-time capability problem, not a policy one: the 72-hour window is what
+matters, so authenticate early. A retracted version disappears from the registry (its tarball URL
+404s) but already-downloaded copies and CDN caches are outside anyone's control.
+
 Unpublishing a version published more than 72 hours ago is refused by policy; after that the only
 options are deprecating it or publishing a fixed version. Published tarballs cannot be edited, so a
 leak in a published version is only fixable by unpublishing inside that window or by shipping the
