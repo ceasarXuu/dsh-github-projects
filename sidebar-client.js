@@ -1,6 +1,7 @@
 import { createSidebarViews, sortedEntries, unsupportedLayout, writableField } from './sidebar-view.js'
 import { createSidebarDetail } from './sidebar-detail.js'
 import { SIDEBAR_COPY, SIDEBAR_STYLE } from './sidebar-style.js'
+import { createViewOptions } from './sidebar-options.js'
 
 const EMPTY = []
 const localViews = [
@@ -62,46 +63,6 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
         placeholder: t('sidebar.filterPlaceholder'), maxLength: 1500, onChange: event => setTyped(event.target.value) }),
       h(Button, { key: 'submit', size: 'sm', type: 'submit' }, t('sidebar.filter')),
       value ? h(Button, { key: 'clear', size: 'sm', onClick: () => onFilter('') }, t('common.clearFilter')) : null,
-    ])
-  }
-
-  function ViewOptions({ t, view, fields, allFields, change, onSave, canSave, pending }) {
-    const groupFields = allFields.filter(field => ['SINGLE_SELECT', 'ITERATION', 'ASSIGNEES', 'MILESTONE', 'REPOSITORY'].includes(field.type))
-    const columnFields = groupFields.filter(field => ['SINGLE_SELECT', 'ITERATION'].includes(field.type))
-    const sortFields = allFields.filter(field => writableField(field) || ['TITLE', 'ASSIGNEES', 'MILESTONE', 'REPOSITORY'].includes(field.type))
-    const chosen = new Set(fields.map(field => field.id))
-    function select(label, value, options, apply) {
-      return h('label', { key: label }, [t(label), h('select', { value, onChange: event => apply(event.target.value) }, options)])
-    }
-    function fieldOptions(choices) {
-      return [h('option', { key: 'none', value: '' }, '—'), ...choices.map(field => h('option', { key: field.id, value: field.id }, field.name))]
-    }
-    return h('details', { className: 'ghp-m-options' }, [
-      h('summary', { key: 'summary' }, t('sidebar.view')),
-      h('div', { key: 'options', className: 'ghp-m-options-panel ghp-m-form' }, [
-        select('sidebar.layout', view.layout, [
-          h('option', { key: 'board', value: 'BOARD_LAYOUT' }, t('sidebar.board')),
-          h('option', { key: 'table', value: 'TABLE_LAYOUT' }, t('sidebar.table')),
-          view.layout === 'ROADMAP_LAYOUT' ? h('option', { key: 'roadmap', value: 'ROADMAP_LAYOUT' }, t('sidebar.roadmap')) : null,
-        ], layout => change({ layout })),
-        view.layout === 'BOARD_LAYOUT' ? select('sidebar.columns', view.columns[0] ?? '', fieldOptions(columnFields), id => change({ columns: id ? [id] : [] })) : null,
-        select('sidebar.groups', view.groups[0] ?? '', fieldOptions(groupFields), id => change({ groups: id ? [id] : [] })),
-        select('sidebar.sort', view.sorts[0]?.fieldId ?? '', fieldOptions(sortFields), id => change({ sorts: id ? [{ fieldId: id, direction: 'ASC' }] : [] })),
-        view.sorts.length ? select('sidebar.order', view.sorts[0].direction, [
-          h('option', { key: 'asc', value: 'ASC' }, t('sidebar.ascending')), h('option', { key: 'desc', value: 'DESC' }, t('sidebar.descending')),
-        ], direction => change({ sorts: [{ ...view.sorts[0], direction }, ...view.sorts.slice(1)] })) : null,
-        h('details', { key: 'fields' }, [
-          h('summary', { key: 'label' }, t('sidebar.visibleFields')),
-          h('div', { key: 'fields', className: 'ghp-m-choice-list' }, allFields.filter(field => field.type !== 'TITLE').map(field => h('label', { className: 'ghp-m-row', key: field.id }, [
-            h('input', { key: 'checkbox', type: 'checkbox', checked: chosen.has(field.id), onChange: () => {
-              const next = chosen.has(field.id) ? fields.filter(candidate => candidate.id !== field.id) : [...fields, field]
-              change({ fields: next.map(candidate => candidate.id) })
-            } }), field.name,
-          ]))),
-        ]),
-        h('small', { key: 'notice', className: 'ghp-m-muted' }, t('sidebar.localOptions')),
-        canSave ? h(Button, { key: 'save', size: 'sm', disabled: pending, onClick: onSave }, t('sidebar.saveView')) : null,
-      ]),
     ])
   }
 
@@ -175,6 +136,7 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
     const detail = useResource(selected ? url('/project-item', { itemId: selected.id }) : null, revision)
     const { Board, Table, FieldControl, AddForm } = useMemo(() => createSidebarViews({ React, Button, t }), [t])
     const Detail = useMemo(() => createSidebarDetail({ React, Button, Markdown, FieldControl, t }), [FieldControl, t])
+    const ViewOptions = useMemo(() => createViewOptions({ React, Button }), [])
     const projectWritable = allowWrites && meta.value?.project?.viewerCanUpdate === true
     const openItem = Boolean(selected)
     const showingBoard = !add && !openItem

@@ -329,8 +329,10 @@ async function main() {
         }
         assert(booted, `web app did not boot after 2 navigations: ${lastError?.message ?? 'unknown'}`)
 
-        // Plugin API smoke check (unauthenticated loopback route).
-        const health = await fetch(`${origin}/plugin/github-projects/health`, { signal: AbortSignal.timeout(emitTimeout(10_000)) })
+        // Plugin API smoke check. Newer shells require the session token on plugin
+        // routes as well (the route used to answer unauthenticated), so carry it.
+        const bootToken = new URL(url).searchParams.get('token')
+        const health = await fetch(`${origin}/plugin/github-projects/health${bootToken ? `?token=${encodeURIComponent(bootToken)}` : ''}`, { signal: AbortSignal.timeout(emitTimeout(10_000)) })
           .then(async response => ({ status: response.status, body: await response.json().catch(() => null) }))
           .catch(error => ({ status: 0, error: String(error?.message ?? error) }))
         assert(health.status === 200, `plugin host /health did not answer: ${JSON.stringify(health)}`)

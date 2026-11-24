@@ -51,6 +51,7 @@
     "sidebar-api.js",
     "sidebar-github.js",
     "sidebar-client.js",
+    "sidebar-options.js",
     "sidebar-view.js",
     "sidebar-detail.js",
     "sidebar-style.js",

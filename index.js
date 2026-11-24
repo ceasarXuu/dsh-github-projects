@@ -91,7 +91,7 @@ const STATUS_BY_ERROR_CODE = new Map([
 
 const GET_ROUTES = new Set(['/health', '/config', '/bindings', '/branches', '/auto-bind', '/projects', '/items', '/issue', '/project-meta', ...SIDEBAR_READS])
 const POST_ROUTES = new Set(['/bind-workspace', '/unbind-workspace', '/bind-issue', '/unbind-issue', '/item-status', SIDEBAR_WRITE])
-const SIDEBAR_CLIENT_FILES = new Set(['/sidebar-client.js', '/sidebar-view.js', '/sidebar-detail.js', '/sidebar-style.js'])
+const SIDEBAR_CLIENT_FILES = new Set(['/sidebar-client.js', '/sidebar-options.js', '/sidebar-view.js', '/sidebar-detail.js', '/sidebar-style.js'])
 
 /** Any percent character not starting a two-digit escape makes the URL invalid. */
 const MALFORMED_PERCENT_PATTERN = /%(?![0-9a-fA-F]{2})/u
