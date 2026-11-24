@@ -285,6 +285,8 @@ dsh plugin --profile desktop add /绝对路径/dsh-github-projects
 
 ## 隐私与网络
 
+- 同一 DSH 进程内的可信插件可使用只读服务 `githubProjectsReader`。其中 `config`、`items`
+  和 `issue` 方法接收对应 HTTP 查询的 `URLSearchParams`，返回相同的数据。
 - **只有 `gh` 与 GitHub 通信。** 插件自身的网络面是一条本机回环 HTTP 路由
   （`/plugin/github-projects`），供 DSH Web 客户端调用；不向任何外部服务器发送数据。
 - **不接触 token。** 插件从不读取 `GITHUB_TOKEN`/`GH_TOKEN`，不保存、不打印 token；认证和 scope

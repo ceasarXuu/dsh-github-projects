@@ -1401,7 +1401,7 @@ function createApi({
     }
   }
 
-  return { handle, dispatch }
+  return { handle, dispatch, reader: Object.freeze({ config: readConfig, items: readItems, issue: readIssue }) }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1413,7 +1413,6 @@ function serviceOf(ctx, name) {
   return typeof ctx?.get === 'function' ? ctx.get(name) : undefined
 }
 
-/** Register the HTTP API, the binding store, and the agent tools. */
 export function apply(ctx, config) {
   const settings = resolveConfig(config)
   const store = createStateStore(settings.statePath)
@@ -1475,6 +1474,7 @@ export function apply(ctx, config) {
     gh, store, cache, health, logFault, writesAllowed: settings.allowWrites, branches, autoBind,
     resolveWorkspacePath,
   })
+  ctx.provide?.('githubProjectsReader', api.reader)
 
   // One startup pass, so the first `/branches` read already carries every
   // workspace instead of spawning one `git` per row on first paint.

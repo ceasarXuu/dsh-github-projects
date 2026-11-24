@@ -307,6 +307,9 @@ the row **replaces the whole `config`**, so restate every key you need (see [Con
 
 ## Privacy and network
 
+- Trusted plugins in the same DSH process can read through the `githubProjectsReader` service.
+  Its `config`, `items` and `issue` methods accept the corresponding HTTP query as
+  `URLSearchParams` and return the same data.
 - **Only `gh` talks to GitHub.** The plugin's own network surface is a loopback HTTP route
   (`/plugin/github-projects`) consumed by the DSH web client; nothing is sent to external servers.
 - **No token access.** The plugin never reads `GITHUB_TOKEN`/`GH_TOKEN`, never stores a token and
