@@ -31,7 +31,7 @@ const readJson = name => JSON.parse(readFileSync(join(fixtureDir, name), 'utf8')
 // (`client.js` does `import(`${API_BASE}/sidebar-client.js`)`), and only on the
 // sidebar surface. Without these four the import 404s and the panel silently
 // falls back to nothing — the failure was swallowed by a .catch(console.warn).
-const CLIENT_MODULES = new Set(['sidebar-client.js', 'sidebar-options.js', 'sidebar-view.js', 'sidebar-detail.js', 'sidebar-style.js'])
+const CLIENT_MODULES = new Set(['sidebar-client.js', 'sidebar-view.js', 'sidebar-detail.js', 'sidebar-style.js'])
 
 const projectList = readJson('project-list.json')
 const itemList = readJson('item-list.json')

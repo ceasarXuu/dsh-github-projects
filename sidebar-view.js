@@ -55,7 +55,133 @@ export function unsupportedLayout(view, fields) {
 
 export function createSidebarViews({ React, Button, t }) {
   const h = React.createElement
-  const { useRef, useState } = React
+  const { useEffect, useRef, useState } = React
+
+
+  /* --- view options ------------------------------------------------------
+   * A button in the toolbar opens a floating panel, and the field list opens a
+   * dialog. Neither one takes a row of the board: the panel is positioned over
+   * the page and dismissed on Escape or an outside click, the dialog is a modal.
+   */
+  function Pick({ label, value, options, onChange }) {
+    const [open, setOpen] = useState(false)
+    const current = options.find(option => option.id === value)
+    return h('div', { className: 'ghp-m-pick' }, [
+      h('span', { key: 'l', className: 'ghp-m-pick-label' }, label),
+      h('button', {
+        key: 'b', type: 'button', className: 'ghp-m-pick-btn', 'aria-expanded': open, 'aria-haspopup': 'listbox',
+        onClick: () => setOpen(previous => !previous),
+      }, [h('span', { key: 'v', className: 'ghp-m-pick-value' }, current ? current.name : '—'),
+        h('span', { key: 'c', className: 'ghp-m-chev', 'aria-hidden': 'true' }, '⌄')]),
+      open ? h('div', { key: 'o', className: 'ghp-m-pick-list', role: 'listbox', 'aria-label': label }, [
+        h('button', { key: '__none', type: 'button', role: 'option', className: 'ghp-m-pick-item', 'aria-selected': !current, onClick: () => { setOpen(false); onChange('') } }, '—'),
+        ...options.map(option => h('button', {
+          key: option.id, type: 'button', role: 'option', className: 'ghp-m-pick-item', 'aria-selected': option.id === value,
+          onClick: () => { setOpen(false); onChange(option.id) },
+        }, option.name)),
+      ]) : null,
+    ])
+  }
+
+  function FieldsDialog({ allFields, fields, onChange, onClose }) {
+    const chosen = new Set(fields.map(field => field.id))
+    function toggle(field) {
+      onChange(chosen.has(field.id) ? fields.filter(candidate => candidate.id !== field.id) : [...fields, field])
+    }
+    return h('div', {
+      className: 'ghp-m-backdrop', role: 'presentation',
+      onMouseDown: event => { if (event.target === event.currentTarget) onClose() },
+    }, h('div', { role: 'dialog', 'aria-modal': 'true', 'aria-label': t('sidebar.visibleFields'), className: 'ghp-m-dialog' }, [
+      h('div', { key: 'head', className: 'ghp-m-dialog-head' }, [
+        h('strong', { key: 'title' }, t('sidebar.visibleFields')),
+        h('button', { key: 'x', type: 'button', className: 'ghp-m-dialog-x', 'aria-label': t('sidebar.done'), onClick: onClose }, '×'),
+      ]),
+      h('div', { key: 'body', className: 'ghp-m-dialog-body' },
+        allFields.filter(field => field.type !== 'TITLE').map(field => h('label', { key: field.id, className: 'ghp-m-check' }, [
+          h('input', { key: 'i', type: 'checkbox', checked: chosen.has(field.id), onChange: () => toggle(field) }),
+          h('span', { key: 'n' }, field.name),
+        ]))),
+      h('div', { key: 'foot', className: 'ghp-m-dialog-foot' },
+        h(Button, { size: 'sm', onClick: onClose }, t('sidebar.done'))),
+    ]))
+  }
+
+  function ViewOptions({ view, fields, allFields, change, onSave, canSave, pending }) {
+    const [open, setOpen] = useState(false)
+    const [dialog, setDialog] = useState(false)
+    const [anchor, setAnchor] = useState({ top: 0, left: 0 })
+    const trigger = useRef(null)
+    const panel = useRef(null)
+    const groupFields = allFields.filter(field => ['SINGLE_SELECT', 'ITERATION', 'ASSIGNEES', 'MILESTONE', 'REPOSITORY'].includes(field.type))
+    const columnFields = groupFields.filter(field => ['SINGLE_SELECT', 'ITERATION'].includes(field.type))
+    const sortFields = allFields.filter(field => writableField(field) || ['TITLE', 'ASSIGNEES', 'MILESTONE', 'REPOSITORY'].includes(field.type))
+    const sort = view.sorts[0]
+
+    useEffect(() => {
+      if (!open) return undefined
+      const box = trigger.current?.getBoundingClientRect()
+      if (box) {
+        const width = 300
+        setAnchor({
+          top: Math.min(box.bottom + 6, Math.max(8, window.innerHeight - 360)),
+          left: Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8)),
+        })
+      }
+      const onDown = event => {
+        if (panel.current?.contains(event.target) || trigger.current?.contains(event.target)) return
+        setOpen(false)
+      }
+      const onKey = event => { if (event.key === 'Escape') setOpen(false) }
+      document.addEventListener('mousedown', onDown)
+      document.addEventListener('keydown', onKey)
+      return () => {
+        document.removeEventListener('mousedown', onDown)
+        document.removeEventListener('keydown', onKey)
+      }
+    }, [open])
+
+    return h(React.Fragment, null,
+      h('button', {
+        key: 'trigger', ref: trigger, type: 'button', className: `ghp-m-viewbtn${canSave ? ' is-dirty' : ''}`,
+        'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => setOpen(previous => !previous),
+      }, [h('span', { key: 'l' }, t('sidebar.view')), h('span', { key: 'c', className: 'ghp-m-chev', 'aria-hidden': 'true' }, '⌄')]),
+      open ? h('div', { key: 'panel', ref: panel, role: 'dialog', 'aria-label': t('sidebar.view'), className: 'ghp-m-viewpanel', style: anchor }, [
+        h('div', { key: 'layout', className: 'ghp-m-row-inline' }, [
+          h('span', { key: 'l', className: 'ghp-m-pick-label' }, t('sidebar.layout')),
+          h('div', { key: 's', className: 'ghp-m-seg', role: 'group', 'aria-label': t('sidebar.layout') }, [
+            h('button', { key: 'board', type: 'button', 'aria-pressed': view.layout === 'BOARD_LAYOUT', onClick: () => change({ layout: 'BOARD_LAYOUT' }) }, t('sidebar.board')),
+            h('button', { key: 'table', type: 'button', 'aria-pressed': view.layout === 'TABLE_LAYOUT', onClick: () => change({ layout: 'TABLE_LAYOUT' }) }, t('sidebar.table')),
+          ]),
+        ]),
+        h(Pick, { key: 'groups', label: t('sidebar.groups'), value: view.groups[0] ?? '', options: groupFields, onChange: id => change({ groups: id ? [id] : [] }) }),
+        view.layout === 'BOARD_LAYOUT'
+          ? h(Pick, { key: 'columns', label: t('sidebar.columns'), value: view.columns[0] ?? '', options: columnFields, onChange: id => change({ columns: id ? [id] : [] }) })
+          : null,
+        h('div', { key: 'sort', className: 'ghp-m-row-inline' }, [
+          h(Pick, { key: 'p', label: t('sidebar.sort'), value: sort?.fieldId ?? '', options: sortFields,
+            onChange: id => change({ sorts: id ? [{ fieldId: id, direction: sort?.direction ?? 'ASC' }] : [] }) }),
+          sort ? h('button', {
+            key: 'd', type: 'button', className: 'ghp-m-sortdir',
+            title: sort.direction === 'ASC' ? t('sidebar.ascending') : t('sidebar.descending'),
+            'aria-label': sort.direction === 'ASC' ? t('sidebar.ascending') : t('sidebar.descending'),
+            onClick: () => change({ sorts: [{ ...sort, direction: sort.direction === 'ASC' ? 'DESC' : 'ASC' }] }),
+          }, sort.direction === 'ASC' ? '↑' : '↓') : null,
+        ]),
+        h('button', { key: 'fields', type: 'button', className: 'ghp-m-viewrow', onClick: () => { setOpen(false); setDialog(true) } },
+          [h('span', { key: 'l' }, t('sidebar.visibleFields')),
+            h('span', { key: 'n', className: 'ghp-m-muted' }, String(new Set(fields.map(field => field.id)).size)),
+            h('span', { key: 'c', className: 'ghp-m-chev', 'aria-hidden': 'true' }, '›')]),
+        h('small', { key: 'hint', className: 'ghp-m-muted' }, t('sidebar.localOptions')),
+        canSave ? h('div', { key: 'save', className: 'ghp-m-viewfoot' },
+          h(Button, { size: 'sm', disabled: pending, onClick: onSave }, t('sidebar.saveView'))) : null,
+      ]) : null,
+      dialog ? h(FieldsDialog, {
+        key: 'dialog', allFields, fields,
+        onChange: next => change({ fields: next.map(field => field.id) }),
+        onClose: () => setDialog(false),
+      }) : null,
+    )
+  }
 
   function FieldControl({ item, field, allowed, pending, onUpdate }) {
     const original = fieldValue(item, field)
@@ -279,5 +405,5 @@ export function createSidebarViews({ React, Button, t }) {
     ])
   }
 
-  return { Board, Table, FieldControl, AddForm }
+  return { Board, Table, FieldControl, AddForm, ViewOptions }
 }

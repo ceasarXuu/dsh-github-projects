@@ -51,87 +51,92 @@ export const SIDEBAR_STYLE = `
 .ghp-management .ghp-m-detail textarea { resize: vertical; }
 @container (max-width: 380px) { .ghp-management .ghp-m-detail-columns { grid-template-columns: minmax(0,1fr); } }
 
-/* --- view options: a floating panel, not an inline form ------------------ */
-.ghp-management .ghp-m-ic { display: inline-flex; align-items: center; }
-.ghp-management .ghp-m-viewtrigger {
+/* --- view options: a floating panel, and a dialog for the fields --------
+   Neither takes a row of the board: the panel floats over the page, the field
+   list is a modal, and both dismiss with Escape. */
+.ghp-management .ghp-m-viewbtn {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 6px;
-  border: 1px solid var(--ghp-border-strong); background: var(--ghp-surface-sunken); color: inherit;
-  font: inherit; cursor: pointer;
+  border: 1px solid var(--ghp-border-strong); background: var(--ghp-surface-sunken);
+  color: inherit; font: inherit; cursor: pointer;
 }
-.ghp-management .ghp-m-viewtrigger:hover { border-color: var(--ghp-border-hover, var(--ghp-accent-brand)); }
-.ghp-management .ghp-m-viewtrigger.is-dirty { border-color: var(--ghp-accent-brand); color: var(--ghp-accent-brand); }
-.ghp-management .ghp-m-viewtrigger.is-dirty::after {
-  content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor;
-}
+.ghp-management .ghp-m-viewbtn:hover { border-color: var(--ghp-accent-brand); }
+.ghp-management .ghp-m-viewbtn.is-dirty { color: var(--ghp-accent-brand); border-color: currentColor; }
+.ghp-management .ghp-m-viewbtn.is-dirty::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.ghp-management .ghp-m-chev { opacity: 0.65; font-size: 11px; line-height: 1; }
 .ghp-management .ghp-m-viewpanel {
-  position: fixed; z-index: 120; width: 352px; max-height: min(70vh, 560px); overflow: auto;
-  padding: 10px 12px 12px; border-radius: 10px; border: 1px solid var(--ghp-border-strong);
-  background: var(--ghp-surface-raised, var(--ghp-surface)); color: inherit;
+  position: fixed; z-index: 120; width: 300px; padding: 10px 12px 12px;
+  display: grid; gap: 8px; font-size: 12px; border-radius: 10px;
+  border: 1px solid var(--ghp-border-strong); background: var(--ghp-surface-raised, var(--ghp-surface));
   box-shadow: 0 18px 48px -12px rgba(0, 0, 0, 0.55);
-  display: grid; gap: 4px; font-size: 12px;
 }
-.ghp-management .ghp-m-vpgroup { display: grid; gap: 6px; padding: 9px 0; border-bottom: 1px solid var(--ghp-border); }
-.ghp-management .ghp-m-vpgroup:last-of-type { border-bottom: 0; }
-.ghp-management .ghp-m-vpgroup-label {
-  font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ghp-text-secondary);
+.ghp-management .ghp-m-row-inline { display: flex; align-items: center; gap: 8px; }
+.ghp-management .ghp-m-row-inline > .ghp-m-pick { flex: 1 1 auto; min-width: 0; }
+.ghp-management .ghp-m-pick { display: grid; gap: 3px; }
+.ghp-management .ghp-m-pick-label { font-size: 11px; color: var(--ghp-text-secondary); }
+.ghp-management .ghp-m-pick-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%;
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
+  background: var(--ghp-surface-sunken); color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
-.ghp-management .ghp-m-seg { display: flex; gap: 4px; }
-.ghp-management .ghp-m-segbtn {
-  flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 6px 8px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
+.ghp-management .ghp-m-pick-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghp-management .ghp-m-pick-list {
+  max-height: 180px; overflow: auto; display: grid; gap: 1px; padding: 3px; border-radius: 7px;
+  border: 1px solid var(--ghp-border-strong); background: var(--ghp-surface-raised, var(--ghp-surface));
+}
+.ghp-management .ghp-m-pick-item {
+  padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ghp-management .ghp-m-pick-item:hover { background: var(--ghp-surface-sunken); }
+.ghp-management .ghp-m-pick-item[aria-selected="true"] { color: var(--ghp-accent-brand); }
+.ghp-management .ghp-m-seg { display: flex; gap: 4px; flex: 1 1 auto; }
+.ghp-management .ghp-m-seg button {
+  flex: 1 1 0; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
   background: var(--ghp-surface-sunken); color: inherit; font: inherit; cursor: pointer;
 }
-.ghp-management .ghp-m-segbtn[aria-pressed="true"] {
+.ghp-management .ghp-m-seg button[aria-pressed="true"] {
   border-color: var(--ghp-accent-brand); color: var(--ghp-accent-brand);
   background: color-mix(in srgb, var(--ghp-accent-brand) 12%, transparent);
 }
-.ghp-management .ghp-m-vs { display: grid; gap: 3px; }
-.ghp-management .ghp-m-vs-inline { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; }
-.ghp-management .ghp-m-vs-inline .ghp-m-vs { grid-template-columns: minmax(0, 1fr); }
-.ghp-management .ghp-m-vs-label { font-size: 11px; color: var(--ghp-text-secondary); }
-.ghp-management .ghp-m-vs-trigger {
-  display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%;
-  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
-  background: var(--ghp-surface-sunken); color: inherit; font: inherit; cursor: pointer; text-align: left;
-}
-.ghp-management .ghp-m-vs-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ghp-management .ghp-m-vs-list {
-  margin-top: 3px; max-height: 190px; overflow: auto; display: grid; gap: 1px;
-  padding: 3px; border-radius: 7px; border: 1px solid var(--ghp-border-strong);
-  background: var(--ghp-surface-raised, var(--ghp-surface));
-}
-.ghp-management .ghp-m-vs-option {
-  display: flex; align-items: center; gap: 7px; padding: 5px 7px; border: 0; border-radius: 5px;
-  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
-}
-.ghp-management .ghp-m-vs-option:hover { background: var(--ghp-surface-sunken); }
-.ghp-management .ghp-m-vs-option[aria-selected="true"] { color: var(--ghp-accent-brand); }
-.ghp-management .ghp-m-vs-hint { font-size: 11px; color: var(--ghp-text-secondary); }
 .ghp-management .ghp-m-sortdir {
-  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--ghp-border-strong);
   background: var(--ghp-surface-sunken); color: inherit; font: inherit; cursor: pointer;
 }
-.ghp-management .ghp-m-glyph {
-  flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; display: inline-grid; place-items: center;
-  font-size: 8px; line-height: 1; border: 1px solid var(--ghp-border-strong); color: var(--ghp-text-secondary);
+.ghp-management .ghp-m-viewrow {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: 6px;
+  border: 1px solid var(--ghp-border-strong); background: var(--ghp-surface-sunken);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
-.ghp-management .ghp-m-glyph-select { border-color: #6e7681; box-shadow: inset 0 0 0 3px transparent; }
-.ghp-management .ghp-m-glyph-iteration { border-radius: 3px; }
-.ghp-management .ghp-m-glyph-people { border-radius: 50%; border-color: #8957e5; }
-.ghp-management .ghp-m-glyph-label { border-radius: 3px; border-color: #1f6feb; }
-.ghp-management .ghp-m-fields { display: grid; gap: 1px; }
-.ghp-management .ghp-m-field-row {
-  display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 5px;
+.ghp-management .ghp-m-viewrow > :first-child { flex: 1 1 auto; }
+.ghp-management .ghp-m-viewfoot { display: flex; justify-content: flex-end; }
+.ghp-management .ghp-m-backdrop {
+  position: fixed; inset: 0; z-index: 130; display: grid; place-items: center;
+  background: rgba(0, 0, 0, 0.55); padding: 20px;
 }
-.ghp-management .ghp-m-field-row:hover { background: var(--ghp-surface-sunken); }
-.ghp-management .ghp-m-field-row.is-off { color: var(--ghp-text-secondary); }
-.ghp-management .ghp-m-field-row.is-drag { opacity: 0.5; }
-.ghp-management .ghp-m-grip { display: inline-grid; place-items: center; width: 12px; color: var(--ghp-text-secondary); cursor: grab; }
-.ghp-management .ghp-m-field-label {
-  display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; cursor: pointer;
+.ghp-management .ghp-m-dialog {
+  width: min(420px, 100%); max-height: min(70vh, 560px); display: grid; grid-template-rows: auto 1fr auto;
+  border-radius: 10px; border: 1px solid var(--ghp-border-strong);
+  background: var(--ghp-surface-raised, var(--ghp-surface));
+  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.7); overflow: hidden;
 }
-.ghp-management .ghp-m-field-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ghp-management .ghp-m-vpfoot { display: flex; justify-content: flex-end; padding-top: 8px; }
+.ghp-management .ghp-m-dialog-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 14px; border-bottom: 1px solid var(--ghp-border);
+}
+.ghp-management .ghp-m-dialog-x {
+  border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1;
+  padding: 2px 6px; border-radius: 5px; cursor: pointer;
+}
+.ghp-management .ghp-m-dialog-x:hover { background: var(--ghp-surface-sunken); }
+.ghp-management .ghp-m-dialog-body { padding: 8px 10px; overflow: auto; display: grid; gap: 2px; }
+.ghp-management .ghp-m-check {
+  display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 5px; cursor: pointer;
+}
+.ghp-management .ghp-m-check:hover { background: var(--ghp-surface-sunken); }
+.ghp-management .ghp-m-dialog-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 10px 14px; border-top: 1px solid var(--ghp-border);
+}
 `
 
 export const SIDEBAR_COPY = {
@@ -140,7 +145,7 @@ export const SIDEBAR_COPY = {
   filter: ['筛选', 'Filter'], filterPlaceholder: ['筛选条目，例如 assignee:@me', 'Filter items, e.g. assignee:@me'],
   columns: ['列字段', 'Column field'], groups: ['分组', 'Group by'], sort: ['排序', 'Sort by'],
   order: ['排序方向', 'Sort direction'], ascending: ['升序', 'Ascending'], descending: ['降序', 'Descending'],
-  visibleFields: ['可见字段', 'Visible fields'], display: ['显示', 'Display'], none: ['—', '—'],
+  visibleFields: ['可见字段', 'Visible fields'], display: ['显示', 'Display'], none: ['—', '—'], done: ['完成', 'Done'],
   fieldsHint: ['拖动可调整顺序；勾选决定是否显示。', 'Drag to reorder; tick to show.'], localOptions: ['分组、列和排序仅影响此处。', 'Grouping, columns, and sorting apply here only.'],
   saveView: ['保存到 GitHub 视图', 'Save to GitHub view'], truncated: ['只显示当前加载上限内的结果。可用筛选缩小范围。', 'Only results within the configured limit are shown. Narrow the results with a filter.'],
   roadmapUnsupported: ['此视图为路线图。可临时切换布局，或打开 GitHub 视图。', 'This view is a roadmap. Switch layouts temporarily or open the GitHub view.'],

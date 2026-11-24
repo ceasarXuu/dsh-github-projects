@@ -1,7 +1,6 @@
 import { createSidebarViews, sortedEntries, unsupportedLayout, writableField } from './sidebar-view.js'
 import { createSidebarDetail } from './sidebar-detail.js'
 import { SIDEBAR_COPY, SIDEBAR_STYLE } from './sidebar-style.js'
-import { createViewOptions } from './sidebar-options.js'
 
 const EMPTY = []
 const localViews = [
@@ -134,9 +133,8 @@ export function createSidebarManagement({ React, Button, ConfirmAction, AutoBind
     }, [items.value, revision, refresh])
 
     const detail = useResource(selected ? url('/project-item', { itemId: selected.id }) : null, revision)
-    const { Board, Table, FieldControl, AddForm } = useMemo(() => createSidebarViews({ React, Button, t }), [t])
+    const { Board, Table, FieldControl, AddForm, ViewOptions } = useMemo(() => createSidebarViews({ React, Button, t }), [t])
     const Detail = useMemo(() => createSidebarDetail({ React, Button, Markdown, FieldControl, t }), [FieldControl, t])
-    const ViewOptions = useMemo(() => createViewOptions({ React, Button }), [])
     const projectWritable = allowWrites && meta.value?.project?.viewerCanUpdate === true
     const openItem = Boolean(selected)
     const showingBoard = !add && !openItem
